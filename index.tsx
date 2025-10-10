@@ -35,13 +35,19 @@ interface UserSubmission {
   phone?: string;
 }
 
+interface AdminConfig {
+  signature: string | null;
+  clarification: string;
+  jobTitle: string;
+}
+
 // --- SIMULATED BACKEND API SERVICE ---
 // Using a live, centralized JSON store to allow multi-device synchronization.
 const JSON_BLOB_URL = 'https://jsonblob.com/api/jsonBlob/1251394142642536448';
 
 const apiService = {
   // Fetches the entire data blob from the cloud store.
-  _getData: async (): Promise<{ submissions: UserSubmission[] }> => {
+  _getData: async (): Promise<{ submissions: UserSubmission[], adminConfig?: AdminConfig }> => {
     try {
       const response = await fetch(JSON_BLOB_URL, {
         method: 'GET',
@@ -49,14 +55,18 @@ const apiService = {
       });
       if (!response.ok) {
         console.error(`Network response was not ok: ${response.statusText}`);
-        return { submissions: [] };
+        return { submissions: [], adminConfig: { signature: null, clarification: '', jobTitle: '' } };
       }
       const text = await response.text();
       // Handle empty blob case
-      return text ? JSON.parse(text) : { submissions: [] };
+      const data = text ? JSON.parse(text) : {};
+      return {
+        submissions: data.submissions || [],
+        adminConfig: data.adminConfig || { signature: null, clarification: '', jobTitle: '' }
+      };
     } catch (error) {
       console.error("Failed to fetch data from remote store:", error);
-      return { submissions: [] }; // Return default structure on error
+      return { submissions: [], adminConfig: { signature: null, clarification: '', jobTitle: '' } }; // Return default structure on error
     }
   },
 
@@ -65,15 +75,33 @@ const apiService = {
     return data.submissions || [];
   },
 
+  getAdminConfig: async (): Promise<AdminConfig> => {
+    const data = await apiService._getData();
+    return data.adminConfig || { signature: null, clarification: '', jobTitle: '' };
+  },
+
+  updateAdminConfig: async (config: AdminConfig): Promise<void> => {
+    const data = await apiService._getData();
+    const submissions = data.submissions || [];
+    
+    await fetch(JSON_BLOB_URL, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ submissions, adminConfig: config }),
+    });
+    window.dispatchEvent(new Event('storage'));
+  },
+
   addSubmission: async (submission: UserSubmission): Promise<UserSubmission> => {
     const data = await apiService._getData();
     const submissions = data.submissions || [];
+    const adminConfig = data.adminConfig;
     const newSubmissions = [...submissions, submission];
     
     await fetch(JSON_BLOB_URL, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ submissions: newSubmissions }),
+        body: JSON.stringify({ submissions: newSubmissions, adminConfig }),
     });
 
     window.dispatchEvent(new Event('storage')); // Notify listeners to refresh
@@ -83,21 +111,24 @@ const apiService = {
   deleteSubmission: async (id: string): Promise<void> => {
     const data = await apiService._getData();
     let submissions = data.submissions || [];
+    const adminConfig = data.adminConfig;
     submissions = submissions.filter(sub => sub.id !== id);
     
     await fetch(JSON_BLOB_URL, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ submissions }),
+        body: JSON.stringify({ submissions, adminConfig }),
     });
     window.dispatchEvent(new Event('storage')); // Notify listeners
   },
 
   deleteAllSubmissions: async (): Promise<void> => {
+    const data = await apiService._getData();
+    const adminConfig = data.adminConfig;
     await fetch(JSON_BLOB_URL, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ submissions: [] }),
+        body: JSON.stringify({ submissions: [], adminConfig }),
     });
     window.dispatchEvent(new Event('storage')); // Notify listeners
   }
@@ -255,12 +286,9 @@ interface UserPortalProps {
   trainings: Training[];
   setTrainingsStateForUser: React.Dispatch<React.SetStateAction<Training[]>>;
   onBack: () => void;
-  adminSignature: string | null;
-  adminSignatureClarification: string;
-  adminJobTitle: string;
 }
 
-const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateForUser: setTrainings, onBack, adminSignature, adminSignatureClarification, adminJobTitle }) => {
+const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateForUser: setTrainings, onBack }) => {
   const [selectedTrainingId, setSelectedTrainingId] = useState<string | null>(null);
   const [formCompleted, setFormCompleted] = useState(false);
   const [lastSubmission, setLastSubmission] = useState<UserSubmission | null>(null);
@@ -275,12 +303,28 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateFor
     phone: '',
     signature: '',
   });
+  
+  const [adminConfig, setAdminConfig] = useState<AdminConfig | null>(null);
+  const [isLoadingAdminConfig, setIsLoadingAdminConfig] = useState(true);
 
   useEffect(() => {
     // If the user lands with exactly one training (from a shared link), go directly into it.
     if (trainings.length === 1 && !selectedTrainingId) {
       setSelectedTrainingId(trainings[0].id);
     }
+    
+    const fetchAdminConfig = async () => {
+      try {
+        const config = await apiService.getAdminConfig();
+        setAdminConfig(config);
+      } catch (error) {
+        console.error("Failed to fetch admin config:", error);
+      } finally {
+        setIsLoadingAdminConfig(false);
+      }
+    };
+    fetchAdminConfig();
+
   }, [trainings, selectedTrainingId]);
 
   const selectedTraining = useMemo(() => {
@@ -345,6 +389,13 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateFor
   };
 
   if (formCompleted && lastSubmission) {
+    const downloadDisabled = isLoadingAdminConfig || !adminConfig?.signature || !adminConfig?.clarification || !adminConfig?.jobTitle;
+    const downloadTitle = isLoadingAdminConfig 
+        ? "Cargando configuración..."
+        : (!adminConfig?.signature || !adminConfig?.clarification || !adminConfig?.jobTitle) 
+        ? "El administrador aún no ha configurado firma, aclaración y cargo para las constancias." 
+        : "Descargar mi constancia en PDF";
+
     return (
         <div className="text-center p-8 bg-slate-800 rounded-lg shadow-xl max-w-2xl mx-auto">
             <CheckCircle className="mx-auto h-16 w-16 text-green-500" />
@@ -357,13 +408,13 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateFor
                         <h3 className="font-semibold text-white">Descarga tu constancia personal (Opcional)</h3>
                         <p className="text-sm text-gray-400 mb-2">Guarda este PDF como comprobante personal de que has completado la capacitación.</p>
                         <button
-                            onClick={() => generateSingleSubmissionPdf(lastSubmission, adminSignature, adminSignatureClarification, adminJobTitle)}
-                            disabled={!adminSignature || !adminSignatureClarification || !adminJobTitle}
-                            title={(!adminSignature || !adminSignatureClarification || !adminJobTitle) ? "El administrador aún no ha configurado firma, aclaración y cargo para las constancias." : "Descargar mi constancia en PDF"}
+                            onClick={() => adminConfig && generateSingleSubmissionPdf(lastSubmission, adminConfig.signature, adminConfig.clarification, adminConfig.jobTitle)}
+                            disabled={downloadDisabled}
+                            title={downloadTitle}
                             className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-slate-500 hover:bg-slate-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-400 disabled:bg-slate-600 disabled:cursor-not-allowed"
                         >
                             <FileDown className="h-4 w-4 mr-2" />
-                            Descargar Mi Constancia
+                            {isLoadingAdminConfig ? 'Cargando...' : 'Descargar Mi Constancia'}
                         </button>
                     </div>
                 </div>
@@ -551,18 +602,10 @@ interface AdminDashboardProps {
   updateTraining: (id: string, name: string, links: string[]) => void;
   deleteTraining: (id: string) => void;
   onLogout: () => void;
-  adminSignature: string | null;
-  adminSignatureClarification: string;
-  adminJobTitle: string;
-  setAdminSignature: (sig: string | null) => void;
-  setAdminSignatureClarification: (clarification: string) => void;
-  setAdminJobTitle: (title: string) => void;
 }
 
 const AdminDashboard: React.FC<AdminDashboardProps> = ({ 
-    trainings, addTraining, updateTraining, deleteTraining, onLogout,
-    adminSignature, adminSignatureClarification, adminJobTitle,
-    setAdminSignature, setAdminSignatureClarification, setAdminJobTitle,
+    trainings, addTraining, updateTraining, deleteTraining, onLogout
 }) => {
   const [trainingName, setTrainingName] = useState('');
   const [linksText, setLinksText] = useState('');
@@ -577,8 +620,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [copySuccess, setCopySuccess] = useState('');
   const [selectedSubmission, setSelectedSubmission] = useState<UserSubmission | null>(null);
   const [showAdminSignatureModal, setShowAdminSignatureModal] = useState(false);
-  const [currentClarification, setCurrentClarification] = useState(adminSignatureClarification);
-  const [currentJobTitle, setCurrentJobTitle] = useState(adminJobTitle);
+  
+  const [adminSignature, setAdminSignature] = useState<string | null>(null);
+  const [adminSignatureClarification, setAdminSignatureClarification] = useState('');
+  const [adminJobTitle, setAdminJobTitle] = useState('');
+  
+  const [currentClarification, setCurrentClarification] = useState('');
+  const [currentJobTitle, setCurrentJobTitle] = useState('');
+  
   const [userSubmissions, setUserSubmissions] = useState<UserSubmission[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -588,18 +637,27 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const subs = await apiService.getSubmissions();
     setUserSubmissions(subs);
   };
+  
+  const fetchAdminConfig = async () => {
+      const config = await apiService.getAdminConfig();
+      setAdminSignature(config.signature);
+      setAdminSignatureClarification(config.clarification);
+      setAdminJobTitle(config.jobTitle);
+      setCurrentClarification(config.clarification);
+      setCurrentJobTitle(config.jobTitle);
+  };
 
   useEffect(() => {
-    fetchSubmissions(); // Fetch on initial component mount
+    fetchSubmissions();
+    fetchAdminConfig();
 
     const handleStorageUpdate = () => {
         fetchSubmissions();
+        fetchAdminConfig();
     };
 
-    // Listen for the custom event dispatched by apiService
     window.addEventListener('storage', handleStorageUpdate);
 
-    // Cleanup the event listener on component unmount
     return () => {
         window.removeEventListener('storage', handleStorageUpdate);
     };
@@ -611,11 +669,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setEditedLinksText(editingTraining.links.map(l => l.url).join('\n'));
     }
   }, [editingTraining]);
-
-  useEffect(() => {
-    setCurrentClarification(adminSignatureClarification);
-    setCurrentJobTitle(adminJobTitle);
-  }, [adminSignatureClarification, adminJobTitle]);
 
 
   const handleAddTraining = (e: React.FormEvent) => {
@@ -701,7 +754,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     window.open(userViewUrl, '_blank');
   };
 
-  const handleSaveAdminSignature = () => {
+  const handleSaveAdminSignature = async () => {
     if (adminSignatureRef.current) {
       if (adminSignatureRef.current.isEmpty()) {
           alert("Por favor, dibuja tu firma antes de guardar.");
@@ -716,14 +769,31 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
           return;
       }
       const signatureDataUrl = adminSignatureRef.current.toDataURL();
+      const newConfig = {
+        signature: signatureDataUrl,
+        clarification: currentClarification,
+        jobTitle: currentJobTitle
+      };
+      await apiService.updateAdminConfig(newConfig);
       setAdminSignature(signatureDataUrl);
       setAdminSignatureClarification(currentClarification);
       setAdminJobTitle(currentJobTitle);
-      localStorage.setItem('adminSignature', signatureDataUrl);
-      localStorage.setItem('adminSignatureClarification', currentClarification);
-      localStorage.setItem('adminJobTitle', currentJobTitle);
       setShowAdminSignatureModal(false);
     }
+  };
+  
+  const handleClearAdminSignature = async () => {
+      if (window.confirm("¿Estás seguro de que quieres eliminar la firma y los datos guardados? Esta acción no se puede deshacer.")) {
+        const newConfig = { signature: null, clarification: '', jobTitle: '' };
+        await apiService.updateAdminConfig(newConfig);
+        setAdminSignature(null);
+        setAdminSignatureClarification('');
+        setAdminJobTitle('');
+        setCurrentClarification('');
+        setCurrentJobTitle('');
+        adminSignatureRef.current?.clear();
+        setShowAdminSignatureModal(false);
+      }
   };
 
   const handleDeleteSubmission = async (submissionId: string) => {
@@ -743,6 +813,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleRefresh = async () => {
     setIsRefreshing(true);
     await fetchSubmissions();
+    await fetchAdminConfig();
     setIsRefreshing(false);
   };
 
@@ -1065,19 +1136,24 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
                 </div>
                 <div className="flex justify-between items-center mt-6">
-                <button
-                    type="button"
-                    onClick={() => {
-                        adminSignatureRef.current?.clear();
-                        if (adminSignature) { // if a signature was previously saved, clear it
-                            setAdminSignature(null);
-                            localStorage.removeItem('adminSignature');
-                        }
-                    }}
-                    className="px-4 py-2 text-sm font-medium text-gray-300 bg-slate-700 rounded-md hover:bg-slate-600"
-                >
-                    Limpiar
-                </button>
+                <div>
+                    <button
+                        type="button"
+                        onClick={() => adminSignatureRef.current?.clear()}
+                        className="px-4 py-2 text-sm font-medium text-gray-300 bg-slate-700 rounded-md hover:bg-slate-600"
+                    >
+                        Limpiar Dibujo
+                    </button>
+                    {adminSignature && (
+                       <button
+                          type="button"
+                          onClick={handleClearAdminSignature}
+                          className="ml-2 px-4 py-2 text-sm font-medium text-red-400 hover:text-red-300 bg-transparent rounded-md hover:bg-red-900/20"
+                        >
+                            Eliminar Firma Guardada
+                        </button>
+                    )}
+                </div>
                 <div className="flex gap-3">
                     <button
                         type="button"
@@ -1111,11 +1187,6 @@ const App: React.FC = () => {
   const [trainings, setTrainings] = useState<Training[]>([]);
   const [userPortalTrainings, setUserPortalTrainings] = useState<Training[]>([]);
   
-  const [adminSignature, setAdminSignature] = useState<string | null>(null);
-  const [adminSignatureClarification, setAdminSignatureClarification] = useState<string>('');
-  const [adminJobTitle, setAdminJobTitle] = useState<string>('');
-  
-  
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -1144,15 +1215,6 @@ const App: React.FC = () => {
     } catch (error) {
        console.error("Failed to load data from URL or localStorage", error);
     }
-
-    // Load admin signature data
-    const savedSignature = localStorage.getItem('adminSignature');
-    if (savedSignature) setAdminSignature(savedSignature);
-    const savedClarification = localStorage.getItem('adminSignatureClarification');
-    if (savedClarification) setAdminSignatureClarification(savedClarification);
-    const savedJobTitle = localStorage.getItem('adminJobTitle');
-    if (savedJobTitle) setAdminJobTitle(savedJobTitle);
-
   }, []);
 
   useEffect(() => {
@@ -1209,21 +1271,12 @@ const App: React.FC = () => {
                     updateTraining={updateTraining}
                     deleteTraining={deleteTraining}
                     onLogout={() => setView('selector')}
-                    adminSignature={adminSignature}
-                    adminSignatureClarification={adminSignatureClarification}
-                    adminJobTitle={adminJobTitle}
-                    setAdminSignature={setAdminSignature}
-                    setAdminSignatureClarification={setAdminSignatureClarification}
-                    setAdminJobTitle={setAdminJobTitle}
                 />;
       case 'user':
         return <UserPortal 
                     trainings={userPortalTrainings.length > 0 ? userPortalTrainings : trainings} 
                     setTrainingsStateForUser={userPortalTrainings.length > 0 ? setUserPortalTrainings : setTrainings} 
                     onBack={() => setView('selector')}
-                    adminSignature={adminSignature}
-                    adminSignatureClarification={adminSignatureClarification}
-                    adminJobTitle={adminJobTitle}
                 />;
       case 'selector':
       default:
