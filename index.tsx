@@ -314,7 +314,19 @@ const generateSingleSubmissionPdf = (submission: UserSubmission, adminSignature:
     console.error("Error adding admin signature image to PDF: ", e);
   }
 
-  doc.save(`constancia_${submission.dni}_${submission.trainingName.replace(/\s/g, '_')}.pdf`);
+  try {
+    const pdfBlob = doc.output('blob');
+    const url = URL.createObjectURL(pdfBlob);
+    const newWindow = window.open(url, '_blank');
+    if (!newWindow) {
+      alert("No se pudo abrir una nueva pestaña (posiblemente bloqueada). Intentando descarga directa.");
+      doc.save(`constancia_${submission.dni}_${submission.trainingName.replace(/\s/g, '_')}.pdf`);
+    }
+  } catch (e) {
+    console.error("Error al generar PDF para móvil:", e);
+    alert("Ocurrió un error al generar la constancia. Intentando descarga directa.");
+    doc.save(`constancia_${submission.dni}_${submission.trainingName.replace(/\s/g, '_')}.pdf`);
+  }
 };
 
 
