@@ -42,6 +42,11 @@ declare module 'jspdf' {
 }
 
 const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: string, adminSignatureClarification: string, adminJobTitle: string): void => {
+  if (!submissions || submissions.length === 0) {
+    console.warn('Attempted to generate PDF with no submissions.');
+    alert('No hay registros de usuarios para generar el PDF.');
+    return;
+  }
   const doc = new jsPDF();
   
   doc.text('Registro de Asistencia a Capacitaciones', 14, 16);
@@ -486,13 +491,14 @@ interface AdminDashboardProps {
   setAdminSignatureClarification: (clarification: string) => void;
   setAdminJobTitle: (title: string) => void;
   userSubmissions: UserSubmission[];
+  deleteSubmission: (id: string) => void;
 }
 
 const AdminDashboard: React.FC<AdminDashboardProps> = ({ 
     trainings, addTraining, updateTraining, deleteTraining, onLogout,
     adminSignature, adminSignatureClarification, adminJobTitle,
     setAdminSignature, setAdminSignatureClarification, setAdminJobTitle,
-    userSubmissions
+    userSubmissions, deleteSubmission
 }) => {
   const [trainingName, setTrainingName] = useState('');
   const [linksText, setLinksText] = useState('');
@@ -632,6 +638,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       localStorage.setItem('adminSignatureClarification', currentClarification);
       localStorage.setItem('adminJobTitle', currentJobTitle);
       setShowAdminSignatureModal(false);
+    }
+  };
+
+  const handleDeleteSubmission = (submissionId: string) => {
+    if (window.confirm('¿Estás seguro de que quieres eliminar este registro? Esta acción es irreversible.')) {
+      deleteSubmission(submissionId);
     }
   };
   
@@ -775,15 +787,28 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">DNI</th>
                     <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Capacitación</th>
                     <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Fecha</th>
+                    <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">Acciones</th>
                   </tr>
                 </thead>
                 <tbody className="bg-slate-800 divide-y divide-slate-700">
                   {userSubmissions.map((sub) => (
-                    <tr key={sub.id} onClick={() => setSelectedSubmission(sub)} className="hover:bg-slate-700 cursor-pointer">
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-white">{sub.firstName} {sub.lastName}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400">{sub.dni}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400">{sub.trainingName}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400">{sub.timestamp}</td>
+                    <tr key={sub.id} className="hover:bg-slate-700">
+                      <td onClick={() => setSelectedSubmission(sub)} className="px-6 py-4 whitespace-nowrap text-sm font-medium text-white cursor-pointer">{sub.firstName} {sub.lastName}</td>
+                      <td onClick={() => setSelectedSubmission(sub)} className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer">{sub.dni}</td>
+                      <td onClick={() => setSelectedSubmission(sub)} className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer">{sub.trainingName}</td>
+                      <td onClick={() => setSelectedSubmission(sub)} className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer">{sub.timestamp}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 text-right">
+                        <button 
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteSubmission(sub.id);
+                            }}
+                            title="Eliminar registro"
+                            className="p-2 text-red-500 hover:text-red-400 hover:bg-red-900/30 rounded-full transition-colors"
+                        >
+                            <Trash2 className="h-4 w-4" />
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1076,6 +1101,14 @@ const App: React.FC = () => {
     });
   };
 
+  const deleteSubmission = (submissionId: string) => {
+    setUserSubmissions(prevSubs => {
+      const updatedSubs = prevSubs.filter(sub => sub.id !== submissionId);
+      localStorage.setItem('userSubmissions', JSON.stringify(updatedSubs));
+      return updatedSubs;
+    });
+  };
+
   const renderView = () => {
     switch (view) {
       case 'login':
@@ -1094,6 +1127,7 @@ const App: React.FC = () => {
                     setAdminSignatureClarification={setAdminSignatureClarification}
                     setAdminJobTitle={setAdminJobTitle}
                     userSubmissions={userSubmissions}
+                    deleteSubmission={deleteSubmission}
                 />;
       case 'user':
         return <UserPortal 
