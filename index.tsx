@@ -34,6 +34,29 @@ interface UserSubmission {
   phone?: string;
 }
 
+// --- SIMULATED BACKEND API SERVICE ---
+const apiService = {
+  getSubmissions: async (): Promise<UserSubmission[]> => {
+    const data = localStorage.getItem('userSubmissions_db');
+    return data ? JSON.parse(data) : [];
+  },
+  addSubmission: async (submission: UserSubmission): Promise<UserSubmission> => {
+    const submissions = await apiService.getSubmissions();
+    const newSubmissions = [...submissions, submission];
+    localStorage.setItem('userSubmissions_db', JSON.stringify(newSubmissions));
+    return submission;
+  },
+  deleteSubmission: async (id: string): Promise<void> => {
+    let submissions = await apiService.getSubmissions();
+    submissions = submissions.filter(sub => sub.id !== id);
+    localStorage.setItem('userSubmissions_db', JSON.stringify(submissions));
+  },
+  deleteAllSubmissions: async (): Promise<void> => {
+    localStorage.removeItem('userSubmissions_db');
+  }
+};
+
+
 // --- SERVICES ---
 declare module 'jspdf' {
   interface jsPDF {
@@ -47,42 +70,39 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
     alert('No hay registros de usuarios para generar el PDF.');
     return;
   }
-  const doc = new jsPDF();
-  
-  doc.text('Registro de Asistencia a Capacitaciones', 14, 16);
-  
-  const tableColumns = ['Nombre', 'Apellido', 'DNI', 'Empresa', 'Capacitación', 'Fecha'];
-  const tableRows = submissions.map(sub => [
-    sub.firstName,
-    sub.lastName,
-    sub.dni,
-    sub.company,
-    sub.trainingName,
-    sub.timestamp,
-  ]);
-
-  doc.autoTable({
-    head: [tableColumns],
-    body: tableRows,
-    startY: 24,
-    theme: 'grid',
-    headStyles: { fillColor: [41, 128, 185] }, // Dark blue header
-    styles: { fontSize: 8 },
-  });
-
-  const finalY = (doc as any).lastAutoTable.finalY || 100;
-  const pageHeight = doc.internal.pageSize.getHeight();
-  let signatureY = finalY + 15;
-
-  if (signatureY + 60 > pageHeight) { // Increased space for clarification and title
-    doc.addPage();
-    signatureY = 20;
-  }
-
-  doc.setFontSize(10);
-  doc.text('Constancia de registro de asistencia emitida por el administrador:', 14, signatureY);
-
   try {
+    const doc = new jsPDF();
+    
+    doc.text('Registro de Asistencia a Capacitaciones', 14, 16);
+    
+    const tableColumns = ['Nombre', 'Apellido', 'DNI', 'Empresa', 'Capacitación', 'Fecha'];
+    const tableRows = submissions.map(sub => [
+      sub.firstName,
+      sub.lastName,
+      sub.dni,
+      sub.company,
+      sub.trainingName,
+      sub.timestamp,
+    ]);
+
+    doc.autoTable({
+      head: [tableColumns],
+      body: tableRows,
+      startY: 24,
+      theme: 'grid',
+      headStyles: { fillColor: [41, 128, 185] }, // Dark blue header
+      styles: { fontSize: 8 },
+    });
+
+    const finalY = (doc as any).lastAutoTable.finalY || 100;
+    const pageHeight = doc.internal.pageSize.getHeight();
+    let signatureY = finalY + 15;
+
+    if (signatureY + 60 > pageHeight) { // Increased space for clarification and title
+      doc.addPage();
+      signatureY = 20;
+    }
+    
     if (adminSignature) {
       doc.addImage(adminSignature, 'PNG', 14, signatureY + 5, 60, 30);
       doc.setDrawColor(0); // Black line
@@ -95,12 +115,12 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
         doc.text(adminJobTitle, 14, signatureY + 48);
       }
     }
-  } catch(e) {
-    doc.text('No se pudo cargar la imagen de la firma.', 14, signatureY + 10);
-    console.error("Error adding admin signature image to PDF: ", e);
-  }
 
-  doc.save('constancia_asistencia_general.pdf');
+    doc.save('constancia_asistencia_general.pdf');
+  } catch(e) {
+    console.error("Failed to generate general submissions PDF:", e);
+    alert("Ocurrió un error al generar el PDF. Por favor, revisa la consola para más detalles.");
+  }
 };
 
 const generateSingleSubmissionPdf = (submission: UserSubmission, adminSignature: string | null, adminSignatureClarification: string, adminJobTitle: string): void => {
@@ -148,8 +168,6 @@ const generateSingleSubmissionPdf = (submission: UserSubmission, adminSignature:
         doc.setFont('helvetica', 'italic');
         doc.text(adminJobTitle, doc.internal.pageSize.getWidth() / 2, signatureY + 44, { align: 'center'});
       }
-    } else {
-        doc.text('Firma del administrador no configurada.', doc.internal.pageSize.getWidth() / 2, signatureY + 20, { align: 'center'});
     }
   } catch(e) {
     doc.text('No se pudo cargar la firma.', doc.internal.pageSize.getWidth() / 2, signatureY + 20, { align: 'center'});
@@ -195,10 +213,9 @@ interface UserPortalProps {
   adminSignature: string | null;
   adminSignatureClarification: string;
   adminJobTitle: string;
-  onSubmission: (submission: UserSubmission) => void;
 }
 
-const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateForUser: setTrainings, onBack, adminSignature, adminSignatureClarification, adminJobTitle, onSubmission }) => {
+const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateForUser: setTrainings, onBack, adminSignature, adminSignatureClarification, adminJobTitle }) => {
   const [selectedTrainingId, setSelectedTrainingId] = useState<string | null>(null);
   const [formCompleted, setFormCompleted] = useState(false);
   const [lastSubmission, setLastSubmission] = useState<UserSubmission | null>(null);
@@ -270,11 +287,16 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateFor
         ...formData
     };
     
-    onSubmission(newSubmission); // Automatically submit the data
-    
-    setLastSubmission(newSubmission);
-    setFormCompleted(true);
-    setIsSubmitting(false);
+    try {
+      await apiService.addSubmission(newSubmission);
+      setLastSubmission(newSubmission);
+      setFormCompleted(true);
+    } catch (error) {
+      console.error("Failed to submit training data:", error);
+      alert("Hubo un error al enviar tu registro. Por favor, inténtalo de nuevo.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   if (formCompleted && lastSubmission) {
@@ -291,8 +313,8 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateFor
                         <p className="text-sm text-gray-400 mb-2">Guarda este PDF como comprobante personal de que has completado la capacitación.</p>
                         <button
                             onClick={() => generateSingleSubmissionPdf(lastSubmission, adminSignature, adminSignatureClarification, adminJobTitle)}
-                            disabled={!adminSignature}
-                            title={!adminSignature ? "El administrador aún no ha configurado la firma para las constancias." : "Descargar mi constancia en PDF"}
+                            disabled={!adminSignature || !adminSignatureClarification || !adminJobTitle}
+                            title={(!adminSignature || !adminSignatureClarification || !adminJobTitle) ? "El administrador aún no ha configurado firma, aclaración y cargo para las constancias." : "Descargar mi constancia en PDF"}
                             className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-slate-500 hover:bg-slate-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-400 disabled:bg-slate-600 disabled:cursor-not-allowed"
                         >
                             <FileDown className="h-4 w-4 mr-2" />
@@ -490,15 +512,12 @@ interface AdminDashboardProps {
   setAdminSignature: (sig: string | null) => void;
   setAdminSignatureClarification: (clarification: string) => void;
   setAdminJobTitle: (title: string) => void;
-  userSubmissions: UserSubmission[];
-  deleteSubmission: (id: string) => void;
 }
 
 const AdminDashboard: React.FC<AdminDashboardProps> = ({ 
     trainings, addTraining, updateTraining, deleteTraining, onLogout,
     adminSignature, adminSignatureClarification, adminJobTitle,
     setAdminSignature, setAdminSignatureClarification, setAdminJobTitle,
-    userSubmissions, deleteSubmission
 }) => {
   const [trainingName, setTrainingName] = useState('');
   const [linksText, setLinksText] = useState('');
@@ -515,9 +534,21 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [showAdminSignatureModal, setShowAdminSignatureModal] = useState(false);
   const [currentClarification, setCurrentClarification] = useState(adminSignatureClarification);
   const [currentJobTitle, setCurrentJobTitle] = useState(adminJobTitle);
+  const [userSubmissions, setUserSubmissions] = useState<UserSubmission[]>([]);
 
   const adminSignatureRef = useRef<SignatureCanvas>(null);
   
+  const fetchSubmissions = async () => {
+    const subs = await apiService.getSubmissions();
+    setUserSubmissions(subs);
+  };
+
+  useEffect(() => {
+    fetchSubmissions();
+    const intervalId = setInterval(fetchSubmissions, 5000); // Poll for new submissions every 5 seconds
+    return () => clearInterval(intervalId); // Cleanup on component unmount
+  }, []);
+
   useEffect(() => {
     if (editingTraining) {
       setEditedName(editingTraining.name);
@@ -569,7 +600,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   }
 
   const handleShare = async (trainingToShare: Training) => {
-    // Create a pristine copy of the training, ensuring all links are marked as not viewed.
     const pristineTraining = {
       ...trainingToShare,
       links: trainingToShare.links.map(link => ({ ...link, viewed: false }))
@@ -605,7 +635,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
         alert("No hay capacitaciones para previsualizar. Crea una primero.");
         return;
     }
-    // Create pristine copies of all trainings to ensure links are not marked as viewed.
     const pristineTrainings = trainings.map(training => ({
       ...training,
       links: training.links.map(link => ({...link, viewed: false }))
@@ -641,9 +670,19 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  const handleDeleteSubmission = (submissionId: string) => {
+  const handleDeleteSubmission = async (submissionId: string) => {
     if (window.confirm('¿Estás seguro de que quieres eliminar este registro? Esta acción es irreversible.')) {
-      deleteSubmission(submissionId);
+      await apiService.deleteSubmission(submissionId);
+      fetchSubmissions(); // Refresh the list
+    }
+  };
+
+  const handleDeleteAllSubmissions = async () => {
+    if (window.confirm('¿Estás seguro de que quieres eliminar TODOS los registros? Esta acción es irreversible.')) {
+        if (window.confirm('Por favor, confirma de nuevo. Esta acción eliminará permanentemente todos los registros de usuarios.')) {
+            await apiService.deleteAllSubmissions();
+            fetchSubmissions(); // Refresh the list
+        }
     }
   };
   
@@ -775,6 +814,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
               >
                   <FileDown className="h-5 w-5 mr-2" />
                   Descargar Constancia Gral.
+              </button>
+              <button
+                  onClick={handleDeleteAllSubmissions}
+                  disabled={userSubmissions.length === 0}
+                  title={userSubmissions.length === 0 ? "No hay registros para borrar" : "Borrar todos los registros"}
+                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-red-600 hover:bg-red-700 disabled:bg-slate-600 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+              >
+                  <Trash2 className="h-5 w-5 mr-2" />
+                  Borrar Todos los Registros
               </button>
           </div>
           
@@ -992,8 +1040,7 @@ const App: React.FC = () => {
   const [view, setView] = useState<View>('selector');
   const [trainings, setTrainings] = useState<Training[]>([]);
   const [userPortalTrainings, setUserPortalTrainings] = useState<Training[]>([]);
-  const [userSubmissions, setUserSubmissions] = useState<UserSubmission[]>([]);
-
+  
   const [adminSignature, setAdminSignature] = useState<string | null>(null);
   const [adminSignatureClarification, setAdminSignatureClarification] = useState<string>('');
   const [adminJobTitle, setAdminJobTitle] = useState<string>('');
@@ -1021,13 +1068,6 @@ const App: React.FC = () => {
         setTrainings(JSON.parse(savedTrainings));
       }
 
-      // Load admin submissions
-      const savedSubmissions = localStorage.getItem('userSubmissions');
-      if (savedSubmissions) {
-          setUserSubmissions(JSON.parse(savedSubmissions));
-      }
-
-
       if (urlWasModified) {
         window.history.replaceState({}, document.title, window.location.pathname);
       }
@@ -1046,7 +1086,7 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (trainings.length > 0 && view === 'admin') {
+    if (view === 'admin') {
         try {
           localStorage.setItem('trainings', JSON.stringify(trainings));
         } catch (error) {
@@ -1087,27 +1127,6 @@ const App: React.FC = () => {
   const deleteTraining = (id: string) => {
     setTrainings(prev => prev.filter(t => t.id !== id));
   };
-  
-  const handleUserSubmit = (submission: UserSubmission) => {
-    setUserSubmissions(prevSubs => {
-      const existingIds = new Set(prevSubs.map(s => s.id));
-      if (existingIds.has(submission.id)) {
-        console.warn("Attempted to add a duplicate submission.");
-        return prevSubs;
-      }
-      const allSubs = [...prevSubs, submission];
-      localStorage.setItem('userSubmissions', JSON.stringify(allSubs));
-      return allSubs;
-    });
-  };
-
-  const deleteSubmission = (submissionId: string) => {
-    setUserSubmissions(prevSubs => {
-      const updatedSubs = prevSubs.filter(sub => sub.id !== submissionId);
-      localStorage.setItem('userSubmissions', JSON.stringify(updatedSubs));
-      return updatedSubs;
-    });
-  };
 
   const renderView = () => {
     switch (view) {
@@ -1126,8 +1145,6 @@ const App: React.FC = () => {
                     setAdminSignature={setAdminSignature}
                     setAdminSignatureClarification={setAdminSignatureClarification}
                     setAdminJobTitle={setAdminJobTitle}
-                    userSubmissions={userSubmissions}
-                    deleteSubmission={deleteSubmission}
                 />;
       case 'user':
         return <UserPortal 
@@ -1137,7 +1154,6 @@ const App: React.FC = () => {
                     adminSignature={adminSignature}
                     adminSignatureClarification={adminSignatureClarification}
                     adminJobTitle={adminJobTitle}
-                    onSubmission={handleUserSubmit}
                 />;
       case 'selector':
       default:
