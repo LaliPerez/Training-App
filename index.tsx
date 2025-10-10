@@ -255,7 +255,13 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
         doc.text("Error al cargar la firma.", 14, signatureY + 20);
     }
 
-    doc.save('constancia_asistencia_general.pdf');
+    const pdfBlob = doc.output('blob');
+    const url = URL.createObjectURL(pdfBlob);
+    const newWindow = window.open(url, '_blank');
+    if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
+        alert('Tu navegador ha bloqueado la apertura de una nueva pestaña. Por favor, permite las ventanas emergentes para este sitio e inténtalo de nuevo.');
+    }
+
   } catch(e) {
     console.error("Fallo al generar el PDF general de registros:", e);
     alert("Ocurrió un error al generar el PDF. Por favor, revisa la consola para más detalles.");
@@ -264,68 +270,61 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
 
 
 const generateSingleSubmissionPdf = (submission: UserSubmission, adminSignature: string | null, adminSignatureClarification: string, adminJobTitle: string): void => {
-  const doc = new jsPDF();
-  
-  doc.setFontSize(22);
-  doc.setFont('helvetica', 'bold');
-  doc.text('Constancia de Capacitación', doc.internal.pageSize.getWidth() / 2, 30, { align: 'center' });
-
-  doc.setFontSize(12);
-  doc.setFont('helvetica', 'normal');
-  doc.text('Por la presente se certifica que:', 20, 60);
-
-  doc.setFontSize(18);
-  doc.setFont('helvetica', 'bold');
-  doc.text(`${submission.firstName} ${submission.lastName}`, doc.internal.pageSize.getWidth() / 2, 80, { align: 'center' });
-
-  doc.setFontSize(12);
-  doc.setFont('helvetica', 'normal');
-  doc.text(`Con DNI ${submission.dni}, de la empresa ${submission.company},`, doc.internal.pageSize.getWidth() / 2, 90, { align: 'center' });
-  
-  doc.text('ha completado satisfactoriamente la capacitación:', 20, 110);
-
-  doc.setFontSize(16);
-  doc.setFont('helvetica', 'bold');
-  doc.text(`"${submission.trainingName}"`, doc.internal.pageSize.getWidth() / 2, 125, { align: 'center' });
-
-  doc.setFontSize(12);
-  doc.setFont('helvetica', 'normal');
-  doc.text(`Completada el: ${submission.timestamp}`, 20, 145);
-
-  const signatureY = 180;
   try {
+    const doc = new jsPDF();
+    
+    doc.setFontSize(22);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Constancia de Capacitación', doc.internal.pageSize.getWidth() / 2, 30, { align: 'center' });
+
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Por la presente se certifica que:', 20, 60);
+
+    doc.setFontSize(18);
+    doc.setFont('helvetica', 'bold');
+    doc.text(`${submission.firstName} ${submission.lastName}`, doc.internal.pageSize.getWidth() / 2, 80, { align: 'center' });
+
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Con DNI ${submission.dni}, de la empresa ${submission.company},`, doc.internal.pageSize.getWidth() / 2, 90, { align: 'center' });
+    
+    doc.text('ha completado satisfactoriamente la capacitación:', 20, 110);
+
+    doc.setFontSize(16);
+    doc.setFont('helvetica', 'bold');
+    doc.text(`"${submission.trainingName}"`, doc.internal.pageSize.getWidth() / 2, 125, { align: 'center' });
+
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Completada el: ${submission.timestamp}`, 20, 145);
+
+    const signatureY = 180;
     if (adminSignature) {
-      const signatureX = (doc.internal.pageSize.getWidth() / 2) - 30;
-      doc.addImage(adminSignature, 'PNG', signatureX, signatureY, 60, 30);
-      doc.setDrawColor(0); // Black line
-      doc.line(signatureX, signatureY + 33, signatureX + 60, signatureY + 33); // Line under signature
-      if (adminSignatureClarification) {
-        doc.setFont('helvetica', 'bold');
-        doc.text(adminSignatureClarification, doc.internal.pageSize.getWidth() / 2, signatureY + 38, { align: 'center'});
-      }
-      if (adminJobTitle) {
-        doc.setFontSize(11);
-        doc.setFont('helvetica', 'italic');
-        doc.text(adminJobTitle, doc.internal.pageSize.getWidth() / 2, signatureY + 44, { align: 'center'});
-      }
+        const signatureX = (doc.internal.pageSize.getWidth() / 2) - 30;
+        doc.addImage(adminSignature, 'PNG', signatureX, signatureY, 60, 30);
+        doc.setDrawColor(0); // Black line
+        doc.line(signatureX, signatureY + 33, signatureX + 60, signatureY + 33); // Line under signature
+        if (adminSignatureClarification) {
+            doc.setFont('helvetica', 'bold');
+            doc.text(adminSignatureClarification, doc.internal.pageSize.getWidth() / 2, signatureY + 38, { align: 'center'});
+        }
+        if (adminJobTitle) {
+            doc.setFontSize(11);
+            doc.setFont('helvetica', 'italic');
+            doc.text(adminJobTitle, doc.internal.pageSize.getWidth() / 2, signatureY + 44, { align: 'center'});
+        }
     }
-  } catch(e) {
-    doc.text('No se pudo cargar la firma.', doc.internal.pageSize.getWidth() / 2, signatureY + 20, { align: 'center'});
-    console.error("Error adding admin signature image to PDF: ", e);
-  }
 
-  try {
     const pdfBlob = doc.output('blob');
     const url = URL.createObjectURL(pdfBlob);
     const newWindow = window.open(url, '_blank');
-    if (!newWindow) {
-      alert("No se pudo abrir una nueva pestaña (posiblemente bloqueada). Intentando descarga directa.");
-      doc.save(`constancia_${submission.dni}_${submission.trainingName.replace(/\s/g, '_')}.pdf`);
+    if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
+        alert('Tu navegador ha bloqueado la apertura de una nueva pestaña. Por favor, permite las ventanas emergentes para este sitio e inténtalo de nuevo.');
     }
   } catch (e) {
-    console.error("Error al generar PDF para móvil:", e);
-    alert("Ocurrió un error al generar la constancia. Intentando descarga directa.");
-    doc.save(`constancia_${submission.dni}_${submission.trainingName.replace(/\s/g, '_')}.pdf`);
+    console.error("Error al generar o mostrar el PDF:", e);
+    alert("Ocurrió un error al generar la constancia. Por favor, inténtalo de nuevo o contacta al administrador.");
   }
 };
 
