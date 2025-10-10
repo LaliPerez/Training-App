@@ -4,7 +4,6 @@ import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 import SignatureCanvas from 'react-signature-canvas';
 import QRCode from 'qrcode';
-// FIX: Import the missing `LogIn` icon from `lucide-react`.
 import { ShieldCheck, User, PlusCircle, Users, FileDown, LogOut, Trash2, Edit, X, Share2, Copy, Eye, FileText, CheckCircle, ArrowLeft, Send, LogIn } from 'lucide-react';
 
 
@@ -34,6 +33,31 @@ interface UserSubmission {
   email?: string;
   phone?: string;
 }
+
+
+// --- API SERVICE ---
+// This is a mock API service to interact with our simulated backend.
+const api = {
+  getSubmissions: async (): Promise<UserSubmission[]> => {
+    // In a real app, this would be: return fetch('/api/submissions').then(res => res.json());
+    const submissions = localStorage.getItem('__db_submissions');
+    return submissions ? JSON.parse(submissions) : [];
+  },
+  addSubmission: async (submission: Omit<UserSubmission, 'id' | 'timestamp'>): Promise<UserSubmission> => {
+     const newSubmission: UserSubmission = {
+      ...submission,
+      id: `sub-${submission.trainingId}-${submission.dni}-${Date.now()}`,
+      timestamp: new Date().toLocaleString(),
+    };
+    
+    // In a real app, this would be a POST request.
+    const submissions = await api.getSubmissions();
+    const updatedSubmissions = [...submissions, newSubmission];
+    localStorage.setItem('__db_submissions', JSON.stringify(updatedSubmissions));
+    
+    return newSubmission;
+  }
+};
 
 
 // --- SERVICES ---
@@ -93,7 +117,58 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
     console.error("Error adding admin signature image to PDF: ", e);
   }
 
-  doc.save('constancia_asistencia.pdf');
+  doc.save('constancia_asistencia_general.pdf');
+};
+
+const generateSingleSubmissionPdf = (submission: UserSubmission, adminSignature: string | null, adminSignatureClarification: string): void => {
+  const doc = new jsPDF();
+  
+  doc.setFontSize(22);
+  doc.setFont('helvetica', 'bold');
+  doc.text('Constancia de Capacitación', doc.internal.pageSize.getWidth() / 2, 30, { align: 'center' });
+
+  doc.setFontSize(12);
+  doc.setFont('helvetica', 'normal');
+  doc.text('Por la presente se certifica que:', 20, 60);
+
+  doc.setFontSize(18);
+  doc.setFont('helvetica', 'bold');
+  doc.text(`${submission.firstName} ${submission.lastName}`, doc.internal.pageSize.getWidth() / 2, 80, { align: 'center' });
+
+  doc.setFontSize(12);
+  doc.setFont('helvetica', 'normal');
+  doc.text(`Con DNI ${submission.dni}, de la empresa ${submission.company},`, doc.internal.pageSize.getWidth() / 2, 90, { align: 'center' });
+  
+  doc.text('ha completado satisfactoriamente la capacitación:', 20, 110);
+
+  doc.setFontSize(16);
+  doc.setFont('helvetica', 'bold');
+  doc.text(`"${submission.trainingName}"`, doc.internal.pageSize.getWidth() / 2, 125, { align: 'center' });
+
+  doc.setFontSize(12);
+  doc.setFont('helvetica', 'normal');
+  doc.text(`Completada el: ${submission.timestamp}`, 20, 145);
+
+  const signatureY = 180;
+  try {
+    if (adminSignature) {
+      const signatureX = (doc.internal.pageSize.getWidth() / 2) - 30;
+      doc.addImage(adminSignature, 'PNG', signatureX, signatureY, 60, 30);
+      doc.setDrawColor(0); // Black line
+      doc.line(signatureX, signatureY + 33, signatureX + 60, signatureY + 33); // Line under signature
+      if (adminSignatureClarification) {
+        doc.text(adminSignatureClarification, doc.internal.pageSize.getWidth() / 2, signatureY + 38, { align: 'center'});
+        doc.text('Firma del Administrador', doc.internal.pageSize.getWidth() / 2, signatureY + 43, { align: 'center'});
+      }
+    } else {
+        doc.text('Firma del administrador no configurada.', doc.internal.pageSize.getWidth() / 2, signatureY + 20, { align: 'center'});
+    }
+  } catch(e) {
+    doc.text('No se pudo cargar la firma.', doc.internal.pageSize.getWidth() / 2, signatureY + 20, { align: 'center'});
+    console.error("Error adding admin signature image to PDF: ", e);
+  }
+
+  doc.save(`constancia_${submission.dni}_${submission.trainingName.replace(/\s/g, '_')}.pdf`);
 };
 
 
@@ -106,8 +181,6 @@ interface SignaturePadProps {
 }
 
 const SignaturePad: React.FC<SignaturePadProps> = ({ onSignatureEnd, signatureRef }) => {
-  // FIX: The type definitions for `react-signature-canvas` appear to be incorrect, causing a type error for the `penColor` prop.
-  // Casting to `any` to bypass the faulty type check for this valid prop.
   const AnySignatureCanvas = SignatureCanvas as any;
 
   return (
@@ -129,14 +202,17 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ onSignatureEnd, signatureRe
 // UserPortal.tsx
 interface UserPortalProps {
   trainings: Training[];
-  setTrainings: React.Dispatch<React.SetStateAction<Training[]>>;
-  addUserSubmission: (submission: Omit<UserSubmission, 'id'>) => void;
+  setTrainingsStateForUser: React.Dispatch<React.SetStateAction<Training[]>>;
   onBack: () => void;
+  adminSignature: string | null;
+  adminSignatureClarification: string;
 }
 
-const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainings, addUserSubmission, onBack }) => {
+const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateForUser: setTrainings, onBack, adminSignature, adminSignatureClarification }) => {
   const [selectedTrainingId, setSelectedTrainingId] = useState<string | null>(null);
   const [formCompleted, setFormCompleted] = useState(false);
+  const [lastSubmission, setLastSubmission] = useState<UserSubmission | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const signatureRef = useRef<SignatureCanvas>(null);
   const [formData, setFormData] = useState({
     firstName: '',
@@ -147,6 +223,13 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainings, addUse
     phone: '',
     signature: '',
   });
+
+  useEffect(() => {
+    // If the user lands with exactly one training (from a shared link), go directly into it.
+    if (trainings.length === 1 && !selectedTrainingId) {
+      setSelectedTrainingId(trainings[0].id);
+    }
+  }, [trainings, selectedTrainingId]);
 
   const selectedTraining = useMemo(() => {
     return trainings.find(t => t.id === selectedTrainingId) || null;
@@ -181,38 +264,59 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainings, addUse
     setFormData(prev => ({ ...prev, signature: '' }));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedTraining || !formData.signature) {
-        alert("Please provide all required information, including your signature.");
+        alert("Por favor, proporciona toda la información requerida, incluyendo tu firma.");
         return;
     }
     
-    const submission: Omit<UserSubmission, 'id'> = {
-        trainingId: selectedTraining.id,
-        trainingName: selectedTraining.name,
-        ...formData,
-        timestamp: new Date().toLocaleString(),
-    };
-    addUserSubmission(submission);
-    setFormCompleted(true);
+    setIsSubmitting(true);
+    try {
+        const submissionData = {
+            trainingId: selectedTraining.id,
+            trainingName: selectedTraining.name,
+            ...formData,
+        };
+        const newSubmission = await api.addSubmission(submissionData);
+        setLastSubmission(newSubmission);
+        setFormCompleted(true);
+    } catch (error) {
+        console.error("Failed to submit training data:", error);
+        alert("Hubo un error al enviar tu registro. Por favor, intenta de nuevo.");
+    } finally {
+        setIsSubmitting(false);
+    }
   };
 
-  if (formCompleted) {
+
+  if (formCompleted && lastSubmission) {
     return (
-        <div className="text-center p-8 bg-slate-800 rounded-lg shadow-xl">
+        <div className="text-center p-8 bg-slate-800 rounded-lg shadow-xl max-w-2xl mx-auto">
             <CheckCircle className="mx-auto h-16 w-16 text-green-500" />
-            <h2 className="mt-4 text-2xl font-bold text-white">¡Capacitación Completada!</h2>
-            <p className="mt-2 text-gray-400">Gracias por enviar tu información. Ya puedes cerrar esta ventana.</p>
-            <button
-                onClick={() => {
-                    setSelectedTrainingId(null);
-                    setFormCompleted(false);
-                }}
-                className="mt-6 inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-            >
-                Volver a la lista de capacitaciones
-            </button>
+            <h2 className="mt-4 text-2xl font-bold text-white">¡Registro Enviado Exitosamente!</h2>
+            <p className="mt-2 text-gray-400">Tu registro ha sido enviado al administrador. Como paso final, puedes descargar tu constancia personal.</p>
+            <div className="mt-6 border-t border-slate-700 pt-6 space-y-4 text-left">
+                <div className="flex items-start gap-4">
+                    <div className="flex-shrink-0 h-8 w-8 rounded-full bg-indigo-500 flex items-center justify-center font-bold text-white">✓</div>
+                    <div>
+                        <h3 className="font-semibold text-white">Descarga tu constancia personal</h3>
+                        <p className="text-sm text-gray-400 mb-2">Guarda este PDF como comprobante de que has completado la capacitación.</p>
+                        <button
+                            onClick={() => generateSingleSubmissionPdf(lastSubmission, adminSignature, adminSignatureClarification)}
+                            disabled={!adminSignature}
+                            title={!adminSignature ? "El administrador aún no ha configurado la firma para las constancias." : "Descargar mi constancia en PDF"}
+                            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-slate-600 disabled:cursor-not-allowed"
+                        >
+                            <FileDown className="h-4 w-4 mr-2" />
+                            Descargar Mi Constancia
+                        </button>
+                    </div>
+                </div>
+                 <div className="text-center mt-6">
+                    <button onClick={onBack} className="text-indigo-400 hover:text-indigo-300">Volver a la página principal</button>
+                </div>
+            </div>
         </div>
     );
   }
@@ -273,10 +377,10 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainings, addUse
                     </div>
                     <button 
                         type="submit" 
-                        disabled={!formData.signature}
+                        disabled={!formData.signature || isSubmitting}
                         className="w-full flex justify-center items-center py-3 px-4 border border-transparent rounded-md shadow-sm text-base font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-slate-600 disabled:cursor-not-allowed">
                         <Send className="h-5 w-5 mr-2" />
-                        Enviar Información
+                        {isSubmitting ? 'Enviando...' : 'Enviar Información'}
                     </button>
                 </form>
             )}
@@ -389,14 +493,22 @@ const AdminLogin: React.FC<AdminLoginProps> = ({ onLoginSuccess, onBack }) => {
 // AdminDashboard.tsx
 interface AdminDashboardProps {
   trainings: Training[];
-  userSubmissions: UserSubmission[];
   addTraining: (name: string, links: string[]) => void;
   updateTraining: (id: string, name: string, links: string[]) => void;
   deleteTraining: (id: string) => void;
   onLogout: () => void;
+  adminSignature: string | null;
+  adminSignatureClarification: string;
+  setAdminSignature: (sig: string | null) => void;
+  setAdminSignatureClarification: (clarification: string) => void;
 }
 
-const AdminDashboard: React.FC<AdminDashboardProps> = ({ trainings, userSubmissions, addTraining, updateTraining, deleteTraining, onLogout }) => {
+const AdminDashboard: React.FC<AdminDashboardProps> = ({ 
+    trainings, addTraining, updateTraining, deleteTraining, onLogout,
+    adminSignature, adminSignatureClarification, setAdminSignature, setAdminSignatureClarification
+}) => {
+  const [userSubmissions, setUserSubmissions] = useState<UserSubmission[]>([]);
+  const [isLoadingSubmissions, setIsLoadingSubmissions] = useState(true);
   const [trainingName, setTrainingName] = useState('');
   const [linksText, setLinksText] = useState('');
   const [feedback, setFeedback] = useState('');
@@ -404,24 +516,29 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ trainings, userSubmissi
   const [editedName, setEditedName] = useState('');
   const [editedLinksText, setEditedLinksText] = useState('');
   const [showShareModal, setShowShareModal] = useState(false);
+  const [sharingTrainingName, setSharingTrainingName] = useState('');
   const [shareableLink, setShareableLink] = useState('');
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState('');
   const [copySuccess, setCopySuccess] = useState('');
   const [selectedSubmission, setSelectedSubmission] = useState<UserSubmission | null>(null);
-  const [adminSignature, setAdminSignature] = useState<string | null>(null);
-  const [adminSignatureClarification, setAdminSignatureClarification] = useState<string>('');
   const [showAdminSignatureModal, setShowAdminSignatureModal] = useState(false);
-  const adminSignatureRef = useRef<SignatureCanvas>(null);
+  const [currentClarification, setCurrentClarification] = useState(adminSignatureClarification);
 
+  const adminSignatureRef = useRef<SignatureCanvas>(null);
+  
   useEffect(() => {
-    const savedSignature = localStorage.getItem('adminSignature');
-    if (savedSignature) {
-      setAdminSignature(savedSignature);
-    }
-    const savedClarification = localStorage.getItem('adminSignatureClarification');
-    if (savedClarification) {
-      setAdminSignatureClarification(savedClarification);
-    }
+    const fetchSubmissions = async () => {
+      setIsLoadingSubmissions(true);
+      try {
+        const subs = await api.getSubmissions();
+        setUserSubmissions(subs);
+      } catch (error) {
+        console.error("Failed to fetch submissions", error);
+        alert("No se pudieron cargar los registros de los usuarios.");
+      }
+      setIsLoadingSubmissions(false);
+    };
+    fetchSubmissions();
   }, []);
 
   useEffect(() => {
@@ -430,6 +547,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ trainings, userSubmissi
       setEditedLinksText(editingTraining.links.map(l => l.url).join('\n'));
     }
   }, [editingTraining]);
+
+  useEffect(() => {
+    setCurrentClarification(adminSignatureClarification);
+  }, [adminSignatureClarification]);
+
 
   const handleAddTraining = (e: React.FormEvent) => {
     e.preventDefault();
@@ -468,10 +590,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ trainings, userSubmissi
     }
   }
 
-  const handleShare = async () => {
-    const data = btoa(encodeURIComponent(JSON.stringify(trainings)));
+  const handleShare = async (trainingToShare: Training) => {
+    const data = btoa(encodeURIComponent(JSON.stringify([trainingToShare])));
     const link = `${window.location.origin}${window.location.pathname}?data=${data}`;
+    
     setShareableLink(link);
+    setSharingTrainingName(trainingToShare.name);
+
     try {
       const dataUrl = await QRCode.toDataURL(link, { width: 256, margin: 2, color: { dark: '#FFFFFF', light: '#1E293B' } });
       setQrCodeDataUrl(dataUrl);
@@ -507,17 +632,24 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ trainings, userSubmissi
           alert("Por favor, dibuja tu firma antes de guardar.");
           return;
       }
-       if (!adminSignatureClarification.trim()) {
+       if (!currentClarification.trim()) {
           alert("Por favor, ingresa tu aclaración de firma.");
           return;
       }
       const signatureDataUrl = adminSignatureRef.current.toDataURL();
       setAdminSignature(signatureDataUrl);
+      setAdminSignatureClarification(currentClarification);
       localStorage.setItem('adminSignature', signatureDataUrl);
-      localStorage.setItem('adminSignatureClarification', adminSignatureClarification);
+      localStorage.setItem('adminSignatureClarification', currentClarification);
       setShowAdminSignatureModal(false);
     }
   };
+
+  const downloadButtonTitle = userSubmissions.length === 0 
+    ? "No hay registros para descargar" 
+    : (!adminSignature || !adminSignatureClarification) 
+    ? "Debe configurar su firma y aclaración para descargar" 
+    : "Descargar constancia de todos los registros";
 
   return (
     <div className="w-full max-w-6xl mx-auto p-4 md:p-8 space-y-8">
@@ -576,18 +708,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ trainings, userSubmissi
                     <button
                         onClick={openUserView}
                         disabled={trainings.length === 0}
+                        title={trainings.length === 0 ? "Crea una capacitación para previsualizar" : "Previsualizar cómo ven los usuarios"}
                         className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md shadow-sm text-white bg-sky-600 hover:bg-sky-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-sky-500 disabled:bg-slate-600 disabled:cursor-not-allowed"
                     >
                         <Eye className="h-4 w-4 mr-2" />
                         Vista de Usuario
-                    </button>
-                    <button
-                        onClick={handleShare}
-                        disabled={trainings.length === 0}
-                        className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md shadow-sm text-white bg-teal-600 hover:bg-teal-700 disabled:bg-slate-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-teal-500"
-                    >
-                        <Share2 className="h-4 w-4 mr-2" />
-                        Compartir
                     </button>
                 </div>
             </div>
@@ -595,12 +720,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ trainings, userSubmissi
               {trainings.length > 0 ? (
                 trainings.map(training => (
                   <div key={training.id} className="flex items-center justify-between p-3 bg-slate-700/50 rounded-lg border border-slate-600">
-                    <span className="font-medium text-gray-200">{training.name}</span>
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => setEditingTraining(training)} className="p-2 text-blue-400 hover:text-blue-300 hover:bg-blue-900/30 rounded-full transition-colors">
+                    <span className="font-medium text-gray-200 truncate pr-2" title={training.name}>{training.name}</span>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <button onClick={() => handleShare(training)} className="p-2 text-teal-400 hover:text-teal-300 hover:bg-teal-900/30 rounded-full transition-colors" title="Compartir">
+                        <Share2 className="h-4 w-4" />
+                      </button>
+                      <button onClick={() => setEditingTraining(training)} className="p-2 text-blue-400 hover:text-blue-300 hover:bg-blue-900/30 rounded-full transition-colors" title="Editar">
                         <Edit className="h-4 w-4" />
                       </button>
-                      <button onClick={() => handleDeleteTraining(training.id)} className="p-2 text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded-full transition-colors">
+                      <button onClick={() => handleDeleteTraining(training.id)} className="p-2 text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded-full transition-colors" title="Eliminar">
                         <Trash2 className="h-4 w-4" />
                       </button>
                     </div>
@@ -615,34 +743,40 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ trainings, userSubmissi
 
         <div className="bg-slate-800 p-6 rounded-xl shadow-lg border border-slate-700">
           <div className="flex flex-col md:flex-row justify-between md:items-center mb-4 gap-4">
-              <h2 className="text-xl font-semibold text-gray-200">Usuarios Registrados</h2>
+              <h2 className="text-xl font-semibold text-gray-200">Usuarios Registrados ({userSubmissions.length})</h2>
               <div className="flex gap-2 flex-wrap items-center">
                   <button 
                     onClick={() => setShowAdminSignatureModal(true)}
                     className="inline-flex items-center px-4 py-2 border border-slate-600 text-sm font-medium rounded-md shadow-sm text-gray-300 bg-slate-700 hover:bg-slate-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                >
+                  >
                     <Edit className="h-4 w-4 mr-2" />
                     {adminSignature ? 'Cambiar Firma' : 'Configurar Firma'}
-                </button>
-                {adminSignature && (
+                  </button>
+                  {adminSignature && (
                     <div className="flex items-center gap-2 border border-slate-700 rounded-md bg-slate-700 p-1">
                       <img src={adminSignature} alt="Admin signature preview" className="h-10 w-20 object-contain bg-white rounded-sm" />
                       {adminSignatureClarification && <p className="text-xs text-gray-300 pr-2">{adminSignatureClarification}</p>}
                     </div>
-                )}
-                  <button
-                  onClick={() => generateSubmissionsPdf(userSubmissions, adminSignature!, adminSignatureClarification)}
-                  disabled={userSubmissions.length === 0 || !adminSignature || !adminSignatureClarification}
-                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                  >
-                  <FileDown className="h-5 w-5 mr-2" />
-                  Descargar Constancia
-                  </button>
+                  )}
               </div>
           </div>
+
+          <div className="flex gap-2 flex-wrap items-center border-t border-slate-700 pt-4">
+              <button
+                  onClick={() => generateSubmissionsPdf(userSubmissions, adminSignature!, adminSignatureClarification)}
+                  disabled={userSubmissions.length === 0 || !adminSignature || !adminSignatureClarification}
+                  title={downloadButtonTitle}
+                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+              >
+                  <FileDown className="h-5 w-5 mr-2" />
+                  Descargar Constancia Gral.
+              </button>
+          </div>
           
-          <div className="overflow-x-auto">
-            {userSubmissions.length > 0 ? (
+          <div className="overflow-x-auto mt-4">
+            {isLoadingSubmissions ? (
+                 <div className="text-center py-8 text-gray-500">Cargando registros...</div>
+            ) : userSubmissions.length > 0 ? (
               <table className="min-w-full divide-y divide-slate-700">
                 <thead className="bg-slate-700">
                   <tr>
@@ -667,6 +801,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ trainings, userSubmissi
               <div className="text-center py-8">
                 <Users className="mx-auto h-12 w-12 text-gray-500" />
                 <p className="mt-2 text-sm text-gray-500">Aún no hay registros de usuarios.</p>
+                <p className="mt-1 text-xs text-gray-600">Cuando un usuario complete una capacitación, aparecerá aquí automáticamente.</p>
               </div>
             )}
           </div>
@@ -704,10 +839,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ trainings, userSubmissi
         <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50">
           <div className="bg-slate-800 rounded-xl shadow-2xl p-6 w-full max-w-md text-center border border-slate-700">
             <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-semibold text-white">Compartir Capacitaciones</h2>
-              <button onClick={() => setShowShareModal(false)} className="p-1 text-gray-400 hover:text-white"><X className="h-6 w-6" /></button>
+              <h2 className="text-xl font-semibold text-white truncate pr-2">Compartir: {sharingTrainingName}</h2>
+              <button onClick={() => setShowShareModal(false)} className="p-1 text-gray-400 hover:text-white flex-shrink-0"><X className="h-6 w-6" /></button>
             </div>
-            <p className="text-gray-400 mb-4">Los usuarios pueden escanear este código QR o usar el enlace para acceder a las capacitaciones.</p>
+            <p className="text-gray-400 mb-4">Los usuarios pueden escanear este código QR o usar el enlace para acceder a la capacitación.</p>
             
             {qrCodeDataUrl ? (
                 <div className="flex justify-center mb-4 p-2 bg-slate-900/50 rounded-lg">
@@ -774,8 +909,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ trainings, userSubmissi
                     <input
                         id="clarification"
                         type="text"
-                        value={adminSignatureClarification}
-                        onChange={(e) => setAdminSignatureClarification(e.target.value)}
+                        value={currentClarification}
+                        onChange={(e) => setCurrentClarification(e.target.value)}
                         placeholder="Ej: Juan Pérez"
                         className="mt-1 block w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
                     />
@@ -783,7 +918,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ trainings, userSubmissi
                 <div className="flex justify-between items-center mt-4">
                 <button
                     type="button"
-                    onClick={() => adminSignatureRef.current?.clear()}
+                    onClick={() => {
+                        adminSignatureRef.current?.clear();
+                        if (adminSignature) { // if a signature was previously saved, clear it
+                            setAdminSignature(null);
+                            localStorage.removeItem('adminSignature');
+                        }
+                    }}
                     className="px-4 py-2 text-sm font-medium text-gray-300 bg-slate-700 rounded-md hover:bg-slate-600"
                 >
                     Limpiar
@@ -819,42 +960,34 @@ type View = 'selector' | 'login' | 'admin' | 'user';
 const App: React.FC = () => {
   const [view, setView] = useState<View>('selector');
   const [trainings, setTrainings] = useState<Training[]>([]);
-  const [userSubmissions, setUserSubmissions] = useState<UserSubmission[]>(() => {
-    try {
-      const savedSubmissions = localStorage.getItem('userSubmissions');
-      return savedSubmissions ? JSON.parse(savedSubmissions) : [];
-    } catch (error) {
-      console.error("Failed to parse user submissions from localStorage", error);
-      return [];
-    }
-  });
+  const [userPortalTrainings, setUserPortalTrainings] = useState<Training[]>([]);
+
+  const [adminSignature, setAdminSignature] = useState<string | null>(null);
+  const [adminSignatureClarification, setAdminSignatureClarification] = useState<string>('');
+  
   
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
       const data = params.get('data');
-      const viewParam = params.get('view');
       let urlWasModified = false;
-
-      if (viewParam === 'user') {
-        setView('user');
-        urlWasModified = true;
-      }
 
       if (data) {
         const decodedTrainings = JSON.parse(decodeURIComponent(atob(data)));
         if (Array.isArray(decodedTrainings)) {
-          setTrainings(decodedTrainings);
-          localStorage.setItem('trainings', JSON.stringify(decodedTrainings));
+          // This state is just for the user portal instance
+          setUserPortalTrainings(decodedTrainings);
           setView('user');
           urlWasModified = true;
         }
-      } else {
-         const savedTrainings = localStorage.getItem('trainings');
-         if (savedTrainings) {
-            setTrainings(JSON.parse(savedTrainings));
-         }
+      } 
+      
+      // Admin trainings are always loaded from their localStorage
+      const savedTrainings = localStorage.getItem('trainings');
+      if (savedTrainings) {
+        setTrainings(JSON.parse(savedTrainings));
       }
+
 
       if (urlWasModified) {
         window.history.replaceState({}, document.title, window.location.pathname);
@@ -870,25 +1003,24 @@ const App: React.FC = () => {
             console.error("Failed to load trainings from localStorage as fallback", e);
        }
     }
+
+    // Load admin signature data
+    const savedSignature = localStorage.getItem('adminSignature');
+    if (savedSignature) setAdminSignature(savedSignature);
+    const savedClarification = localStorage.getItem('adminSignatureClarification');
+    if (savedClarification) setAdminSignatureClarification(savedClarification);
+
   }, []);
 
   useEffect(() => {
-    if (trainings.length > 0) {
+    if (trainings.length > 0 && view === 'admin') {
         try {
           localStorage.setItem('trainings', JSON.stringify(trainings));
         } catch (error) {
           console.error("Failed to save trainings to localStorage", error);
         }
     }
-  }, [trainings]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('userSubmissions', JSON.stringify(userSubmissions));
-    } catch (error) {
-      console.error("Failed to save user submissions to localStorage", error);
-    }
-  }, [userSubmissions]);
+  }, [trainings, view]);
 
   const addTraining = (name: string, urls: string[]) => {
     const newTraining: Training = {
@@ -922,14 +1054,6 @@ const App: React.FC = () => {
   const deleteTraining = (id: string) => {
     setTrainings(prev => prev.filter(t => t.id !== id));
   };
-
-  const addUserSubmission = (submission: Omit<UserSubmission, 'id'>) => {
-    const newSubmission: UserSubmission = {
-      ...submission,
-      id: `sub-${Date.now()}`,
-    };
-    setUserSubmissions(prev => [...prev, newSubmission]);
-  };
   
   const renderView = () => {
     switch (view) {
@@ -938,18 +1062,22 @@ const App: React.FC = () => {
       case 'admin':
         return <AdminDashboard 
                     trainings={trainings}
-                    userSubmissions={userSubmissions} 
                     addTraining={addTraining}
                     updateTraining={updateTraining}
                     deleteTraining={deleteTraining}
-                    onLogout={() => setView('selector')} 
+                    onLogout={() => setView('selector')}
+                    adminSignature={adminSignature}
+                    adminSignatureClarification={adminSignatureClarification}
+                    setAdminSignature={setAdminSignature}
+                    setAdminSignatureClarification={setAdminSignatureClarification}
                 />;
       case 'user':
         return <UserPortal 
-                    trainings={trainings} 
-                    setTrainings={setTrainings} 
-                    addUserSubmission={addUserSubmission}
+                    trainings={userPortalTrainings.length > 0 ? userPortalTrainings : trainings} 
+                    setTrainingsStateForUser={userPortalTrainings.length > 0 ? setUserPortalTrainings : setTrainings} 
                     onBack={() => setView('selector')}
+                    adminSignature={adminSignature}
+                    adminSignatureClarification={adminSignatureClarification}
                 />;
       case 'selector':
       default:
