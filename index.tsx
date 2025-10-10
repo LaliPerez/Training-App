@@ -45,9 +45,16 @@ interface AdminConfig {
 // Using a live, centralized JSON store to allow multi-device synchronization.
 const JSON_BLOB_URL = 'https://jsonblob.com/api/jsonBlob/1251394142642536448';
 
+interface AppData {
+  submissions: UserSubmission[];
+  adminConfig?: AdminConfig;
+  sharedTrainings?: { [key: string]: Training };
+}
+
+
 const apiService = {
   // Fetches the entire data blob from the cloud store.
-  _getData: async (): Promise<{ submissions: UserSubmission[], adminConfig?: AdminConfig }> => {
+  _getData: async (): Promise<AppData> => {
     try {
       const response = await fetch(JSON_BLOB_URL, {
         method: 'GET',
@@ -55,19 +62,42 @@ const apiService = {
       });
       if (!response.ok) {
         console.error(`Network response was not ok: ${response.statusText}`);
-        return { submissions: [], adminConfig: { signature: null, clarification: '', jobTitle: '' } };
+        return { submissions: [], adminConfig: { signature: null, clarification: '', jobTitle: '' }, sharedTrainings: {} };
       }
       const text = await response.text();
       // Handle empty blob case
       const data = text ? JSON.parse(text) : {};
       return {
         submissions: data.submissions || [],
-        adminConfig: data.adminConfig || { signature: null, clarification: '', jobTitle: '' }
+        adminConfig: data.adminConfig || { signature: null, clarification: '', jobTitle: '' },
+        sharedTrainings: data.sharedTrainings || {}
       };
     } catch (error) {
       console.error("Failed to fetch data from remote store:", error);
-      return { submissions: [], adminConfig: { signature: null, clarification: '', jobTitle: '' } }; // Return default structure on error
+      return { submissions: [], adminConfig: { signature: null, clarification: '', jobTitle: '' }, sharedTrainings: {} }; // Return default structure on error
     }
+  },
+
+  shareTraining: async (training: Training): Promise<string> => {
+      const key = `st-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      const data = await apiService._getData();
+      const sharedTrainings = data.sharedTrainings || {};
+      sharedTrainings[key] = training;
+      
+      const updatedData = { ...data, sharedTrainings };
+
+      await fetch(JSON_BLOB_URL, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updatedData),
+      });
+
+      return key;
+  },
+
+  getSharedTraining: async (key: string): Promise<Training | null> => {
+      const data = await apiService._getData();
+      return data.sharedTrainings?.[key] || null;
   },
 
   getSubmissions: async (): Promise<UserSubmission[]> => {
@@ -82,26 +112,25 @@ const apiService = {
 
   updateAdminConfig: async (config: AdminConfig): Promise<void> => {
     const data = await apiService._getData();
-    const submissions = data.submissions || [];
+    const updatedData = { ...data, adminConfig: config };
     
     await fetch(JSON_BLOB_URL, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ submissions, adminConfig: config }),
+        body: JSON.stringify(updatedData),
     });
     window.dispatchEvent(new Event('storage'));
   },
 
   addSubmission: async (submission: UserSubmission): Promise<UserSubmission> => {
     const data = await apiService._getData();
-    const submissions = data.submissions || [];
-    const adminConfig = data.adminConfig;
-    const newSubmissions = [...submissions, submission];
+    const newSubmissions = [...(data.submissions || []), submission];
+    const updatedData = { ...data, submissions: newSubmissions };
     
     await fetch(JSON_BLOB_URL, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ submissions: newSubmissions, adminConfig }),
+        body: JSON.stringify(updatedData),
     });
 
     window.dispatchEvent(new Event('storage')); // Notify listeners to refresh
@@ -110,25 +139,24 @@ const apiService = {
 
   deleteSubmission: async (id: string): Promise<void> => {
     const data = await apiService._getData();
-    let submissions = data.submissions || [];
-    const adminConfig = data.adminConfig;
-    submissions = submissions.filter(sub => sub.id !== id);
+    let submissions = (data.submissions || []).filter(sub => sub.id !== id);
+    const updatedData = { ...data, submissions };
     
     await fetch(JSON_BLOB_URL, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ submissions, adminConfig }),
+        body: JSON.stringify(updatedData),
     });
     window.dispatchEvent(new Event('storage')); // Notify listeners
   },
 
   deleteAllSubmissions: async (): Promise<void> => {
     const data = await apiService._getData();
-    const adminConfig = data.adminConfig;
+    const updatedData = { ...data, submissions: [] };
     await fetch(JSON_BLOB_URL, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ submissions: [], adminConfig }),
+        body: JSON.stringify(updatedData),
     });
     window.dispatchEvent(new Event('storage')); // Notify listeners
   }
@@ -404,9 +432,21 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateFor
     }
     
     setIsSubmitting(true);
+    
+    const now = new Date();
+    const formattedTimestamp = now.toLocaleDateString('es-ES', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+    }) + ' ' + now.toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+    });
+
     const newSubmission: UserSubmission = {
         id: `sub-${selectedTraining.id}-${formData.dni}-${Date.now()}`,
-        timestamp: new Date().toLocaleString(),
+        timestamp: formattedTimestamp,
         trainingId: selectedTraining.id,
         trainingName: selectedTraining.name,
         ...formData
@@ -742,13 +782,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       links: trainingToShare.links.map(link => ({ ...link, viewed: false }))
     };
     
-    const data = btoa(encodeURIComponent(JSON.stringify([pristineTraining])));
-    const link = `${window.location.origin}${window.location.pathname}?data=${data}`;
-    
-    setShareableLink(link);
-    setSharingTrainingName(trainingToShare.name);
-
     try {
+      const shareKey = await apiService.shareTraining(pristineTraining);
+      const link = `${window.location.origin}${window.location.pathname}?shareKey=${shareKey}`;
+      
+      setShareableLink(link);
+      setSharingTrainingName(trainingToShare.name);
+
       const dataUrl = await QRCode.toDataURL(link, { width: 256, margin: 2, color: { dark: '#FFFFFF', light: '#1E293B' } });
       setQrCodeDataUrl(dataUrl);
     } catch (err) {
@@ -1216,34 +1256,41 @@ const App: React.FC = () => {
   const [userPortalTrainings, setUserPortalTrainings] = useState<Training[]>([]);
   
   useEffect(() => {
-    try {
-      const params = new URLSearchParams(window.location.search);
-      const data = params.get('data');
-      let urlWasModified = false;
+    const loadInitialData = async () => {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const shareKey = params.get('shareKey');
+        let urlWasModified = false;
 
-      if (data) {
-        const decodedTrainings = JSON.parse(decodeURIComponent(atob(data)));
-        if (Array.isArray(decodedTrainings)) {
-          // This state is just for the user portal instance
-          setUserPortalTrainings(decodedTrainings);
-          setView('user');
-          urlWasModified = true;
+        if (shareKey) {
+          const sharedTraining = await apiService.getSharedTraining(shareKey);
+          if (sharedTraining) {
+            setUserPortalTrainings([sharedTraining]);
+            setView('user');
+            urlWasModified = true;
+          } else {
+            alert("El enlace de la capacitación es inválido o ha expirado.");
+          }
+        } 
+        
+        // Admin trainings are always loaded from their localStorage
+        const savedTrainings = localStorage.getItem('trainings');
+        if (savedTrainings) {
+          setTrainings(JSON.parse(savedTrainings));
         }
-      } 
-      
-      // Admin trainings are always loaded from their localStorage
-      const savedTrainings = localStorage.getItem('trainings');
-      if (savedTrainings) {
-        setTrainings(JSON.parse(savedTrainings));
-      }
 
-      if (urlWasModified) {
-        window.history.replaceState({}, document.title, window.location.pathname);
+        if (urlWasModified) {
+          window.history.replaceState({}, document.title, window.location.pathname);
+        }
+      } catch (error) {
+         console.error("Failed to load data from URL or localStorage", error);
+         alert("Ocurrió un error al cargar la capacitación.");
       }
-    } catch (error) {
-       console.error("Failed to load data from URL or localStorage", error);
-    }
+    };
+
+    loadInitialData();
   }, []);
+
 
   useEffect(() => {
     if (view === 'admin') {
