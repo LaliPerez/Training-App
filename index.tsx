@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import ReactDOM from 'react-dom/client';
 import jsPDF from 'jspdf';
-import 'jspdf-autotable';
+import autoTable from 'jspdf-autotable';
 import SignatureCanvas from 'react-signature-canvas';
 import QRCode from 'qrcode';
 import { ShieldCheck, User, PlusCircle, Users, FileDown, LogOut, Trash2, Edit, X, Share2, Copy, Eye, FileText, CheckCircle, ArrowLeft, Send, LogIn } from 'lucide-react';
@@ -61,12 +61,6 @@ const apiService = {
 
 
 // --- SERVICES ---
-declare module 'jspdf' {
-  interface jsPDF {
-    autoTable: (options: any) => jsPDF;
-  }
-}
-
 const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: string | null, adminSignatureClarification: string, adminJobTitle: string): void => {
   if (!adminSignature || !adminSignatureClarification || !adminJobTitle) {
       alert("Error: La firma y los datos del administrador deben estar configurados para generar el PDF.");
@@ -92,7 +86,7 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
       sub.timestamp,
     ]);
 
-    doc.autoTable({
+    autoTable(doc, {
       head: [tableColumns],
       body: tableRows,
       startY: 24,
@@ -690,7 +684,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleDeleteSubmission = async (submissionId: string) => {
     if (window.confirm('¿Estás seguro de que quieres eliminar este registro? Esta acción es irreversible.')) {
       await apiService.deleteSubmission(submissionId);
-      fetchSubmissions(); // Refresh the list
     }
   };
 
@@ -698,7 +691,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (window.confirm('¿Estás seguro de que quieres eliminar TODOS los registros? Esta acción es irreversible.')) {
         if (window.confirm('Por favor, confirma de nuevo. Esta acción eliminará permanentemente todos los registros de usuarios.')) {
             await apiService.deleteAllSubmissions();
-            fetchSubmissions(); // Refresh the list
         }
     }
   };
