@@ -66,12 +66,12 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
     styles: { fontSize: 8 },
   });
 
-  const finalY = (doc as any).lastAutoTable.finalY || 100;
+  const finalY = ((doc as any).lastAutoTable && (doc as any).lastAutoTable.finalY) || 100;
   const pageHeight = doc.internal.pageSize.getHeight();
   let signatureY = finalY + 15;
 
   // Add new page for signature if there is not enough space
-  if (signatureY + 45 > pageHeight) {
+  if (signatureY + 60 > pageHeight) { // Increased space for signature + text
     doc.addPage();
     signatureY = 20;
   }
@@ -82,6 +82,13 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
   try {
     if (adminSignature) {
       doc.addImage(adminSignature, 'PNG', 14, signatureY + 5, 60, 30);
+      
+      const signatureImageBottomY = signatureY + 5 + 30; // image Y + image height
+      doc.setDrawColor(150); // A light gray for the line
+      doc.line(14, signatureImageBottomY + 2, 74, signatureImageBottomY + 2); // line from x1,y1 to x2,y2
+      doc.setFontSize(8);
+      doc.setTextColor(100); // gray text
+      doc.text('Firma del Administrador', 14, signatureImageBottomY + 6);
     }
   } catch(e) {
     doc.text('No se pudo cargar la imagen de la firma.', 14, signatureY + 10);
