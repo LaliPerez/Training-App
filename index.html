@@ -19,9 +19,12 @@
   }
 }
 </script>
+<!-- Add Babel for JSX/TS transpilation in the browser -->
+<script src="https://unpkg.com/@babel/standalone@7.24.8/babel.min.js"></script>
 </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="./index.tsx"></script>
+    <!-- Change script type to text/babel and add presets -->
+    <script type="text/babel" data-presets="react,typescript" data-type="module" src="./index.tsx"></script>
   </body>
 </html>
