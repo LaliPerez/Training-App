@@ -34,32 +34,6 @@ interface UserSubmission {
   phone?: string;
 }
 
-
-// --- API SERVICE ---
-// This is a mock API service to interact with our simulated backend.
-const api = {
-  getSubmissions: async (): Promise<UserSubmission[]> => {
-    // In a real app, this would be: return fetch('/api/submissions').then(res => res.json());
-    const submissions = localStorage.getItem('__db_submissions');
-    return submissions ? JSON.parse(submissions) : [];
-  },
-  addSubmission: async (submission: Omit<UserSubmission, 'id' | 'timestamp'>): Promise<UserSubmission> => {
-     const newSubmission: UserSubmission = {
-      ...submission,
-      id: `sub-${submission.trainingId}-${submission.dni}-${Date.now()}`,
-      timestamp: new Date().toLocaleString(),
-    };
-    
-    // In a real app, this would be a POST request.
-    const submissions = await api.getSubmissions();
-    const updatedSubmissions = [...submissions, newSubmission];
-    localStorage.setItem('__db_submissions', JSON.stringify(updatedSubmissions));
-    
-    return newSubmission;
-  }
-};
-
-
 // --- SERVICES ---
 declare module 'jspdf' {
   interface jsPDF {
@@ -67,7 +41,7 @@ declare module 'jspdf' {
   }
 }
 
-const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: string, adminSignatureClarification: string): void => {
+const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: string, adminSignatureClarification: string, adminJobTitle: string): void => {
   const doc = new jsPDF();
   
   doc.text('Registro de Asistencia a Capacitaciones', 14, 16);
@@ -95,7 +69,7 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
   const pageHeight = doc.internal.pageSize.getHeight();
   let signatureY = finalY + 15;
 
-  if (signatureY + 55 > pageHeight) { // Increased space for clarification
+  if (signatureY + 60 > pageHeight) { // Increased space for clarification and title
     doc.addPage();
     signatureY = 20;
   }
@@ -111,6 +85,10 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
       if (adminSignatureClarification) {
         doc.text(adminSignatureClarification, 14, signatureY + 43);
       }
+      if (adminJobTitle) {
+        doc.setFontSize(9);
+        doc.text(adminJobTitle, 14, signatureY + 48);
+      }
     }
   } catch(e) {
     doc.text('No se pudo cargar la imagen de la firma.', 14, signatureY + 10);
@@ -120,7 +98,7 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
   doc.save('constancia_asistencia_general.pdf');
 };
 
-const generateSingleSubmissionPdf = (submission: UserSubmission, adminSignature: string | null, adminSignatureClarification: string): void => {
+const generateSingleSubmissionPdf = (submission: UserSubmission, adminSignature: string | null, adminSignatureClarification: string, adminJobTitle: string): void => {
   const doc = new jsPDF();
   
   doc.setFontSize(22);
@@ -157,8 +135,13 @@ const generateSingleSubmissionPdf = (submission: UserSubmission, adminSignature:
       doc.setDrawColor(0); // Black line
       doc.line(signatureX, signatureY + 33, signatureX + 60, signatureY + 33); // Line under signature
       if (adminSignatureClarification) {
+        doc.setFont('helvetica', 'bold');
         doc.text(adminSignatureClarification, doc.internal.pageSize.getWidth() / 2, signatureY + 38, { align: 'center'});
-        doc.text('Firma del Administrador', doc.internal.pageSize.getWidth() / 2, signatureY + 43, { align: 'center'});
+      }
+      if (adminJobTitle) {
+        doc.setFontSize(11);
+        doc.setFont('helvetica', 'italic');
+        doc.text(adminJobTitle, doc.internal.pageSize.getWidth() / 2, signatureY + 44, { align: 'center'});
       }
     } else {
         doc.text('Firma del administrador no configurada.', doc.internal.pageSize.getWidth() / 2, signatureY + 20, { align: 'center'});
@@ -206,9 +189,11 @@ interface UserPortalProps {
   onBack: () => void;
   adminSignature: string | null;
   adminSignatureClarification: string;
+  adminJobTitle: string;
+  onSubmission: (submission: UserSubmission) => void;
 }
 
-const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateForUser: setTrainings, onBack, adminSignature, adminSignatureClarification }) => {
+const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateForUser: setTrainings, onBack, adminSignature, adminSignatureClarification, adminJobTitle, onSubmission }) => {
   const [selectedTrainingId, setSelectedTrainingId] = useState<string | null>(null);
   const [formCompleted, setFormCompleted] = useState(false);
   const [lastSubmission, setLastSubmission] = useState<UserSubmission | null>(null);
@@ -272,41 +257,38 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateFor
     }
     
     setIsSubmitting(true);
-    try {
-        const submissionData = {
-            trainingId: selectedTraining.id,
-            trainingName: selectedTraining.name,
-            ...formData,
-        };
-        const newSubmission = await api.addSubmission(submissionData);
-        setLastSubmission(newSubmission);
-        setFormCompleted(true);
-    } catch (error) {
-        console.error("Failed to submit training data:", error);
-        alert("Hubo un error al enviar tu registro. Por favor, intenta de nuevo.");
-    } finally {
-        setIsSubmitting(false);
-    }
+    const newSubmission: UserSubmission = {
+        id: `sub-${selectedTraining.id}-${formData.dni}-${Date.now()}`,
+        timestamp: new Date().toLocaleString(),
+        trainingId: selectedTraining.id,
+        trainingName: selectedTraining.name,
+        ...formData
+    };
+    
+    onSubmission(newSubmission); // Automatically submit the data
+    
+    setLastSubmission(newSubmission);
+    setFormCompleted(true);
+    setIsSubmitting(false);
   };
-
 
   if (formCompleted && lastSubmission) {
     return (
         <div className="text-center p-8 bg-slate-800 rounded-lg shadow-xl max-w-2xl mx-auto">
             <CheckCircle className="mx-auto h-16 w-16 text-green-500" />
-            <h2 className="mt-4 text-2xl font-bold text-white">¡Registro Enviado Exitosamente!</h2>
-            <p className="mt-2 text-gray-400">Tu registro ha sido enviado al administrador. Como paso final, puedes descargar tu constancia personal.</p>
+            <h2 className="mt-4 text-2xl font-bold text-white">¡Registro Enviado con Éxito!</h2>
+            <p className="mt-2 text-gray-400">Tu registro ha sido enviado al administrador.</p>
             <div className="mt-6 border-t border-slate-700 pt-6 space-y-4 text-left">
                 <div className="flex items-start gap-4">
-                    <div className="flex-shrink-0 h-8 w-8 rounded-full bg-indigo-500 flex items-center justify-center font-bold text-white">✓</div>
+                    <div className="flex-shrink-0 h-8 w-8 rounded-full bg-slate-600 flex items-center justify-center font-bold text-white">1</div>
                     <div>
-                        <h3 className="font-semibold text-white">Descarga tu constancia personal</h3>
-                        <p className="text-sm text-gray-400 mb-2">Guarda este PDF como comprobante de que has completado la capacitación.</p>
+                        <h3 className="font-semibold text-white">Descarga tu constancia personal (Opcional)</h3>
+                        <p className="text-sm text-gray-400 mb-2">Guarda este PDF como comprobante personal de que has completado la capacitación.</p>
                         <button
-                            onClick={() => generateSingleSubmissionPdf(lastSubmission, adminSignature, adminSignatureClarification)}
+                            onClick={() => generateSingleSubmissionPdf(lastSubmission, adminSignature, adminSignatureClarification, adminJobTitle)}
                             disabled={!adminSignature}
                             title={!adminSignature ? "El administrador aún no ha configurado la firma para las constancias." : "Descargar mi constancia en PDF"}
-                            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-slate-600 disabled:cursor-not-allowed"
+                            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-slate-500 hover:bg-slate-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-400 disabled:bg-slate-600 disabled:cursor-not-allowed"
                         >
                             <FileDown className="h-4 w-4 mr-2" />
                             Descargar Mi Constancia
@@ -380,7 +362,7 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateFor
                         disabled={!formData.signature || isSubmitting}
                         className="w-full flex justify-center items-center py-3 px-4 border border-transparent rounded-md shadow-sm text-base font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-slate-600 disabled:cursor-not-allowed">
                         <Send className="h-5 w-5 mr-2" />
-                        {isSubmitting ? 'Enviando...' : 'Enviar Información'}
+                        {isSubmitting ? 'Enviando...' : 'Enviar Registro'}
                     </button>
                 </form>
             )}
@@ -499,16 +481,19 @@ interface AdminDashboardProps {
   onLogout: () => void;
   adminSignature: string | null;
   adminSignatureClarification: string;
+  adminJobTitle: string;
   setAdminSignature: (sig: string | null) => void;
   setAdminSignatureClarification: (clarification: string) => void;
+  setAdminJobTitle: (title: string) => void;
+  userSubmissions: UserSubmission[];
 }
 
 const AdminDashboard: React.FC<AdminDashboardProps> = ({ 
     trainings, addTraining, updateTraining, deleteTraining, onLogout,
-    adminSignature, adminSignatureClarification, setAdminSignature, setAdminSignatureClarification
+    adminSignature, adminSignatureClarification, adminJobTitle,
+    setAdminSignature, setAdminSignatureClarification, setAdminJobTitle,
+    userSubmissions
 }) => {
-  const [userSubmissions, setUserSubmissions] = useState<UserSubmission[]>([]);
-  const [isLoadingSubmissions, setIsLoadingSubmissions] = useState(true);
   const [trainingName, setTrainingName] = useState('');
   const [linksText, setLinksText] = useState('');
   const [feedback, setFeedback] = useState('');
@@ -523,24 +508,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [selectedSubmission, setSelectedSubmission] = useState<UserSubmission | null>(null);
   const [showAdminSignatureModal, setShowAdminSignatureModal] = useState(false);
   const [currentClarification, setCurrentClarification] = useState(adminSignatureClarification);
+  const [currentJobTitle, setCurrentJobTitle] = useState(adminJobTitle);
 
   const adminSignatureRef = useRef<SignatureCanvas>(null);
   
-  useEffect(() => {
-    const fetchSubmissions = async () => {
-      setIsLoadingSubmissions(true);
-      try {
-        const subs = await api.getSubmissions();
-        setUserSubmissions(subs);
-      } catch (error) {
-        console.error("Failed to fetch submissions", error);
-        alert("No se pudieron cargar los registros de los usuarios.");
-      }
-      setIsLoadingSubmissions(false);
-    };
-    fetchSubmissions();
-  }, []);
-
   useEffect(() => {
     if (editingTraining) {
       setEditedName(editingTraining.name);
@@ -550,7 +521,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   useEffect(() => {
     setCurrentClarification(adminSignatureClarification);
-  }, [adminSignatureClarification]);
+    setCurrentJobTitle(adminJobTitle);
+  }, [adminSignatureClarification, adminJobTitle]);
 
 
   const handleAddTraining = (e: React.FormEvent) => {
@@ -591,7 +563,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   }
 
   const handleShare = async (trainingToShare: Training) => {
-    const data = btoa(encodeURIComponent(JSON.stringify([trainingToShare])));
+    // Create a pristine copy of the training, ensuring all links are marked as not viewed.
+    const pristineTraining = {
+      ...trainingToShare,
+      links: trainingToShare.links.map(link => ({ ...link, viewed: false }))
+    };
+    
+    const data = btoa(encodeURIComponent(JSON.stringify([pristineTraining])));
     const link = `${window.location.origin}${window.location.pathname}?data=${data}`;
     
     setShareableLink(link);
@@ -621,7 +599,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
         alert("No hay capacitaciones para previsualizar. Crea una primero.");
         return;
     }
-    const data = btoa(encodeURIComponent(JSON.stringify(trainings)));
+    // Create pristine copies of all trainings to ensure links are not marked as viewed.
+    const pristineTrainings = trainings.map(training => ({
+      ...training,
+      links: training.links.map(link => ({...link, viewed: false }))
+    }));
+
+    const data = btoa(encodeURIComponent(JSON.stringify(pristineTrainings)));
     const userViewUrl = `${window.location.origin}${window.location.pathname}?data=${data}`;
     window.open(userViewUrl, '_blank');
   };
@@ -636,19 +620,25 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
           alert("Por favor, ingresa tu aclaración de firma.");
           return;
       }
+       if (!currentJobTitle.trim()) {
+          alert("Por favor, ingresa tu cargo.");
+          return;
+      }
       const signatureDataUrl = adminSignatureRef.current.toDataURL();
       setAdminSignature(signatureDataUrl);
       setAdminSignatureClarification(currentClarification);
+      setAdminJobTitle(currentJobTitle);
       localStorage.setItem('adminSignature', signatureDataUrl);
       localStorage.setItem('adminSignatureClarification', currentClarification);
+      localStorage.setItem('adminJobTitle', currentJobTitle);
       setShowAdminSignatureModal(false);
     }
   };
-
+  
   const downloadButtonTitle = userSubmissions.length === 0 
     ? "No hay registros para descargar" 
-    : (!adminSignature || !adminSignatureClarification) 
-    ? "Debe configurar su firma y aclaración para descargar" 
+    : (!adminSignature || !adminSignatureClarification || !adminJobTitle) 
+    ? "Debe configurar firma, aclaración y cargo para descargar" 
     : "Descargar constancia de todos los registros";
 
   return (
@@ -755,7 +745,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   {adminSignature && (
                     <div className="flex items-center gap-2 border border-slate-700 rounded-md bg-slate-700 p-1">
                       <img src={adminSignature} alt="Admin signature preview" className="h-10 w-20 object-contain bg-white rounded-sm" />
-                      {adminSignatureClarification && <p className="text-xs text-gray-300 pr-2">{adminSignatureClarification}</p>}
+                       <div className="pr-2">
+                        {adminSignatureClarification && <p className="text-xs text-gray-300">{adminSignatureClarification}</p>}
+                        {adminJobTitle && <p className="text-xs text-gray-400 italic">{adminJobTitle}</p>}
+                       </div>
                     </div>
                   )}
               </div>
@@ -763,8 +756,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
           <div className="flex gap-2 flex-wrap items-center border-t border-slate-700 pt-4">
               <button
-                  onClick={() => generateSubmissionsPdf(userSubmissions, adminSignature!, adminSignatureClarification)}
-                  disabled={userSubmissions.length === 0 || !adminSignature || !adminSignatureClarification}
+                  onClick={() => generateSubmissionsPdf(userSubmissions, adminSignature!, adminSignatureClarification, adminJobTitle)}
+                  disabled={userSubmissions.length === 0 || !adminSignature || !adminSignatureClarification || !adminJobTitle}
                   title={downloadButtonTitle}
                   className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
               >
@@ -774,9 +767,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
           
           <div className="overflow-x-auto mt-4">
-            {isLoadingSubmissions ? (
-                 <div className="text-center py-8 text-gray-500">Cargando registros...</div>
-            ) : userSubmissions.length > 0 ? (
+            {userSubmissions.length > 0 ? (
               <table className="min-w-full divide-y divide-slate-700">
                 <thead className="bg-slate-700">
                   <tr>
@@ -801,7 +792,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <div className="text-center py-8">
                 <Users className="mx-auto h-12 w-12 text-gray-500" />
                 <p className="mt-2 text-sm text-gray-500">Aún no hay registros de usuarios.</p>
-                <p className="mt-1 text-xs text-gray-600">Cuando un usuario complete una capacitación, aparecerá aquí automáticamente.</p>
+                <p className="mt-1 text-xs text-gray-600">Cuando un usuario complete una capacitación, su registro aparecerá aquí automáticamente.</p>
               </div>
             )}
           </div>
@@ -902,20 +893,35 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <X className="h-6 w-6" />
                 </button>
                 </div>
-                <p className="text-sm text-gray-400 mb-2">Dibuja tu firma en el recuadro. Esta firma se incluirá en el PDF de constancia.</p>
-                <SignaturePad signatureRef={adminSignatureRef} onSignatureEnd={() => {}} />
-                <div className="mt-4">
-                    <label htmlFor="clarification" className="block text-sm font-medium text-gray-300">Aclaración de Firma (Nombre y Apellido)</label>
-                    <input
-                        id="clarification"
-                        type="text"
-                        value={currentClarification}
-                        onChange={(e) => setCurrentClarification(e.target.value)}
-                        placeholder="Ej: Juan Pérez"
-                        className="mt-1 block w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                    />
+                <div className="space-y-4">
+                    <div>
+                        <p className="text-sm text-gray-400 mb-2">Dibuja tu firma en el recuadro.</p>
+                        <SignaturePad signatureRef={adminSignatureRef} onSignatureEnd={() => {}} />
+                    </div>
+                    <div>
+                        <label htmlFor="clarification" className="block text-sm font-medium text-gray-300">Aclaración de Firma (Nombre y Apellido)</label>
+                        <input
+                            id="clarification"
+                            type="text"
+                            value={currentClarification}
+                            onChange={(e) => setCurrentClarification(e.target.value)}
+                            placeholder="Ej: Juan Pérez"
+                            className="mt-1 block w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                        />
+                    </div>
+                    <div>
+                        <label htmlFor="jobTitle" className="block text-sm font-medium text-gray-300">Cargo</label>
+                        <input
+                            id="jobTitle"
+                            type="text"
+                            value={currentJobTitle}
+                            onChange={(e) => setCurrentJobTitle(e.target.value)}
+                            placeholder="Ej: Gerente de RRHH"
+                            className="mt-1 block w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                        />
+                    </div>
                 </div>
-                <div className="flex justify-between items-center mt-4">
+                <div className="flex justify-between items-center mt-6">
                 <button
                     type="button"
                     onClick={() => {
@@ -961,9 +967,11 @@ const App: React.FC = () => {
   const [view, setView] = useState<View>('selector');
   const [trainings, setTrainings] = useState<Training[]>([]);
   const [userPortalTrainings, setUserPortalTrainings] = useState<Training[]>([]);
+  const [userSubmissions, setUserSubmissions] = useState<UserSubmission[]>([]);
 
   const [adminSignature, setAdminSignature] = useState<string | null>(null);
   const [adminSignatureClarification, setAdminSignatureClarification] = useState<string>('');
+  const [adminJobTitle, setAdminJobTitle] = useState<string>('');
   
   
   useEffect(() => {
@@ -988,20 +996,18 @@ const App: React.FC = () => {
         setTrainings(JSON.parse(savedTrainings));
       }
 
+      // Load admin submissions
+      const savedSubmissions = localStorage.getItem('userSubmissions');
+      if (savedSubmissions) {
+          setUserSubmissions(JSON.parse(savedSubmissions));
+      }
+
 
       if (urlWasModified) {
         window.history.replaceState({}, document.title, window.location.pathname);
       }
     } catch (error) {
-       console.error("Failed to load trainings from URL or localStorage", error);
-       try {
-            const savedTrainings = localStorage.getItem('trainings');
-            if (savedTrainings) {
-                setTrainings(JSON.parse(savedTrainings));
-            }
-       } catch (e) {
-            console.error("Failed to load trainings from localStorage as fallback", e);
-       }
+       console.error("Failed to load data from URL or localStorage", error);
     }
 
     // Load admin signature data
@@ -1009,6 +1015,8 @@ const App: React.FC = () => {
     if (savedSignature) setAdminSignature(savedSignature);
     const savedClarification = localStorage.getItem('adminSignatureClarification');
     if (savedClarification) setAdminSignatureClarification(savedClarification);
+    const savedJobTitle = localStorage.getItem('adminJobTitle');
+    if (savedJobTitle) setAdminJobTitle(savedJobTitle);
 
   }, []);
 
@@ -1055,6 +1063,19 @@ const App: React.FC = () => {
     setTrainings(prev => prev.filter(t => t.id !== id));
   };
   
+  const handleUserSubmit = (submission: UserSubmission) => {
+    setUserSubmissions(prevSubs => {
+      const existingIds = new Set(prevSubs.map(s => s.id));
+      if (existingIds.has(submission.id)) {
+        console.warn("Attempted to add a duplicate submission.");
+        return prevSubs;
+      }
+      const allSubs = [...prevSubs, submission];
+      localStorage.setItem('userSubmissions', JSON.stringify(allSubs));
+      return allSubs;
+    });
+  };
+
   const renderView = () => {
     switch (view) {
       case 'login':
@@ -1068,8 +1089,11 @@ const App: React.FC = () => {
                     onLogout={() => setView('selector')}
                     adminSignature={adminSignature}
                     adminSignatureClarification={adminSignatureClarification}
+                    adminJobTitle={adminJobTitle}
                     setAdminSignature={setAdminSignature}
                     setAdminSignatureClarification={setAdminSignatureClarification}
+                    setAdminJobTitle={setAdminJobTitle}
+                    userSubmissions={userSubmissions}
                 />;
       case 'user':
         return <UserPortal 
@@ -1078,6 +1102,8 @@ const App: React.FC = () => {
                     onBack={() => setView('selector')}
                     adminSignature={adminSignature}
                     adminSignatureClarification={adminSignatureClarification}
+                    adminJobTitle={adminJobTitle}
+                    onSubmission={handleUserSubmit}
                 />;
       case 'selector':
       default:
