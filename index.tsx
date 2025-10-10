@@ -1,10 +1,11 @@
+// FIX: Removed invalid file markers from the beginning and end of the file.
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import ReactDOM from 'react-dom/client';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import SignatureCanvas from 'react-signature-canvas';
 import QRCode from 'qrcode';
-import { ShieldCheck, User, PlusCircle, Users, FileDown, LogOut, Trash2, Edit, X, Share2, Copy, Eye, FileText, CheckCircle, ArrowLeft, Send, LogIn } from 'lucide-react';
+import { ShieldCheck, User, PlusCircle, Users, FileDown, LogOut, Trash2, Edit, X, Share2, Copy, Eye, FileText, CheckCircle, ArrowLeft, Send, LogIn, RefreshCw } from 'lucide-react';
 
 
 // --- TYPES ---
@@ -35,26 +36,69 @@ interface UserSubmission {
 }
 
 // --- SIMULATED BACKEND API SERVICE ---
+// Using a live, centralized JSON store to allow multi-device synchronization.
+const JSON_BLOB_URL = 'https://jsonblob.com/api/jsonBlob/1251394142642536448';
+
 const apiService = {
-  getSubmissions: async (): Promise<UserSubmission[]> => {
-    const data = localStorage.getItem('userSubmissions_db');
-    return data ? JSON.parse(data) : [];
+  // Fetches the entire data blob from the cloud store.
+  _getData: async (): Promise<{ submissions: UserSubmission[] }> => {
+    try {
+      const response = await fetch(JSON_BLOB_URL, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      });
+      if (!response.ok) {
+        console.error(`Network response was not ok: ${response.statusText}`);
+        return { submissions: [] };
+      }
+      const text = await response.text();
+      // Handle empty blob case
+      return text ? JSON.parse(text) : { submissions: [] };
+    } catch (error) {
+      console.error("Failed to fetch data from remote store:", error);
+      return { submissions: [] }; // Return default structure on error
+    }
   },
+
+  getSubmissions: async (): Promise<UserSubmission[]> => {
+    const data = await apiService._getData();
+    return data.submissions || [];
+  },
+
   addSubmission: async (submission: UserSubmission): Promise<UserSubmission> => {
-    const submissions = await apiService.getSubmissions();
+    const data = await apiService._getData();
+    const submissions = data.submissions || [];
     const newSubmissions = [...submissions, submission];
-    localStorage.setItem('userSubmissions_db', JSON.stringify(newSubmissions));
-    window.dispatchEvent(new Event('storage')); // Notify listeners
+    
+    await fetch(JSON_BLOB_URL, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ submissions: newSubmissions }),
+    });
+
+    window.dispatchEvent(new Event('storage')); // Notify listeners to refresh
     return submission;
   },
+
   deleteSubmission: async (id: string): Promise<void> => {
-    let submissions = await apiService.getSubmissions();
+    const data = await apiService._getData();
+    let submissions = data.submissions || [];
     submissions = submissions.filter(sub => sub.id !== id);
-    localStorage.setItem('userSubmissions_db', JSON.stringify(submissions));
+    
+    await fetch(JSON_BLOB_URL, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ submissions }),
+    });
     window.dispatchEvent(new Event('storage')); // Notify listeners
   },
+
   deleteAllSubmissions: async (): Promise<void> => {
-    localStorage.removeItem('userSubmissions_db');
+    await fetch(JSON_BLOB_URL, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ submissions: [] }),
+    });
     window.dispatchEvent(new Event('storage')); // Notify listeners
   }
 };
@@ -536,6 +580,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [currentClarification, setCurrentClarification] = useState(adminSignatureClarification);
   const [currentJobTitle, setCurrentJobTitle] = useState(adminJobTitle);
   const [userSubmissions, setUserSubmissions] = useState<UserSubmission[]>([]);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const adminSignatureRef = useRef<SignatureCanvas>(null);
   
@@ -695,6 +740,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
   
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    await fetchSubmissions();
+    setIsRefreshing(false);
+  };
+
   const downloadButtonTitle = userSubmissions.length === 0 
     ? "No hay registros para descargar" 
     : (!adminSignature || !adminSignatureClarification || !adminJobTitle) 
@@ -793,7 +844,17 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
         <div className="bg-slate-800 p-6 rounded-xl shadow-lg border border-slate-700">
           <div className="flex flex-col md:flex-row justify-between md:items-center mb-4 gap-4">
+            <div className="flex items-center gap-3">
               <h2 className="text-xl font-semibold text-gray-200">Usuarios Registrados ({userSubmissions.length})</h2>
+              <button 
+                  onClick={handleRefresh} 
+                  disabled={isRefreshing} 
+                  title="Actualizar registros"
+                  className="p-1.5 text-gray-400 hover:text-white rounded-full hover:bg-slate-700 transition-colors disabled:cursor-wait"
+              >
+                  <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
               <div className="flex gap-2 flex-wrap items-center">
                   <button 
                     onClick={() => setShowAdminSignatureModal(true)}
