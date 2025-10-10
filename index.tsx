@@ -44,15 +44,18 @@ const apiService = {
     const submissions = await apiService.getSubmissions();
     const newSubmissions = [...submissions, submission];
     localStorage.setItem('userSubmissions_db', JSON.stringify(newSubmissions));
+    window.dispatchEvent(new Event('storage')); // Notify listeners
     return submission;
   },
   deleteSubmission: async (id: string): Promise<void> => {
     let submissions = await apiService.getSubmissions();
     submissions = submissions.filter(sub => sub.id !== id);
     localStorage.setItem('userSubmissions_db', JSON.stringify(submissions));
+    window.dispatchEvent(new Event('storage')); // Notify listeners
   },
   deleteAllSubmissions: async (): Promise<void> => {
     localStorage.removeItem('userSubmissions_db');
+    window.dispatchEvent(new Event('storage')); // Notify listeners
   }
 };
 
@@ -64,12 +67,16 @@ declare module 'jspdf' {
   }
 }
 
-const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: string, adminSignatureClarification: string, adminJobTitle: string): void => {
+const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: string | null, adminSignatureClarification: string, adminJobTitle: string): void => {
+  if (!adminSignature || !adminSignatureClarification || !adminJobTitle) {
+      alert("Error: La firma y los datos del administrador deben estar configurados para generar el PDF.");
+      return;
+  }
   if (!submissions || submissions.length === 0) {
-    console.warn('Attempted to generate PDF with no submissions.');
     alert('No hay registros de usuarios para generar el PDF.');
     return;
   }
+  
   try {
     const doc = new jsPDF();
     
@@ -90,38 +97,38 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
       body: tableRows,
       startY: 24,
       theme: 'grid',
-      headStyles: { fillColor: [41, 128, 185] }, // Dark blue header
+      headStyles: { fillColor: [41, 128, 185] },
       styles: { fontSize: 8 },
     });
 
-    const finalY = (doc as any).lastAutoTable.finalY || 100;
+    const finalY = (doc as any).lastAutoTable ? (doc as any).lastAutoTable.finalY : 100;
     const pageHeight = doc.internal.pageSize.getHeight();
     let signatureY = finalY + 15;
 
-    if (signatureY + 60 > pageHeight) { // Increased space for clarification and title
+    if (signatureY + 60 > pageHeight) {
       doc.addPage();
       signatureY = 20;
     }
     
-    if (adminSignature) {
-      doc.addImage(adminSignature, 'PNG', 14, signatureY + 5, 60, 30);
-      doc.setDrawColor(0); // Black line
-      doc.line(14, signatureY + 38, 74, signatureY + 38); // Line under signature
-      if (adminSignatureClarification) {
+    try {
+        doc.addImage(adminSignature, 'PNG', 14, signatureY + 5, 60, 30);
+        doc.setDrawColor(0);
+        doc.line(14, signatureY + 38, 74, signatureY + 38);
         doc.text(adminSignatureClarification, 14, signatureY + 43);
-      }
-      if (adminJobTitle) {
         doc.setFontSize(9);
         doc.text(adminJobTitle, 14, signatureY + 48);
-      }
+    } catch (imageError) {
+        console.error("Error al añadir la firma al PDF:", imageError);
+        doc.text("Error al cargar la firma.", 14, signatureY + 20);
     }
 
     doc.save('constancia_asistencia_general.pdf');
   } catch(e) {
-    console.error("Failed to generate general submissions PDF:", e);
+    console.error("Fallo al generar el PDF general de registros:", e);
     alert("Ocurrió un error al generar el PDF. Por favor, revisa la consola para más detalles.");
   }
 };
+
 
 const generateSingleSubmissionPdf = (submission: UserSubmission, adminSignature: string | null, adminSignatureClarification: string, adminJobTitle: string): void => {
   const doc = new jsPDF();
@@ -340,7 +347,7 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateFor
                 Volver
             </button>
             <h2 className="text-2xl font-bold text-white mb-2">{selectedTraining.name}</h2>
-            <p className="text-gray-400 mb-4">Por favor, haz clic en todos los enlaces para marcarlos como vistos. Una vez completado, podrás cargar tus datos.</p>
+            <p className="text-gray-400 mb-4">Revisa los siguientes enlaces para completar la capacitación. Una vez revisados todos, podrás registrar tu asistencia.</p>
             
             <div className="mb-4">
                 <div className="w-full bg-slate-700 rounded-full h-2.5">
@@ -544,9 +551,19 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   useEffect(() => {
-    fetchSubmissions();
-    const intervalId = setInterval(fetchSubmissions, 5000); // Poll for new submissions every 5 seconds
-    return () => clearInterval(intervalId); // Cleanup on component unmount
+    fetchSubmissions(); // Fetch on initial component mount
+
+    const handleStorageUpdate = () => {
+        fetchSubmissions();
+    };
+
+    // Listen for the custom event dispatched by apiService
+    window.addEventListener('storage', handleStorageUpdate);
+
+    // Cleanup the event listener on component unmount
+    return () => {
+        window.removeEventListener('storage', handleStorageUpdate);
+    };
   }, []);
 
   useEffect(() => {
@@ -807,7 +824,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
           <div className="flex gap-2 flex-wrap items-center border-t border-slate-700 pt-4">
               <button
-                  onClick={() => generateSubmissionsPdf(userSubmissions, adminSignature!, adminSignatureClarification, adminJobTitle)}
+                  onClick={() => generateSubmissionsPdf(userSubmissions, adminSignature, adminSignatureClarification, adminJobTitle)}
                   disabled={userSubmissions.length === 0 || !adminSignature || !adminSignatureClarification || !adminJobTitle}
                   title={downloadButtonTitle}
                   className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
