@@ -151,7 +151,7 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
     
     doc.text('Registro de Asistencia a Capacitaciones', 14, 16);
     
-    const tableColumns = ['Nombre', 'Apellido', 'DNI', 'Empresa', 'Capacitación', 'Fecha'];
+    const tableColumns = ['Nombre', 'Apellido', 'DNI', 'Empresa', 'Capacitación', 'Fecha', 'Firma'];
     const tableRows = submissions.map(sub => [
       sub.firstName,
       sub.lastName,
@@ -159,6 +159,7 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
       sub.company,
       sub.trainingName,
       sub.timestamp,
+      '', // Placeholder for the signature image
     ]);
 
     autoTable(doc, {
@@ -167,7 +168,42 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
       startY: 24,
       theme: 'grid',
       headStyles: { fillColor: [41, 128, 185] },
-      styles: { fontSize: 8 },
+      styles: { fontSize: 8, cellPadding: 2, valign: 'middle' },
+      columnStyles: {
+        6: { cellWidth: 40, minCellHeight: 20 }, // Signature column
+      },
+      didDrawCell: (data) => {
+        if (data.column.index === 6 && data.cell.section === 'body') {
+          const submission = submissions[data.row.index];
+          if (submission && submission.signature) {
+            try {
+              // Add user signature image to the cell, scaled to fit.
+              const cellPadding = 2;
+              const cellHeight = data.cell.height - (cellPadding * 2);
+              const cellWidth = data.cell.width - (cellPadding * 2);
+
+              const imgProps = doc.getImageProperties(submission.signature);
+              const aspectRatio = imgProps.width / imgProps.height;
+              
+              let imgWidth = cellWidth;
+              let imgHeight = imgWidth / aspectRatio;
+
+              if (imgHeight > cellHeight) {
+                imgHeight = cellHeight;
+                imgWidth = imgHeight * aspectRatio;
+              }
+
+              const x = data.cell.x + (data.cell.width - imgWidth) / 2;
+              const y = data.cell.y + (data.cell.height - imgHeight) / 2;
+              
+              doc.addImage(submission.signature, 'PNG', x, y, imgWidth, imgHeight);
+            } catch (e) {
+              console.error(`Error adding signature for user ${submission.dni}:`, e);
+              doc.text("Error firma", data.cell.x + 2, data.cell.y + data.cell.height / 2);
+            }
+          }
+        }
+      },
     });
 
     const finalY = (doc as any).lastAutoTable ? (doc as any).lastAutoTable.finalY : 100;
@@ -431,10 +467,6 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateFor
     
     return (
         <div className="w-full max-w-4xl mx-auto bg-slate-800 p-8 rounded-xl shadow-lg">
-            <button onClick={() => setSelectedTrainingId(null)} className="flex items-center text-sm text-indigo-400 hover:text-indigo-300 mb-4">
-                <ArrowLeft className="h-4 w-4 mr-2" />
-                Volver
-            </button>
             <h2 className="text-2xl font-bold text-white mb-2">{selectedTraining.name}</h2>
             <p className="text-gray-400 mb-4">Revisa los siguientes enlaces para completar la capacitación. Una vez revisados todos, podrás registrar tu asistencia.</p>
             
@@ -495,10 +527,6 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateFor
 
   return (
     <div className="w-full max-w-4xl mx-auto">
-      <button onClick={onBack} className="flex items-center text-sm text-indigo-400 hover:text-indigo-300 mb-4">
-          <ArrowLeft className="h-4 w-4 mr-2" />
-          Volver
-      </button>
       <div className="text-center mb-8">
         <h1 className="text-3xl font-bold text-white">Capacitaciones Disponibles</h1>
         <p className="mt-2 text-gray-400">Selecciona una capacitación para comenzar.</p>
