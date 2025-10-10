@@ -1,3 +1,4 @@
+
 // FIX: Removed invalid file markers from the beginning and end of the file.
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import ReactDOM from 'react-dom/client';
@@ -387,7 +388,9 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateFor
     if (trainings.length === 1 && !selectedTrainingId) {
       setSelectedTrainingId(trainings[0].id);
     }
-    
+  }, [trainings, selectedTrainingId]);
+
+  useEffect(() => {
     const fetchAdminConfig = async () => {
       try {
         const config = await apiService.getAdminConfig();
@@ -399,8 +402,7 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateFor
       }
     };
     fetchAdminConfig();
-
-  }, [trainings, selectedTrainingId]);
+  }, []); // Run only once on mount
 
   const selectedTraining = useMemo(() => {
     return trainings.find(t => t.id === selectedTrainingId) || null;
@@ -495,7 +497,14 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateFor
                         <h3 className="font-semibold text-white">Descarga tu constancia personal (Opcional)</h3>
                         <p className="text-sm text-gray-400 mb-2">Guarda este PDF como comprobante personal de que has completado la capacitación.</p>
                         <button
-                            onClick={() => adminConfig && generateSingleSubmissionPdf(lastSubmission, adminConfig.signature, adminConfig.clarification, adminConfig.jobTitle)}
+                            onClick={() => {
+                                if (!adminConfig || !adminConfig.signature || !adminConfig.clarification || !adminConfig.jobTitle) {
+                                    console.error("Download button clicked in an invalid state. AdminConfig:", adminConfig);
+                                    alert("No se puede generar la constancia porque faltan datos del administrador. Contacte al administrador.");
+                                    return;
+                                }
+                                generateSingleSubmissionPdf(lastSubmission, adminConfig.signature, adminConfig.clarification, adminConfig.jobTitle);
+                            }}
                             disabled={downloadDisabled}
                             title={downloadTitle}
                             className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-slate-500 hover:bg-slate-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-400 disabled:bg-slate-600 disabled:cursor-not-allowed"
@@ -1027,7 +1036,17 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
           <div className="flex gap-2 flex-wrap items-center border-t border-slate-700 pt-4">
               <button
-                  onClick={() => generateSubmissionsPdf(userSubmissions, adminSignature, adminSignatureClarification, adminJobTitle)}
+                  onClick={() => {
+                      if (userSubmissions.length === 0) {
+                          alert('No hay registros de usuarios para generar el PDF.');
+                          return;
+                      }
+                      if (!adminSignature || !adminSignatureClarification || !adminJobTitle) {
+                          alert("Error: La firma y los datos del administrador deben estar configurados para generar el PDF.");
+                          return;
+                      }
+                      generateSubmissionsPdf(userSubmissions, adminSignature, adminSignatureClarification, adminJobTitle);
+                  }}
                   disabled={userSubmissions.length === 0 || !adminSignature || !adminSignatureClarification || !adminJobTitle}
                   title={downloadButtonTitle}
                   className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
