@@ -1,4 +1,3 @@
-
 // FIX: Removed invalid file markers from the beginning and end of the file.
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import ReactDOM from 'react-dom/client';
@@ -1027,7 +1026,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsRefreshing(false);
   };
 
-  const submissionsToDownload = useMemo(() => {
+  const filteredSubmissions = useMemo(() => {
     if (selectedTrainingFilterId === 'all') {
         return userSubmissions;
     }
@@ -1035,7 +1034,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   }, [userSubmissions, selectedTrainingFilterId]);
 
   const handleDownloadFilteredSubmissions = () => {
-      if (submissionsToDownload.length === 0) {
+      if (filteredSubmissions.length === 0) {
           alert('No hay registros para la selección actual.');
           return;
       }
@@ -1048,10 +1047,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
           ? trainings.find(t => t.id === selectedTrainingFilterId)?.name 
           : undefined;
 
-      generateSubmissionsPdf(submissionsToDownload, adminSignature, adminSignatureClarification, adminJobTitle, trainingName);
+      generateSubmissionsPdf(filteredSubmissions, adminSignature, adminSignatureClarification, adminJobTitle, trainingName);
   };
     
-  const downloadButtonTitle = submissionsToDownload.length === 0 
+  const downloadButtonTitle = filteredSubmissions.length === 0 
     ? "No hay registros para la selección actual" 
     : (!adminSignature || !adminSignatureClarification || !adminJobTitle) 
     ? "Debe configurar firma, aclaración y cargo para descargar" 
@@ -1184,7 +1183,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
         <div className="bg-slate-800 p-6 rounded-xl shadow-lg border border-slate-700">
           <div className="flex flex-col md:flex-row justify-between md:items-center mb-4 gap-4">
             <div className="flex items-center gap-3">
-              <h2 className="text-xl font-semibold text-gray-200">Usuarios Registrados ({userSubmissions.length})</h2>
+              <h2 className="text-xl font-semibold text-gray-200">
+                Usuarios Registrados 
+                <span className="text-base font-normal text-gray-400 ml-2">
+                  ({selectedTrainingFilterId === 'all' 
+                    ? userSubmissions.length 
+                    : `${filteredSubmissions.length} de ${userSubmissions.length}`})
+                </span>
+              </h2>
               <button 
                   onClick={handleRefresh} 
                   disabled={isRefreshing} 
@@ -1230,7 +1236,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </select>
                   <button
                       onClick={handleDownloadFilteredSubmissions}
-                      disabled={submissionsToDownload.length === 0 || !adminSignature || !adminSignatureClarification || !adminJobTitle}
+                      disabled={filteredSubmissions.length === 0 || !adminSignature || !adminSignatureClarification || !adminJobTitle}
                       title={downloadButtonTitle}
                       className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 h-10"
                   >
@@ -1251,39 +1257,48 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
           
           <div className="overflow-x-auto mt-4">
             {userSubmissions.length > 0 ? (
-              <table className="min-w-full divide-y divide-slate-700">
-                <thead className="bg-slate-700">
-                  <tr>
-                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Nombre</th>
-                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">DNI</th>
-                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Capacitación</th>
-                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Fecha</th>
-                    <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">Acciones</th>
-                  </tr>
-                </thead>
-                <tbody className="bg-slate-800 divide-y divide-slate-700">
-                  {userSubmissions.map((sub) => (
-                    <tr key={sub.id} className="hover:bg-slate-700">
-                      <td onClick={() => setSelectedSubmission(sub)} className="px-6 py-4 whitespace-nowrap text-sm font-medium text-white cursor-pointer">{sub.firstName} {sub.lastName}</td>
-                      <td onClick={() => setSelectedSubmission(sub)} className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer">{sub.dni}</td>
-                      <td onClick={() => setSelectedSubmission(sub)} className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer">{sub.trainingName}</td>
-                      <td onClick={() => setSelectedSubmission(sub)} className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer">{sub.timestamp}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 text-right">
-                        <button 
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                handleDeleteSubmission(sub.id);
-                            }}
-                            title="Eliminar registro"
-                            className="p-2 text-red-500 hover:text-red-400 hover:bg-red-900/30 rounded-full transition-colors"
-                        >
-                            <Trash2 className="h-4 w-4" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <>
+                {filteredSubmissions.length > 0 ? (
+                  <table className="min-w-full divide-y divide-slate-700">
+                    <thead className="bg-slate-700">
+                      <tr>
+                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Nombre</th>
+                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">DNI</th>
+                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Capacitación</th>
+                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Fecha</th>
+                        <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-slate-800 divide-y divide-slate-700">
+                      {filteredSubmissions.map((sub) => (
+                        <tr key={sub.id} className="hover:bg-slate-700">
+                          <td onClick={() => setSelectedSubmission(sub)} className="px-6 py-4 whitespace-nowrap text-sm font-medium text-white cursor-pointer">{sub.firstName} {sub.lastName}</td>
+                          <td onClick={() => setSelectedSubmission(sub)} className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer">{sub.dni}</td>
+                          <td onClick={() => setSelectedSubmission(sub)} className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer">{sub.trainingName}</td>
+                          <td onClick={() => setSelectedSubmission(sub)} className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer">{sub.timestamp}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 text-right">
+                            <button 
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteSubmission(sub.id);
+                                }}
+                                title="Eliminar registro"
+                                className="p-2 text-red-500 hover:text-red-400 hover:bg-red-900/30 rounded-full transition-colors"
+                            >
+                                <Trash2 className="h-4 w-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <div className="text-center py-8">
+                    <Users className="mx-auto h-12 w-12 text-gray-500" />
+                    <p className="mt-2 text-sm text-gray-500">No se encontraron registros para la capacitación seleccionada.</p>
+                  </div>
+                )}
+              </>
             ) : (
               <div className="text-center py-8">
                 <Users className="mx-auto h-12 w-12 text-gray-500" />
