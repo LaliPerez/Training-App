@@ -411,6 +411,31 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateFor
     fetchAdminConfig();
   }, []); // Run only once on mount
 
+  useEffect(() => {
+    if (trainings.length > 0) {
+        const loadedTrainings = trainings.map(t => {
+            const progress = localStorage.getItem(`training-progress-${t.id}`);
+            if (progress) {
+                try {
+                    const viewedLinkIds: string[] = JSON.parse(progress);
+                    const updatedLinks = t.links.map(l => 
+                        viewedLinkIds.includes(l.id) ? { ...l, viewed: true } : l
+                    );
+                    return { ...t, links: updatedLinks };
+                } catch (e) {
+                    console.error("Failed to parse training progress from localStorage", e);
+                    return t;
+                }
+            }
+            return t;
+        });
+
+        if (JSON.stringify(loadedTrainings) !== JSON.stringify(trainings)) {
+            setTrainings(loadedTrainings);
+        }
+    }
+  }, [trainings, setTrainings]);
+
   const selectedTraining = useMemo(() => {
     return trainings.find(t => t.id === selectedTrainingId) || null;
   }, [selectedTrainingId, trainings]);
@@ -421,13 +446,23 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateFor
   }, [selectedTraining]);
   
   const handleLinkClick = (trainingId: string, linkId: string) => {
-    setTrainings(currentTrainings =>
-      currentTrainings.map(t =>
+    setTrainings(currentTrainings => {
+      const updatedTrainings = currentTrainings.map(t =>
         t.id === trainingId
           ? { ...t, links: t.links.map(l => l.id === linkId ? { ...l, viewed: true } : l) }
           : t
-      )
-    );
+      );
+      
+      const targetTraining = updatedTrainings.find(t => t.id === trainingId);
+      if (targetTraining) {
+          const viewedLinkIds = targetTraining.links
+              .filter(l => l.viewed)
+              .map(l => l.id);
+          localStorage.setItem(`training-progress-${trainingId}`, JSON.stringify(viewedLinkIds));
+      }
+      
+      return updatedTrainings;
+    });
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1449,6 +1484,7 @@ const App: React.FC = () => {
         if (shareKey) {
           const sharedTraining = await apiService.getSharedTraining(shareKey);
           if (sharedTraining) {
+            localStorage.removeItem(`training-progress-${sharedTraining.id}`);
             setUserPortalTrainings([sharedTraining]);
             setView('user');
             urlWasModified = true;
