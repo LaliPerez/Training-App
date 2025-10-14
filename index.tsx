@@ -5,7 +5,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import SignatureCanvas from 'react-signature-canvas';
 import QRCode from 'qrcode';
-import { ShieldCheck, User, PlusCircle, Users, FileDown, LogOut, Trash2, Edit, X, Share2, Copy, Eye, FileText, CheckCircle, ArrowLeft, Send, LogIn, RefreshCw, Award, ClipboardList, GraduationCap } from 'lucide-react';
+import { ShieldCheck, User, PlusCircle, Users, FileDown, LogOut, Trash2, Edit, X, Share2, Copy, Eye, FileText, CheckCircle, ArrowLeft, Send, LogIn, RefreshCw, Award, ClipboardList, GraduationCap, Building } from 'lucide-react';
 
 
 // --- TYPES ---
@@ -52,6 +52,7 @@ interface AppData {
   adminConfig?: AdminConfig;
   sharedTrainings?: { [key: string]: Training };
   trainings?: Training[];
+  companies?: string[];
 }
 
 
@@ -66,7 +67,7 @@ const apiService = {
       });
       if (!response.ok) {
         console.error(`Network response was not ok: ${response.statusText}`);
-        return { submissions: [], adminConfig: { signature: null, clarification: '', jobTitle: '' }, sharedTrainings: {}, trainings: [] };
+        return { submissions: [], adminConfig: { signature: null, clarification: '', jobTitle: '' }, sharedTrainings: {}, trainings: [], companies: [] };
       }
       const text = await response.text();
       // Handle empty blob case
@@ -75,11 +76,12 @@ const apiService = {
         submissions: data.submissions || [],
         adminConfig: data.adminConfig || { signature: null, clarification: '', jobTitle: '' },
         sharedTrainings: data.sharedTrainings || {},
-        trainings: data.trainings || []
+        trainings: data.trainings || [],
+        companies: data.companies || [],
       };
     } catch (error) {
       console.error("Failed to fetch data from remote store:", error);
-      return { submissions: [], adminConfig: { signature: null, clarification: '', jobTitle: '' }, sharedTrainings: {}, trainings: [] }; // Return default structure on error
+      return { submissions: [], adminConfig: { signature: null, clarification: '', jobTitle: '' }, sharedTrainings: {}, trainings: [], companies: [] }; // Return default structure on error
     }
   },
 
@@ -113,6 +115,22 @@ const apiService = {
   updateTrainings: async (trainings: Training[]): Promise<void> => {
     const data = await apiService._getData();
     const updatedData = { ...data, trainings };
+    
+    await fetch(JSON_BLOB_URL, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedData),
+    });
+  },
+  
+  getCompanies: async (): Promise<string[]> => {
+    const data = await apiService._getData();
+    return data.companies || [];
+  },
+
+  updateCompanies: async (companies: string[]): Promise<void> => {
+    const data = await apiService._getData();
+    const updatedData = { ...data, companies };
     
     await fetch(JSON_BLOB_URL, {
         method: 'PUT',
@@ -429,11 +447,13 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ onSignatureEnd, signatureRe
 // UserPortal.tsx
 interface UserPortalProps {
   trainings: Training[];
+  companies: string[];
   setTrainingsStateForUser: React.Dispatch<React.SetStateAction<Training[]>>;
   onBack: () => void;
 }
 
-const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateForUser: setTrainings, onBack }) => {
+const UserPortal: React.FC<UserPortalProps> = ({ trainings, companies, setTrainingsStateForUser: setTrainings, onBack }) => {
+  const [selectedCompany, setSelectedCompany] = useState<string>('');
   const [selectedTrainingId, setSelectedTrainingId] = useState<string | null>(null);
   const [formCompleted, setFormCompleted] = useState(false);
   const [lastSubmission, setLastSubmission] = useState<UserSubmission | null>(null);
@@ -465,6 +485,13 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateFor
     };
     fetchAdminConfig();
   }, []); // Run only once on mount
+
+  useEffect(() => {
+    // Pre-fill company in form data when a company is selected
+    if (selectedCompany) {
+        setFormData(prev => ({ ...prev, company: selectedCompany }));
+    }
+  }, [selectedCompany]);
 
   useEffect(() => {
     if (trainings.length > 0) {
@@ -499,6 +526,13 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateFor
     if (!selectedTraining) return false;
     return selectedTraining.links.every(link => link.viewed);
   }, [selectedTraining]);
+
+  const availableTrainings = useMemo(() => {
+      if (!selectedCompany) return [];
+      return trainings.filter(t => 
+          !t.companies || t.companies.length === 0 || t.companies.includes(selectedCompany)
+      );
+  }, [trainings, selectedCompany]);
   
   const handleLinkClick = (trainingId: string, linkId: string) => {
     setTrainings(currentTrainings => {
@@ -673,24 +707,7 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateFor
                         <input type="text" name="firstName" placeholder="Nombre" onChange={handleInputChange} required className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
                         <input type="text" name="lastName" placeholder="Apellido" onChange={handleInputChange} required className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
                         <input type="text" name="dni" placeholder="DNI" onChange={handleInputChange} required className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
-                        {selectedTraining.companies && selectedTraining.companies.length > 0 ? (
-                            <select
-                                name="company"
-                                value={formData.company}
-                                onChange={handleInputChange}
-                                required
-                                className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white focus:ring-indigo-500 focus:border-indigo-500"
-                            >
-                                <option value="" disabled>Seleccione su empresa</option>
-                                {selectedTraining.companies.sort().map((companyName) => (
-                                    <option key={companyName} value={companyName}>
-                                        {companyName}
-                                    </option>
-                                ))}
-                            </select>
-                        ) : (
-                            <input type="text" name="company" placeholder="Empresa" value={formData.company} onChange={handleInputChange} required className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
-                        )}
+                        <input type="text" name="company" value={formData.company} readOnly disabled className="p-3 bg-slate-900 border border-slate-700 rounded-md text-gray-400 cursor-not-allowed"/>
                         <input type="email" name="email" placeholder="Email (Opcional)" onChange={handleInputChange} className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
                         <input type="tel" name="phone" placeholder="Teléfono (Opcional)" onChange={handleInputChange} className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
                     </div>
@@ -712,36 +729,74 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateFor
     );
   }
 
+  // Company selection or training list view
+  if (selectedCompany) {
+      return (
+          <div className="w-full max-w-4xl mx-auto">
+              <button onClick={() => setSelectedCompany('')} className="flex items-center text-sm text-indigo-400 hover:text-indigo-300 mb-4">
+                  <ArrowLeft className="h-4 w-4 mr-2" />
+                  Cambiar de empresa
+              </button>
+              <div className="text-center mb-8">
+                  <h1 className="text-3xl font-bold text-white">Capacitaciones para {selectedCompany}</h1>
+                  <p className="mt-2 text-gray-400">Selecciona una capacitación para comenzar.</p>
+              </div>
+              <div className="space-y-4">
+                  {availableTrainings.length > 0 ? (
+                      availableTrainings.map(training => (
+                          <button
+                              key={training.id}
+                              onClick={() => setSelectedTrainingId(training.id)}
+                              className="w-full text-left p-6 bg-slate-800 rounded-xl shadow-md hover:shadow-lg transition-shadow border border-slate-700"
+                          >
+                              <h3 className="text-xl font-semibold text-indigo-400">{training.name}</h3>
+                              <p className="text-gray-400 mt-1">{training.links.length} enlace(s)</p>
+                          </button>
+                      ))
+                  ) : (
+                      <div className="text-center p-8 bg-slate-800 rounded-lg border border-slate-700">
+                          <GraduationCap className="mx-auto h-12 w-12 text-gray-500" />
+                          <h3 className="mt-4 text-xl font-semibold text-white">No hay capacitaciones asignadas</h3>
+                          <p className="mt-2 text-gray-400 max-w-md mx-auto">
+                              No se encontraron capacitaciones asignadas para "{selectedCompany}". Por favor, contacta a tu administrador.
+                          </p>
+                      </div>
+                  )}
+              </div>
+          </div>
+      );
+  }
+
+  // Initial company selection view
   return (
-    <div className="w-full max-w-4xl mx-auto">
+    <div className="w-full max-w-lg mx-auto">
       <button onClick={onBack} className="flex items-center text-sm text-indigo-400 hover:text-indigo-300 mb-4">
           <ArrowLeft className="h-4 w-4 mr-2" />
           Volver al menú principal
       </button>
-      <div className="text-center mb-8">
-        <h1 className="text-3xl font-bold text-white">Capacitaciones Disponibles</h1>
-        <p className="mt-2 text-gray-400">Selecciona una capacitación para comenzar.</p>
-      </div>
-      <div className="space-y-4">
-        {trainings.length > 0 ? (
-          trainings.map(training => (
-            <button
-              key={training.id}
-              onClick={() => setSelectedTrainingId(training.id)}
-              className="w-full text-left p-6 bg-slate-800 rounded-xl shadow-md hover:shadow-lg transition-shadow border border-slate-700"
-            >
-              <h3 className="text-xl font-semibold text-indigo-400">{training.name}</h3>
-              <p className="text-gray-400 mt-1">{training.links.length} enlace(s)</p>
-            </button>
-          ))
+      <div className="bg-slate-800 p-8 rounded-xl shadow-lg text-center">
+        <Building className="mx-auto h-12 w-12 text-indigo-400" />
+        <h1 className="text-3xl font-bold text-white mt-4">Selecciona tu Empresa</h1>
+        <p className="mt-2 text-gray-400">Para continuar, por favor elige tu empresa de la lista.</p>
+        
+        {companies.length > 0 ? (
+            <div className="mt-6">
+                <select
+                    value={selectedCompany}
+                    onChange={(e) => setSelectedCompany(e.target.value)}
+                    className="w-full p-3 bg-slate-700 border border-slate-600 rounded-md text-white focus:ring-indigo-500 focus:border-indigo-500"
+                >
+                    <option value="" disabled>-- Elige una opción --</option>
+                    {companies.map(company => (
+                        <option key={company} value={company}>{company}</option>
+                    ))}
+                </select>
+            </div>
         ) : (
-          <div className="text-center p-8 bg-slate-800 rounded-lg border border-slate-700">
-              <FileText className="mx-auto h-12 w-12 text-gray-500" />
-              <h3 className="mt-4 text-xl font-semibold text-white">No hay capacitaciones cargadas</h3>
-              <p className="mt-2 text-gray-400 max-w-md mx-auto">
-                  Parece que no hay capacitaciones disponibles. Si recibiste un enlace o código QR de tu administrador, por favor úsalo para acceder a la capacitación.
-              </p>
-          </div>
+            <div className="mt-6 text-center p-4 bg-slate-900/50 rounded-lg border border-slate-700">
+                <p className="text-gray-400">No hay empresas configuradas por el administrador.</p>
+                <p className="text-sm text-gray-500 mt-1">Por favor, contacta al administrador para que agregue tu empresa.</p>
+            </div>
         )}
       </div>
     </div>
@@ -823,25 +878,29 @@ interface LinkInput {
 
 interface AdminDashboardProps {
   trainings: Training[];
+  companies: string[];
   addTraining: (name: string, links: { name: string, url: string }[], companies: string[]) => Promise<void>;
   updateTraining: (id: string, name: string, links: { name: string, url: string }[], companies: string[]) => Promise<void>;
   deleteTraining: (id: string) => Promise<void>;
+  updateCompanies: (companies: string[]) => Promise<void>;
   onLogout: () => void;
 }
 
 const AdminDashboard: React.FC<AdminDashboardProps> = ({ 
-    trainings, addTraining, updateTraining, deleteTraining, onLogout
+    trainings, companies, addTraining, updateTraining, deleteTraining, updateCompanies, onLogout
 }) => {
   const [activeTab, setActiveTab] = useState('submissions');
   const [trainingName, setTrainingName] = useState('');
   const [newTrainingLinks, setNewTrainingLinks] = useState<LinkInput[]>([{ tempId: Date.now(), name: '', url: '' }]);
-  const [newTrainingCompanies, setNewTrainingCompanies] = useState('');
+  const [newTrainingCompanies, setNewTrainingCompanies] = useState<string[]>([]);
   const [feedback, setFeedback] = useState('');
   
   const [editingTraining, setEditingTraining] = useState<Training | null>(null);
   const [editedName, setEditedName] = useState('');
   const [editedTrainingLinks, setEditedTrainingLinks] = useState<LinkInput[]>([]);
-  const [editedCompanies, setEditedCompanies] = useState('');
+  const [editedCompanies, setEditedCompanies] = useState<string[]>([]);
+  
+  const [newGlobalCompany, setNewGlobalCompany] = useState('');
 
   const [showShareModal, setShowShareModal] = useState(false);
   const [sharingTrainingName, setSharingTrainingName] = useState('');
@@ -861,7 +920,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [userSubmissions, setUserSubmissions] = useState<UserSubmission[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [selectedTrainingFilterId, setSelectedTrainingFilterId] = useState<string>('all');
-  const [companyFilter, setCompanyFilter] = useState('');
+  const [companyFilter, setCompanyFilter] = useState('all');
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
 
 
@@ -910,10 +969,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
           url: l.url
         }))
       );
-      setEditedCompanies(editingTraining.companies?.join('\n') || '');
+      setEditedCompanies(editingTraining.companies || []);
     }
   }, [editingTraining]);
-
 
   // Handlers for creating new training links
   const handleNewLinkChange = (index: number, field: 'name' | 'url', value: string) => {
@@ -963,11 +1021,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
         setFeedback('Debe proporcionar al menos un enlace válido.');
         return;
     }
-    const companies = newTrainingCompanies.split('\n').map(c => c.trim()).filter(Boolean);
+    const companies = newTrainingCompanies.map(c => c.trim()).filter(Boolean);
     await addTraining(trainingName, links, companies);
     setTrainingName('');
     setNewTrainingLinks([{ tempId: Date.now(), name: '', url: '' }]);
-    setNewTrainingCompanies('');
+    setNewTrainingCompanies([]);
     setFeedback('¡Capacitación agregada exitosamente!');
     setTimeout(() => setFeedback(''), 3000);
   };
@@ -984,7 +1042,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       alert("El nombre y al menos un enlace válido son requeridos.");
       return;
     }
-    const companies = editedCompanies.split('\n').map(c => c.trim()).filter(Boolean);
+    const companies = editedCompanies.map(c => c.trim()).filter(Boolean);
     await updateTraining(editingTraining.id, editedName, links, companies);
     setEditingTraining(null);
   }
@@ -994,6 +1052,21 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       await deleteTraining(id);
     }
   }
+  
+  const handleAddGlobalCompany = async (e: React.FormEvent) => {
+      e.preventDefault();
+      const trimmed = newGlobalCompany.trim();
+      if (trimmed && !companies.includes(trimmed)) {
+          await updateCompanies([...companies, trimmed].sort((a, b) => a.localeCompare(b)));
+          setNewGlobalCompany('');
+      }
+  };
+
+  const handleDeleteGlobalCompany = async (companyToDelete: string) => {
+      if (window.confirm(`¿Seguro que quieres eliminar la empresa "${companyToDelete}" de la lista maestra?`)) {
+          await updateCompanies(companies.filter(c => c !== companyToDelete));
+      }
+  };
 
   const handleShare = async (trainingToShare: Training) => {
     const pristineTraining = {
@@ -1090,6 +1163,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     await fetchAdminConfig();
     setIsRefreshing(false);
   };
+  
+  const uniqueCompanies = useMemo(() => {
+    const companies = new Set(userSubmissions.map(sub => sub.company));
+    return Array.from(companies).sort();
+  }, [userSubmissions]);
 
   const filteredSubmissions = useMemo(() => {
     let results = userSubmissions;
@@ -1098,10 +1176,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
         results = results.filter(sub => sub.trainingId === selectedTrainingFilterId);
     }
 
-    if (companyFilter.trim()) {
-        results = results.filter(sub => 
-            sub.company.toLowerCase().includes(companyFilter.trim().toLowerCase())
-        );
+    if (companyFilter !== 'all') {
+        results = results.filter(sub => sub.company === companyFilter);
     }
 
     return results;
@@ -1149,7 +1225,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return "Descargar constancia general para la selección actual";
   }, [isDownloadingPdf, adminSignature, adminSignatureClarification, adminJobTitle, filteredSubmissions.length]);
 
-  const noFiltersApplied = selectedTrainingFilterId === 'all' && !companyFilter.trim();
+  const noFiltersApplied = selectedTrainingFilterId === 'all' && companyFilter === 'all';
 
   const TabButton = ({ id, label, icon: Icon }) => (
     <button
@@ -1164,6 +1240,71 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {label}
     </button>
   );
+  
+  const CompanyManager = ({
+    selectedCompanies,
+    setSelectedCompanies,
+    allAvailableCompanies
+  }) => {
+      const [companyToAdd, setCompanyToAdd] = useState('');
+
+      const availableForSelection = useMemo(() => 
+          allAvailableCompanies.filter(c => !selectedCompanies.includes(c)),
+          [allAvailableCompanies, selectedCompanies]
+      );
+
+      useEffect(() => {
+          setCompanyToAdd(availableForSelection[0] || '');
+      }, [availableForSelection]);
+
+      const handleAddCompany = () => {
+          if (companyToAdd && !selectedCompanies.includes(companyToAdd)) {
+              setSelectedCompanies([...selectedCompanies, companyToAdd]);
+          }
+      };
+      
+      const handleRemoveCompany = (companyToRemove: string) => {
+          setSelectedCompanies(selectedCompanies.filter(c => c !== companyToRemove));
+      };
+
+      return (
+          <div>
+              <div className="flex flex-wrap gap-2 mb-2 min-h-[28px]">
+                  {selectedCompanies.map(company => (
+                      <span key={company} className="flex items-center gap-1.5 bg-indigo-500/20 text-indigo-300 text-xs font-medium px-2.5 py-1 rounded-full">
+                          {company}
+                          <button type="button" onClick={() => handleRemoveCompany(company)} className="text-indigo-400 hover:text-white">
+                              <X size={14} />
+                          </button>
+                      </span>
+                  ))}
+              </div>
+              <div className="flex items-center gap-2">
+                  <select
+                      value={companyToAdd}
+                      onChange={(e) => setCompanyToAdd(e.target.value)}
+                      disabled={availableForSelection.length === 0}
+                      className="flex-grow px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm disabled:bg-slate-800 disabled:cursor-not-allowed"
+                  >
+                      {availableForSelection.length > 0 ? (
+                          availableForSelection.map(c => <option key={c} value={c}>{c}</option>)
+                      ) : (
+                          <option value="">No hay más empresas para añadir</option>
+                      )}
+                  </select>
+                  <button
+                      type="button"
+                      onClick={handleAddCompany}
+                      disabled={!companyToAdd}
+                      className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:bg-slate-600 disabled:opacity-50"
+                  >
+                      Añadir
+                  </button>
+              </div>
+          </div>
+      );
+  };
+
 
   return (
     <div className="w-full max-w-7xl mx-auto p-4 md:p-8 space-y-6">
@@ -1178,6 +1319,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
        <div className="flex flex-wrap justify-center sm:justify-start items-center gap-2 p-1 bg-slate-800/50 border border-slate-700 rounded-lg">
         <TabButton id="submissions" label="Usuarios Registrados" icon={Users} />
         <TabButton id="manage" label="Gestionar Capacitaciones" icon={ClipboardList} />
+        <TabButton id="companies" label="Gestionar Empresas" icon={Award} />
         <TabButton id="create" label="Crear Nueva Capacitación" icon={PlusCircle} />
       </div>
 
@@ -1199,18 +1341,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     />
                 </div>
                 <div>
-                    <label htmlFor="newTrainingCompanies" className="block text-sm font-medium text-gray-300">Empresas Autorizadas (Opcional)</label>
-                    <textarea
-                        id="newTrainingCompanies"
-                        value={newTrainingCompanies}
-                        onChange={(e) => setNewTrainingCompanies(e.target.value)}
-                        placeholder="Empresa A&#10;Empresa B&#10;Empresa C"
-                        rows={4}
-                        className="mt-1 block w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                    />
-                    <p className="mt-1 text-xs text-gray-500">
-                        Una empresa por línea. Si se completa, los usuarios deberán seleccionar una empresa de un menú desplegable.
-                    </p>
+                  <label htmlFor="new-company-input" className="block text-sm font-medium text-gray-300 mb-1">Empresas Autorizadas (Opcional)</label>
+                  <CompanyManager 
+                      selectedCompanies={newTrainingCompanies}
+                      setSelectedCompanies={setNewTrainingCompanies}
+                      allAvailableCompanies={companies}
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                      Si se completa, los usuarios deberán seleccionar una empresa de esta lista. Si se deja en blanco, la capacitación será pública para todas las empresas.
+                  </p>
                 </div>
                 <div>
                     <label className="block text-sm font-medium text-gray-300 mb-2">Enlaces</label>
@@ -1267,6 +1406,45 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     {feedback && <p className="text-sm text-green-500">{feedback}</p>}
                 </div>
                 </form>
+            </div>
+        )}
+        
+        {activeTab === 'companies' && (
+            <div className="max-w-xl mx-auto">
+                 <h2 className="text-xl font-semibold text-gray-200 mb-4">Gestionar Empresas</h2>
+                 <form onSubmit={handleAddGlobalCompany} className="flex items-center gap-2 mb-4">
+                    <input
+                        type="text"
+                        value={newGlobalCompany}
+                        onChange={(e) => setNewGlobalCompany(e.target.value)}
+                        placeholder="Nombre de la nueva empresa"
+                        className="flex-grow px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                    />
+                    <button
+                        type="submit"
+                        className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700"
+                    >
+                        Añadir
+                    </button>
+                 </form>
+                 <div className="space-y-2 max-h-96 overflow-y-auto">
+                    {companies.length > 0 ? (
+                        companies.map(company => (
+                            <div key={company} className="flex justify-between items-center p-3 bg-slate-700/50 rounded-md border border-slate-600">
+                                <span className="text-white">{company}</span>
+                                <button
+                                    onClick={() => handleDeleteGlobalCompany(company)}
+                                    className="p-1.5 text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded-full transition-colors"
+                                    title={`Eliminar ${company}`}
+                                >
+                                    <Trash2 size={16}/>
+                                </button>
+                            </div>
+                        ))
+                    ) : (
+                        <p className="text-sm text-gray-500 text-center py-4">No hay empresas en la lista maestra.</p>
+                    )}
+                 </div>
             </div>
         )}
 
@@ -1363,14 +1541,17 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         {/* Company Filter */}
                         <div className="flex items-center gap-2 flex-grow min-w-[200px]">
                             <label htmlFor="companyFilter" className="text-sm font-medium text-gray-300 pl-1 shrink-0">Empresa:</label>
-                            <input
+                            <select
                                 id="companyFilter"
-                                type="text"
-                                placeholder="Filtrar por empresa..."
                                 value={companyFilter}
                                 onChange={(e) => setCompanyFilter(e.target.value)}
-                                className="bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm px-3 py-2 h-10 w-full placeholder-gray-400"
-                            />
+                                className="bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm px-3 py-2 h-10 w-full"
+                            >
+                                <option value="all">Todas las empresas</option>
+                                {uniqueCompanies.map(company => (
+                                    <option key={company} value={company}>{company}</option>
+                                ))}
+                            </select>
                         </div>
                         {/* Download Button */}
                         <div className="relative w-full sm:w-auto" title={downloadButtonTitle}>
@@ -1470,17 +1651,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <input id="editedName" type="text" value={editedName} onChange={(e) => setEditedName(e.target.value)} required className="mt-1 block w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"/>
               </div>
                 <div>
-                    <label htmlFor="editedCompanies" className="block text-sm font-medium text-gray-300">Empresas Autorizadas (Opcional)</label>
-                    <textarea
-                        id="editedCompanies"
-                        value={editedCompanies}
-                        onChange={(e) => setEditedCompanies(e.target.value)}
-                        placeholder="Empresa A&#10;Empresa B&#10;Empresa C"
-                        rows={4}
-                        className="mt-1 block w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                    />
+                  <label className="block text-sm font-medium text-gray-300 mb-1">Empresas Autorizadas (Opcional)</label>
+                   <CompanyManager 
+                      selectedCompanies={editedCompanies}
+                      setSelectedCompanies={setEditedCompanies}
+                      allAvailableCompanies={companies}
+                  />
                     <p className="mt-1 text-xs text-gray-500">
-                        Una empresa por línea. Si se completa, los usuarios deberán seleccionar una empresa de un menú desplegable.
+                        Si se completa, los usuarios deberán seleccionar una empresa de esta lista. Si se deja en blanco, la capacitación será pública para todas las empresas.
                     </p>
                 </div>
                 <div>
@@ -1680,6 +1858,7 @@ type View = 'selector' | 'login' | 'admin' | 'user';
 const App: React.FC = () => {
   const [view, setView] = useState<View>('selector');
   const [trainings, setTrainings] = useState<Training[]>([]);
+  const [companies, setCompanies] = useState<string[]>([]);
   const [userPortalTrainings, setUserPortalTrainings] = useState<Training[]>([]);
   
   useEffect(() => {
@@ -1689,21 +1868,27 @@ const App: React.FC = () => {
         const shareKey = params.get('shareKey');
         let urlWasModified = false;
 
+        const adminTrainings = await apiService.getTrainings();
+        setTrainings(adminTrainings);
+        
+        const adminCompanies = await apiService.getCompanies();
+        setCompanies(adminCompanies.sort((a,b) => a.localeCompare(b)));
+
         if (shareKey) {
           const sharedTraining = await apiService.getSharedTraining(shareKey);
-          if (sharedTraining) {
+          
+          const trainingExists = sharedTraining && adminTrainings.some(t => t.id === sharedTraining.id);
+
+          if (trainingExists) {
             localStorage.removeItem(`training-progress-${sharedTraining.id}`);
             setUserPortalTrainings([sharedTraining]);
             setView('user');
-            urlWasModified = true;
           } else {
-            alert("El enlace de la capacitación es inválido o ha expirado.");
+            alert("Esta capacitación ya no está disponible o ha sido eliminada por el administrador.");
           }
+          urlWasModified = true;
         } 
         
-        const adminTrainings = await apiService.getTrainings();
-        setTrainings(adminTrainings);
-
         if (urlWasModified) {
           window.history.replaceState({}, document.title, window.location.pathname);
         }
@@ -1726,8 +1911,18 @@ const App: React.FC = () => {
                 }
                 return currentTrainings;
             });
+
+            const latestCompanies = await apiService.getCompanies();
+            setCompanies(currentCompanies => {
+                const sortedLatest = latestCompanies.sort((a,b) => a.localeCompare(b));
+                if (JSON.stringify(currentCompanies) !== JSON.stringify(sortedLatest)) {
+                    return sortedLatest;
+                }
+                return currentCompanies;
+            });
+
         } catch (error) {
-            console.error("Error polling for trainings:", error);
+            console.error("Error polling for data:", error);
         }
     }, 5000); // Poll every 5 seconds
 
@@ -1783,6 +1978,12 @@ const App: React.FC = () => {
     setTrainings(updatedTrainings);
   };
 
+  const updateCompanies = async (updatedCompanies: string[]) => {
+      await apiService.updateCompanies(updatedCompanies);
+      setCompanies(updatedCompanies.sort((a,b) => a.localeCompare(b)));
+  };
+
+
   const renderView = () => {
     switch (view) {
       case 'login':
@@ -1790,16 +1991,25 @@ const App: React.FC = () => {
       case 'admin':
         return <AdminDashboard 
                     trainings={trainings}
+                    companies={companies}
                     addTraining={addTraining}
                     updateTraining={updateTraining}
                     deleteTraining={deleteTraining}
+                    updateCompanies={updateCompanies}
                     onLogout={() => setView('selector')}
                 />;
       case 'user':
         return <UserPortal 
                     trainings={userPortalTrainings.length > 0 ? userPortalTrainings : trainings} 
+                    companies={companies}
                     setTrainingsStateForUser={userPortalTrainings.length > 0 ? setUserPortalTrainings : setTrainings} 
-                    onBack={() => setView('selector')}
+                    onBack={() => {
+                        // Clear any specific shared training when going back
+                        if (userPortalTrainings.length > 0) {
+                            setUserPortalTrainings([]);
+                        }
+                        setView('selector');
+                    }}
                 />;
       case 'selector':
       default:
