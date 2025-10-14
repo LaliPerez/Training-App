@@ -118,7 +118,6 @@ const apiService = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updatedData),
     });
-    window.dispatchEvent(new Event('storage'));
   },
 
   getSubmissions: async (): Promise<UserSubmission[]> => {
@@ -140,7 +139,6 @@ const apiService = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updatedData),
     });
-    window.dispatchEvent(new Event('storage'));
   },
 
   addSubmission: async (submission: UserSubmission): Promise<UserSubmission> => {
@@ -153,8 +151,6 @@ const apiService = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updatedData),
     });
-
-    window.dispatchEvent(new Event('storage')); // Notify listeners to refresh
     return submission;
   },
 
@@ -168,7 +164,6 @@ const apiService = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updatedData),
     });
-    window.dispatchEvent(new Event('storage')); // Notify listeners
   },
 
   deleteAllSubmissions: async (): Promise<void> => {
@@ -179,7 +174,6 @@ const apiService = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updatedData),
     });
-    window.dispatchEvent(new Event('storage')); // Notify listeners
   }
 };
 
@@ -761,7 +755,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   
   const fetchSubmissions = async () => {
     const subs = await apiService.getSubmissions();
-    setUserSubmissions(subs);
+    setUserSubmissions(currentSubs => {
+        if(JSON.stringify(currentSubs) !== JSON.stringify(subs)){
+            return subs;
+        }
+        return currentSubs;
+    });
   };
   
   const fetchAdminConfig = async () => {
@@ -777,15 +776,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     fetchSubmissions();
     fetchAdminConfig();
 
-    const handleStorageUpdate = () => {
+    const intervalId = setInterval(() => {
         fetchSubmissions();
         fetchAdminConfig();
-    };
-
-    window.addEventListener('storage', handleStorageUpdate);
+    }, 5000); // Poll every 5 seconds for updates
 
     return () => {
-        window.removeEventListener('storage', handleStorageUpdate);
+        clearInterval(intervalId); // Cleanup on unmount
     };
   }, []);
 
@@ -999,9 +996,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     <div className="w-full max-w-6xl mx-auto p-4 md:p-8 space-y-8">
       <div className="flex justify-between items-center">
         <h1 className="text-3xl font-bold text-white">Panel de Administrador</h1>
-        <button onClick={onLogout} className="flex items-center px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">
-          <LogOut className="h-4 w-4 mr-2"/>
-          Cerrar Sesión
+        <button onClick={onLogout} className="flex items-center px-4 py-2 text-sm font-medium text-white bg-slate-600 rounded-lg hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-500">
+          <ArrowLeft className="h-4 w-4 mr-2"/>
+          Menú Principal
         </button>
       </div>
 
@@ -1474,15 +1471,24 @@ const App: React.FC = () => {
 
     loadInitialData();
     
-    const handleStorageUpdate = async () => {
-        const adminTrainings = await apiService.getTrainings();
-        setTrainings(adminTrainings);
-    };
-
-    window.addEventListener('storage', handleStorageUpdate);
+    // Polling mechanism for cross-device sync
+    const intervalId = setInterval(async () => {
+        try {
+            const latestTrainings = await apiService.getTrainings();
+            setTrainings(currentTrainings => {
+                // Prevent re-render if data is identical
+                if (JSON.stringify(currentTrainings) !== JSON.stringify(latestTrainings)) {
+                    return latestTrainings;
+                }
+                return currentTrainings;
+            });
+        } catch (error) {
+            console.error("Error polling for trainings:", error);
+        }
+    }, 5000); // Poll every 5 seconds
 
     return () => {
-        window.removeEventListener('storage', handleStorageUpdate);
+        clearInterval(intervalId); // Cleanup on unmount
     };
   }, []);
 
