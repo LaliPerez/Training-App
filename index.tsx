@@ -841,6 +841,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [userSubmissions, setUserSubmissions] = useState<UserSubmission[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [selectedTrainingFilterId, setSelectedTrainingFilterId] = useState<string>('all');
+  const [companyFilter, setCompanyFilter] = useState('');
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
 
 
@@ -1067,11 +1068,20 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const filteredSubmissions = useMemo(() => {
-    if (selectedTrainingFilterId === 'all') {
-        return userSubmissions;
+    let results = userSubmissions;
+    
+    if (selectedTrainingFilterId !== 'all') {
+        results = results.filter(sub => sub.trainingId === selectedTrainingFilterId);
     }
-    return userSubmissions.filter(sub => sub.trainingId === selectedTrainingFilterId);
-  }, [userSubmissions, selectedTrainingFilterId]);
+
+    if (companyFilter.trim()) {
+        results = results.filter(sub => 
+            sub.company.toLowerCase().includes(companyFilter.trim().toLowerCase())
+        );
+    }
+
+    return results;
+  }, [userSubmissions, selectedTrainingFilterId, companyFilter]);
 
   const handleDownloadFilteredSubmissions = () => {
       if (isDownloadingPdf) return;
@@ -1115,6 +1125,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return "Descargar constancia general para la selección actual";
   }, [isDownloadingPdf, adminSignature, adminSignatureClarification, adminJobTitle, filteredSubmissions.length]);
 
+  const noFiltersApplied = selectedTrainingFilterId === 'all' && !companyFilter.trim();
 
   const TabButton = ({ id, label, icon: Icon }) => (
     <button
@@ -1259,7 +1270,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <h2 className="text-xl font-semibold text-gray-200">
                         Usuarios Registrados 
                         <span className="text-base font-normal text-gray-400 ml-2">
-                        ({selectedTrainingFilterId === 'all' 
+                        ({noFiltersApplied
                             ? userSubmissions.length 
                             : `${filteredSubmissions.length} de ${userSubmissions.length}`})
                         </span>
@@ -1294,19 +1305,35 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
                 
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-t border-slate-700 pt-4">
-                    <div className="flex flex-wrap items-center gap-2 bg-slate-700/50 border border-slate-600 rounded-lg p-2 flex-grow sm:flex-grow-0">
-                        <label htmlFor="trainingFilter" className="text-sm font-medium text-gray-300 pl-1 shrink-0 w-full sm:w-auto">Filtrar:</label>
-                        <select
-                            id="trainingFilter"
-                            value={selectedTrainingFilterId}
-                            onChange={(e) => setSelectedTrainingFilterId(e.target.value)}
-                            className="bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm px-3 py-2 h-10 w-full sm:w-auto flex-grow"
-                        >
-                            <option value="all">Todas las Capacitaciones</option>
-                            {trainings.map(t => (
-                                <option key={t.id} value={t.id}>{t.name}</option>
-                            ))}
-                        </select>
+                    <div className="flex flex-wrap items-center gap-4 bg-slate-700/50 border border-slate-600 rounded-lg p-2 flex-grow">
+                        {/* Training Filter */}
+                        <div className="flex items-center gap-2 flex-grow min-w-[200px]">
+                            <label htmlFor="trainingFilter" className="text-sm font-medium text-gray-300 pl-1 shrink-0">Capacitación:</label>
+                            <select
+                                id="trainingFilter"
+                                value={selectedTrainingFilterId}
+                                onChange={(e) => setSelectedTrainingFilterId(e.target.value)}
+                                className="bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm px-3 py-2 h-10 w-full"
+                            >
+                                <option value="all">Todas</option>
+                                {trainings.map(t => (
+                                    <option key={t.id} value={t.id}>{t.name}</option>
+                                ))}
+                            </select>
+                        </div>
+                        {/* Company Filter */}
+                        <div className="flex items-center gap-2 flex-grow min-w-[200px]">
+                            <label htmlFor="companyFilter" className="text-sm font-medium text-gray-300 pl-1 shrink-0">Empresa:</label>
+                            <input
+                                id="companyFilter"
+                                type="text"
+                                placeholder="Filtrar por empresa..."
+                                value={companyFilter}
+                                onChange={(e) => setCompanyFilter(e.target.value)}
+                                className="bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm px-3 py-2 h-10 w-full placeholder-gray-400"
+                            />
+                        </div>
+                        {/* Download Button */}
                         <div className="relative w-full sm:w-auto" title={downloadButtonTitle}>
                                 <button
                                     onClick={handleDownloadFilteredSubmissions}
@@ -1340,6 +1367,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             <tr>
                                 <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Nombre</th>
                                 <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">DNI</th>
+                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Empresa</th>
                                 <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Capacitación</th>
                                 <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Fecha</th>
                                 <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">Acciones</th>
@@ -1350,6 +1378,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 <tr key={sub.id} className="hover:bg-slate-700/50" onClick={() => setSelectedSubmission(sub)}>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-white cursor-pointer">{sub.firstName} {sub.lastName}</td>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer">{sub.dni}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer">{sub.company}</td>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer">{sub.trainingName}</td>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer">{sub.timestamp}</td>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 text-right">
@@ -1371,7 +1400,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         ) : (
                         <div className="text-center py-8">
                             <Users className="mx-auto h-12 w-12 text-gray-500" />
-                            <p className="mt-2 text-sm text-gray-500">No se encontraron registros para la capacitación seleccionada.</p>
+                            <p className="mt-2 text-sm text-gray-500">No se encontraron registros que coincidan con los filtros actuales.</p>
                         </div>
                         )}
                     </>
