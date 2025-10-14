@@ -1,4 +1,3 @@
-
 // FIX: Removed invalid file markers from the beginning and end of the file.
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import ReactDOM from 'react-dom/client';
@@ -50,6 +49,7 @@ interface AppData {
   submissions: UserSubmission[];
   adminConfig?: AdminConfig;
   sharedTrainings?: { [key: string]: Training };
+  trainings?: Training[];
 }
 
 
@@ -63,7 +63,7 @@ const apiService = {
       });
       if (!response.ok) {
         console.error(`Network response was not ok: ${response.statusText}`);
-        return { submissions: [], adminConfig: { signature: null, clarification: '', jobTitle: '' }, sharedTrainings: {} };
+        return { submissions: [], adminConfig: { signature: null, clarification: '', jobTitle: '' }, sharedTrainings: {}, trainings: [] };
       }
       const text = await response.text();
       // Handle empty blob case
@@ -71,11 +71,12 @@ const apiService = {
       return {
         submissions: data.submissions || [],
         adminConfig: data.adminConfig || { signature: null, clarification: '', jobTitle: '' },
-        sharedTrainings: data.sharedTrainings || {}
+        sharedTrainings: data.sharedTrainings || {},
+        trainings: data.trainings || []
       };
     } catch (error) {
       console.error("Failed to fetch data from remote store:", error);
-      return { submissions: [], adminConfig: { signature: null, clarification: '', jobTitle: '' }, sharedTrainings: {} }; // Return default structure on error
+      return { submissions: [], adminConfig: { signature: null, clarification: '', jobTitle: '' }, sharedTrainings: {}, trainings: [] }; // Return default structure on error
     }
   },
 
@@ -99,6 +100,23 @@ const apiService = {
   getSharedTraining: async (key: string): Promise<Training | null> => {
       const data = await apiService._getData();
       return data.sharedTrainings?.[key] || null;
+  },
+
+  getTrainings: async (): Promise<Training[]> => {
+    const data = await apiService._getData();
+    return data.trainings || [];
+  },
+
+  updateTrainings: async (trainings: Training[]): Promise<void> => {
+    const data = await apiService._getData();
+    const updatedData = { ...data, trainings };
+    
+    await fetch(JSON_BLOB_URL, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedData),
+    });
+    window.dispatchEvent(new Event('storage'));
   },
 
   getSubmissions: async (): Promise<UserSubmission[]> => {
@@ -686,9 +704,9 @@ const AdminLogin: React.FC<AdminLoginProps> = ({ onLoginSuccess, onBack }) => {
 // AdminDashboard.tsx
 interface AdminDashboardProps {
   trainings: Training[];
-  addTraining: (name: string, links: string[]) => void;
-  updateTraining: (id: string, name: string, links: string[]) => void;
-  deleteTraining: (id: string) => void;
+  addTraining: (name: string, links: string[]) => Promise<void>;
+  updateTraining: (id: string, name: string, links: string[]) => Promise<void>;
+  deleteTraining: (id: string) => Promise<void>;
   onLogout: () => void;
 }
 
@@ -759,7 +777,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   }, [editingTraining]);
 
 
-  const handleAddTraining = (e: React.FormEvent) => {
+  const handleAddTraining = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!trainingName.trim() || !linksText.trim()) {
       setFeedback('El nombre y los enlaces no pueden estar vacíos.');
@@ -770,14 +788,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
         setFeedback('Debe proporcionar al menos un enlace válido.');
         return;
     }
-    addTraining(trainingName, links);
+    await addTraining(trainingName, links);
     setTrainingName('');
     setLinksText('');
     setFeedback('¡Capacitación agregada exitosamente!');
     setTimeout(() => setFeedback(''), 3000);
   };
 
-  const handleUpdateTraining = (e: React.FormEvent) => {
+  const handleUpdateTraining = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingTraining) return;
 
@@ -786,13 +804,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       alert("El nombre y los enlaces no pueden estar vacíos.");
       return;
     }
-    updateTraining(editingTraining.id, editedName, links);
+    await updateTraining(editingTraining.id, editedName, links);
     setEditingTraining(null);
   }
 
-  const handleDeleteTraining = (id: string) => {
+  const handleDeleteTraining = async (id: string) => {
     if(window.confirm('¿Estás seguro de que quieres eliminar esta capacitación? Esta acción no se puede deshacer.')) {
-      deleteTraining(id);
+      await deleteTraining(id);
     }
   }
 
@@ -1303,36 +1321,33 @@ const App: React.FC = () => {
           }
         } 
         
-        // Admin trainings are always loaded from their localStorage
-        const savedTrainings = localStorage.getItem('trainings');
-        if (savedTrainings) {
-          setTrainings(JSON.parse(savedTrainings));
-        }
+        const adminTrainings = await apiService.getTrainings();
+        setTrainings(adminTrainings);
 
         if (urlWasModified) {
           window.history.replaceState({}, document.title, window.location.pathname);
         }
       } catch (error) {
-         console.error("Failed to load data from URL or localStorage", error);
+         console.error("Failed to load data from URL or remote store", error);
          alert("Ocurrió un error al cargar la capacitación.");
       }
     };
 
     loadInitialData();
+    
+    const handleStorageUpdate = async () => {
+        const adminTrainings = await apiService.getTrainings();
+        setTrainings(adminTrainings);
+    };
+
+    window.addEventListener('storage', handleStorageUpdate);
+
+    return () => {
+        window.removeEventListener('storage', handleStorageUpdate);
+    };
   }, []);
 
-
-  useEffect(() => {
-    if (view === 'admin') {
-        try {
-          localStorage.setItem('trainings', JSON.stringify(trainings));
-        } catch (error) {
-          console.error("Failed to save trainings to localStorage", error);
-        }
-    }
-  }, [trainings, view]);
-
-  const addTraining = (name: string, urls: string[]) => {
+  const addTraining = async (name: string, urls: string[]) => {
     const newTraining: Training = {
       id: `training-${Date.now()}`,
       name,
@@ -1342,11 +1357,13 @@ const App: React.FC = () => {
         viewed: false,
       })),
     };
-    setTrainings(prev => [...prev, newTraining]);
+    const updatedTrainings = [...trainings, newTraining];
+    setTrainings(updatedTrainings);
+    await apiService.updateTrainings(updatedTrainings);
   };
 
-  const updateTraining = (id: string, name: string, urls: string[]) => {
-    setTrainings(prev => prev.map(t => {
+  const updateTraining = async (id: string, name: string, urls: string[]) => {
+    const updatedTrainings = trainings.map(t => {
       if (t.id === id) {
         return {
           ...t,
@@ -1358,11 +1375,15 @@ const App: React.FC = () => {
         };
       }
       return t;
-    }));
+    });
+    setTrainings(updatedTrainings);
+    await apiService.updateTrainings(updatedTrainings);
   };
 
-  const deleteTraining = (id: string) => {
-    setTrainings(prev => prev.filter(t => t.id !== id));
+  const deleteTraining = async (id: string) => {
+    const updatedTrainings = trainings.filter(t => t.id !== id);
+    setTrainings(updatedTrainings);
+    await apiService.updateTrainings(updatedTrainings);
   };
 
   const renderView = () => {
