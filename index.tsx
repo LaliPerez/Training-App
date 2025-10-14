@@ -789,6 +789,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [userSubmissions, setUserSubmissions] = useState<UserSubmission[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [selectedTrainingFilterId, setSelectedTrainingFilterId] = useState<string>('all');
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
 
 
   const adminSignatureRef = useRef<SignatureCanvas>(null);
@@ -1034,6 +1035,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   }, [userSubmissions, selectedTrainingFilterId]);
 
   const handleDownloadFilteredSubmissions = () => {
+      if (isDownloadingPdf) return;
+      
       if (filteredSubmissions.length === 0) {
           alert('No hay registros para la selección actual.');
           return;
@@ -1043,18 +1046,34 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
           return;
       }
 
-      const trainingName = selectedTrainingFilterId !== 'all' 
-          ? trainings.find(t => t.id === selectedTrainingFilterId)?.name 
-          : undefined;
+      setIsDownloadingPdf(true);
+      setTimeout(() => {
+          try {
+              const trainingName = selectedTrainingFilterId !== 'all' 
+                  ? trainings.find(t => t.id === selectedTrainingFilterId)?.name 
+                  : undefined;
 
-      generateSubmissionsPdf(filteredSubmissions, adminSignature, adminSignatureClarification, adminJobTitle, trainingName);
+              generateSubmissionsPdf(filteredSubmissions, adminSignature, adminSignatureClarification, adminJobTitle, trainingName);
+          } catch(e) {
+              console.error("Error al generar PDF:", e);
+              alert("Ocurrió un error al generar el PDF. Por favor, revisa la consola para más detalles.")
+          } finally {
+              setIsDownloadingPdf(false);
+          }
+      }, 50);
   };
     
-  const downloadButtonTitle = filteredSubmissions.length === 0 
-    ? "No hay registros para la selección actual" 
-    : (!adminSignature || !adminSignatureClarification || !adminJobTitle) 
-    ? "Debe configurar firma, aclaración y cargo para descargar" 
-    : "Descargar constancia para la selección actual";
+  const downloadButtonTitle = useMemo(() => {
+    if (isDownloadingPdf) return "Generando PDF...";
+    if (!adminSignature || !adminSignatureClarification || !adminJobTitle) {
+      return "Debe configurar firma, aclaración y cargo para descargar";
+    }
+    if (filteredSubmissions.length === 0) {
+      return "No hay registros para la selección actual";
+    }
+    return "Descargar constancia para la selección actual";
+  }, [isDownloadingPdf, adminSignature, adminSignatureClarification, adminJobTitle, filteredSubmissions.length]);
+
 
   return (
     <div className="w-full max-w-6xl mx-auto p-4 md:p-8 space-y-8">
@@ -1219,15 +1238,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   )}
               </div>
           </div>
-
-          <div className="flex flex-wrap items-center gap-4 border-t border-slate-700 pt-4">
-              <div className="flex items-center gap-2">
-                  <label htmlFor="trainingFilter" className="sr-only">Filtrar por capacitación</label>
+          
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-t border-slate-700 pt-4">
+              <div className="flex items-center gap-2 bg-slate-700/50 border border-slate-600 rounded-lg p-2 flex-wrap">
+                  <label htmlFor="trainingFilter" className="text-sm font-medium text-gray-300 pl-1 shrink-0">Filtrar:</label>
                   <select
                       id="trainingFilter"
                       value={selectedTrainingFilterId}
                       onChange={(e) => setSelectedTrainingFilterId(e.target.value)}
-                      className="bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm px-3 py-2 h-10"
+                      className="bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm px-3 py-2 h-10 w-full sm:w-auto flex-grow"
                   >
                       <option value="all">Todas las Capacitaciones</option>
                       {trainings.map(t => (
@@ -1236,25 +1255,26 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </select>
                   <button
                       onClick={handleDownloadFilteredSubmissions}
-                      disabled={filteredSubmissions.length === 0 || !adminSignature || !adminSignatureClarification || !adminJobTitle}
+                      disabled={isDownloadingPdf || filteredSubmissions.length === 0 || !adminSignature || !adminSignatureClarification || !adminJobTitle}
                       title={downloadButtonTitle}
-                      className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 h-10"
+                      className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 h-10 w-full sm:w-auto"
                   >
-                      <FileDown className="h-5 w-5 mr-2" />
-                      Descargar PDF
+                      {isDownloadingPdf ? <RefreshCw className="h-5 w-5 mr-2 animate-spin" /> : <FileDown className="h-5 w-5 mr-2" />}
+                      {isDownloadingPdf ? 'Generando...' : 'Descargar PDF'}
                   </button>
               </div>
+
               <button
                   onClick={handleDeleteAllSubmissions}
                   disabled={userSubmissions.length === 0}
                   title={userSubmissions.length === 0 ? "No hay registros para borrar" : "Borrar todos los registros"}
-                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-red-600 hover:bg-red-700 disabled:bg-slate-600 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 h-10"
+                  className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-red-600 hover:bg-red-700 disabled:bg-slate-600 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 h-10"
               >
                   <Trash2 className="h-5 w-5 mr-2" />
-                  Borrar Todos los Registros
+                  Borrar Todo
               </button>
           </div>
-          
+
           <div className="overflow-x-auto mt-4">
             {userSubmissions.length > 0 ? (
               <>
