@@ -11,6 +11,7 @@ import { ShieldCheck, User, PlusCircle, Users, FileDown, LogOut, Trash2, Edit, X
 // --- TYPES ---
 interface TrainingLink {
   id: string;
+  name?: string;
   url: string;
   viewed: boolean;
 }
@@ -60,6 +61,7 @@ const apiService = {
       const response = await fetch(JSON_BLOB_URL, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        cache: 'no-store', // Prevent browser caching to ensure data is always fresh
       });
       if (!response.ok) {
         console.error(`Network response was not ok: ${response.statusText}`);
@@ -402,13 +404,6 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateFor
   const [isLoadingAdminConfig, setIsLoadingAdminConfig] = useState(true);
 
   useEffect(() => {
-    // If the user lands with exactly one training (from a shared link), go directly into it.
-    if (trainings.length === 1 && !selectedTrainingId) {
-      setSelectedTrainingId(trainings[0].id);
-    }
-  }, [trainings, selectedTrainingId]);
-
-  useEffect(() => {
     const fetchAdminConfig = async () => {
       try {
         const config = await apiService.getAdminConfig();
@@ -545,6 +540,15 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateFor
     
     return (
         <div className="w-full max-w-4xl mx-auto bg-slate-800 p-8 rounded-xl shadow-lg">
+            <div className="flex justify-between items-center mb-4">
+                <button onClick={() => setSelectedTrainingId(null)} className="flex items-center text-sm text-indigo-400 hover:text-indigo-300">
+                    <ArrowLeft className="h-4 w-4 mr-2" />
+                    Volver a la lista de capacitaciones
+                </button>
+                <button onClick={onBack} className="flex items-center text-sm text-gray-400 hover:text-gray-200">
+                    Volver al menú principal
+                </button>
+            </div>
             <h2 className="text-2xl font-bold text-white mb-2">{selectedTraining.name}</h2>
             <p className="text-gray-400 mb-4">Revisa los siguientes enlaces para completar la capacitación. Una vez revisados todos, podrás registrar tu asistencia.</p>
             
@@ -556,20 +560,24 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateFor
             </div>
 
             <div className="space-y-3 mb-8">
-                {selectedTraining.links.map(link => (
+                {selectedTraining.links.map((link, index) => (
                     <a
                         key={link.id}
                         href={link.url}
                         target="_blank"
                         rel="noopener noreferrer"
                         onClick={() => handleLinkClick(selectedTraining.id, link.id)}
-                        className={`flex items-center justify-between p-4 rounded-lg border transition-all ${link.viewed ? 'bg-green-900/30 border-green-500/50 text-gray-300' : 'bg-slate-900/50 border-slate-700 hover:bg-slate-700'}`}
+                        title={link.url}
+                        className={`flex items-center justify-between p-4 rounded-lg border transition-all ${link.viewed ? 'bg-green-900/30 border-green-500/50' : 'bg-slate-900/50 border-slate-700 hover:bg-slate-700'}`}
                     >
-                        <div className="flex items-center">
-                            <FileText className="h-5 w-5 mr-3 text-indigo-400"/>
-                            <span className="font-medium">{link.url}</span>
+                        <div className="flex items-center min-w-0">
+                            <FileText className="h-5 w-5 mr-3 text-indigo-400 flex-shrink-0"/>
+                            <div className="min-w-0">
+                                <span className="font-medium text-white">{link.name?.trim() ? link.name : `Material de Estudio ${index + 1}`}</span>
+                                <p className="text-sm text-gray-400 truncate">{link.url}</p>
+                            </div>
                         </div>
-                        {link.viewed && <CheckCircle className="h-6 w-6 text-green-500" />}
+                        {link.viewed && <CheckCircle className="h-6 w-6 text-green-500 flex-shrink-0 ml-4" />}
                     </a>
                 ))}
             </div>
@@ -605,6 +613,10 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateFor
 
   return (
     <div className="w-full max-w-4xl mx-auto">
+      <button onClick={onBack} className="flex items-center text-sm text-indigo-400 hover:text-indigo-300 mb-4">
+          <ArrowLeft className="h-4 w-4 mr-2" />
+          Volver al menú principal
+      </button>
       <div className="text-center mb-8">
         <h1 className="text-3xl font-bold text-white">Capacitaciones Disponibles</h1>
         <p className="mt-2 text-gray-400">Selecciona una capacitación para comenzar.</p>
@@ -702,10 +714,16 @@ const AdminLogin: React.FC<AdminLoginProps> = ({ onLoginSuccess, onBack }) => {
 };
 
 // AdminDashboard.tsx
+interface LinkInput {
+    tempId: number;
+    name: string;
+    url: string;
+}
+
 interface AdminDashboardProps {
   trainings: Training[];
-  addTraining: (name: string, links: string[]) => Promise<void>;
-  updateTraining: (id: string, name: string, links: string[]) => Promise<void>;
+  addTraining: (name: string, links: { name: string, url: string }[]) => Promise<void>;
+  updateTraining: (id: string, name: string, links: { name: string, url: string }[]) => Promise<void>;
   deleteTraining: (id: string) => Promise<void>;
   onLogout: () => void;
 }
@@ -714,11 +732,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     trainings, addTraining, updateTraining, deleteTraining, onLogout
 }) => {
   const [trainingName, setTrainingName] = useState('');
-  const [linksText, setLinksText] = useState('');
+  const [newTrainingLinks, setNewTrainingLinks] = useState<LinkInput[]>([{ tempId: Date.now(), name: '', url: '' }]);
   const [feedback, setFeedback] = useState('');
+  
   const [editingTraining, setEditingTraining] = useState<Training | null>(null);
   const [editedName, setEditedName] = useState('');
-  const [editedLinksText, setEditedLinksText] = useState('');
+  const [editedTrainingLinks, setEditedTrainingLinks] = useState<LinkInput[]>([]);
+
   const [showShareModal, setShowShareModal] = useState(false);
   const [sharingTrainingName, setSharingTrainingName] = useState('');
   const [shareableLink, setShareableLink] = useState('');
@@ -772,25 +792,68 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   useEffect(() => {
     if (editingTraining) {
       setEditedName(editingTraining.name);
-      setEditedLinksText(editingTraining.links.map(l => l.url).join('\n'));
+      setEditedTrainingLinks(
+        editingTraining.links.map(l => ({
+          tempId: Math.random(),
+          name: l.name || '',
+          url: l.url
+        }))
+      );
     }
   }, [editingTraining]);
 
 
+  // Handlers for creating new training links
+  const handleNewLinkChange = (index: number, field: 'name' | 'url', value: string) => {
+      const updatedLinks = [...newTrainingLinks];
+      updatedLinks[index][field] = value;
+      setNewTrainingLinks(updatedLinks);
+  };
+
+  const addNewLink = () => {
+      setNewTrainingLinks([...newTrainingLinks, { tempId: Date.now(), name: '', url: '' }]);
+  };
+
+  const removeNewLink = (index: number) => {
+      if (newTrainingLinks.length > 1) {
+          setNewTrainingLinks(newTrainingLinks.filter((_, i) => i !== index));
+      }
+  };
+
+  // Handlers for editing existing training links
+  const handleEditedLinkChange = (index: number, field: 'name' | 'url', value: string) => {
+    const updatedLinks = [...editedTrainingLinks];
+    updatedLinks[index][field] = value;
+    setEditedTrainingLinks(updatedLinks);
+  };
+
+  const addEditedLink = () => {
+      setEditedTrainingLinks([...editedTrainingLinks, { tempId: Date.now(), name: '', url: '' }]);
+  };
+
+  const removeEditedLink = (index: number) => {
+      if (editedTrainingLinks.length > 1) {
+          setEditedTrainingLinks(editedTrainingLinks.filter((_, i) => i !== index));
+      }
+  };
+
   const handleAddTraining = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!trainingName.trim() || !linksText.trim()) {
-      setFeedback('El nombre y los enlaces no pueden estar vacíos.');
+    if (!trainingName.trim()) {
+      setFeedback('El nombre de la capacitación no puede estar vacío.');
       return;
     }
-    const links = linksText.split('\n').filter(link => link.trim() !== '');
+    const links = newTrainingLinks
+      .map(l => ({ name: l.name.trim(), url: l.url.trim() }))
+      .filter(l => l.url !== '');
+
     if (links.length === 0) {
         setFeedback('Debe proporcionar al menos un enlace válido.');
         return;
     }
     await addTraining(trainingName, links);
     setTrainingName('');
-    setLinksText('');
+    setNewTrainingLinks([{ tempId: Date.now(), name: '', url: '' }]);
     setFeedback('¡Capacitación agregada exitosamente!');
     setTimeout(() => setFeedback(''), 3000);
   };
@@ -799,9 +862,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     e.preventDefault();
     if (!editingTraining) return;
 
-    const links = editedLinksText.split('\n').filter(link => link.trim() !== '');
+    const links = editedTrainingLinks
+        .map(l => ({ name: l.name.trim(), url: l.url.trim() }))
+        .filter(l => l.url !== '');
+
     if (!editedName.trim() || links.length === 0) {
-      alert("El nombre y los enlaces no pueden estar vacíos.");
+      alert("El nombre y al menos un enlace válido son requeridos.");
       return;
     }
     await updateTraining(editingTraining.id, editedName, links);
@@ -952,20 +1018,54 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   value={trainingName}
                   onChange={(e) => setTrainingName(e.target.value)}
                   placeholder="Ej: Inducción de Seguridad"
+                  required
                   className="mt-1 block w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
                 />
               </div>
-              <div>
-                <label htmlFor="links" className="block text-sm font-medium text-gray-300">Enlaces (uno por línea)</label>
-                <textarea
-                  id="links"
-                  value={linksText}
-                  onChange={(e) => setLinksText(e.target.value)}
-                  rows={4}
-                  placeholder="https://ejemplo.com/link1&#10;https://ejemplo.com/link2"
-                  className="mt-1 block w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                />
+               <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">Enlaces</label>
+                  <div className="space-y-3">
+                      {newTrainingLinks.map((link, index) => (
+                          <div key={link.tempId} className="flex items-center gap-2 p-2 bg-slate-700/50 rounded-md border border-slate-600">
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 flex-grow">
+                                  <input
+                                      type="text"
+                                      value={link.name}
+                                      onChange={(e) => handleNewLinkChange(index, 'name', e.target.value)}
+                                      placeholder={`Nombre del Enlace ${index + 1} (Opcional)`}
+                                      className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                                  />
+                                  <input
+                                      type="url"
+                                      value={link.url}
+                                      onChange={(e) => handleNewLinkChange(index, 'url', e.target.value)}
+                                      placeholder="https://ejemplo.com/recurso"
+                                      required
+                                      className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                                  />
+                              </div>
+                              <button
+                                  type="button"
+                                  onClick={() => removeNewLink(index)}
+                                  disabled={newTrainingLinks.length <= 1}
+                                  className="p-2 text-red-400 hover:text-red-300 disabled:text-gray-600 disabled:cursor-not-allowed hover:bg-red-900/30 rounded-full transition-colors flex-shrink-0"
+                                  title="Eliminar enlace"
+                              >
+                                  <Trash2 className="h-4 w-4" />
+                              </button>
+                          </div>
+                      ))}
+                  </div>
+                  <button
+                      type="button"
+                      onClick={addNewLink}
+                      className="mt-3 inline-flex items-center px-3 py-1.5 border border-slate-600 text-xs font-medium rounded-md shadow-sm text-gray-300 bg-slate-700 hover:bg-slate-600 focus:outline-none"
+                  >
+                      <PlusCircle className="h-4 w-4 mr-2" />
+                      Añadir Otro Enlace
+                  </button>
               </div>
+
               <div className="flex items-center justify-between">
                 <button
                   type="submit"
@@ -1141,11 +1241,50 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
              <form onSubmit={handleUpdateTraining} className="space-y-4">
               <div>
                 <label htmlFor="editedName" className="block text-sm font-medium text-gray-300">Nombre de la Capacitación</label>
-                <input id="editedName" type="text" value={editedName} onChange={(e) => setEditedName(e.target.value)} className="mt-1 block w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"/>
+                <input id="editedName" type="text" value={editedName} onChange={(e) => setEditedName(e.target.value)} required className="mt-1 block w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"/>
               </div>
-              <div>
-                <label htmlFor="editedLinks" className="block text-sm font-medium text-gray-300">Enlaces (uno por línea)</label>
-                <textarea id="editedLinks" value={editedLinksText} onChange={(e) => setEditedLinksText(e.target.value)} rows={5} className="mt-1 block w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"/>
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">Enlaces</label>
+                  <div className="space-y-3 max-h-60 overflow-y-auto">
+                      {editedTrainingLinks.map((link, index) => (
+                          <div key={link.tempId} className="flex items-center gap-2 p-2 bg-slate-700/50 rounded-md border border-slate-600">
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 flex-grow">
+                                  <input
+                                      type="text"
+                                      value={link.name}
+                                      onChange={(e) => handleEditedLinkChange(index, 'name', e.target.value)}
+                                      placeholder={`Nombre del Enlace ${index + 1} (Opcional)`}
+                                      className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                                  />
+                                  <input
+                                      type="url"
+                                      value={link.url}
+                                      onChange={(e) => handleEditedLinkChange(index, 'url', e.target.value)}
+                                      placeholder="https://ejemplo.com/recurso"
+                                      required
+                                      className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                                  />
+                              </div>
+                              <button
+                                  type="button"
+                                  onClick={() => removeEditedLink(index)}
+                                  disabled={editedTrainingLinks.length <= 1}
+                                  className="p-2 text-red-400 hover:text-red-300 disabled:text-gray-600 disabled:cursor-not-allowed hover:bg-red-900/30 rounded-full transition-colors flex-shrink-0"
+                                  title="Eliminar enlace"
+                              >
+                                  <Trash2 className="h-4 w-4" />
+                              </button>
+                          </div>
+                      ))}
+                  </div>
+                  <button
+                      type="button"
+                      onClick={addEditedLink}
+                      className="mt-3 inline-flex items-center px-3 py-1.5 border border-slate-600 text-xs font-medium rounded-md shadow-sm text-gray-300 bg-slate-700 hover:bg-slate-600 focus:outline-none"
+                  >
+                      <PlusCircle className="h-4 w-4 mr-2" />
+                      Añadir Otro Enlace
+                  </button>
               </div>
               <div className="flex justify-end gap-3 pt-4">
                  <button type="button" onClick={() => setEditingTraining(null)} className="px-4 py-2 text-sm font-medium text-gray-300 bg-slate-700 rounded-md hover:bg-slate-600">Cancelar</button>
@@ -1347,43 +1486,49 @@ const App: React.FC = () => {
     };
   }, []);
 
-  const addTraining = async (name: string, urls: string[]) => {
+  const addTraining = async (name: string, links: { name: string, url: string }[]) => {
     const newTraining: Training = {
       id: `training-${Date.now()}`,
       name,
-      links: urls.map((url, index) => ({
+      links: links.map((link, index) => ({
         id: `link-${Date.now()}-${index}`,
-        url,
+        name: link.name,
+        url: link.url,
         viewed: false,
       })),
     };
     const updatedTrainings = [...trainings, newTraining];
-    setTrainings(updatedTrainings);
     await apiService.updateTrainings(updatedTrainings);
+    setTrainings(updatedTrainings);
   };
 
-  const updateTraining = async (id: string, name: string, urls: string[]) => {
+  const updateTraining = async (id: string, name: string, links: { name: string, url: string }[]) => {
     const updatedTrainings = trainings.map(t => {
       if (t.id === id) {
         return {
           ...t,
           name,
-          links: urls.map((url, index) => {
-            const existingLink = t.links.find(l => l.url === url);
-            return existingLink || { id: `link-${Date.now()}-${index}`, url, viewed: false };
+          links: links.map((link, index) => {
+            const existingLink = t.links.find(l => l.url === link.url);
+            return {
+                id: existingLink?.id || `link-${id}-${index}`,
+                name: link.name,
+                url: link.url,
+                viewed: existingLink?.viewed || false,
+            };
           }),
         };
       }
       return t;
     });
-    setTrainings(updatedTrainings);
     await apiService.updateTrainings(updatedTrainings);
+    setTrainings(updatedTrainings);
   };
 
   const deleteTraining = async (id: string) => {
     const updatedTrainings = trainings.filter(t => t.id !== id);
-    setTrainings(updatedTrainings);
     await apiService.updateTrainings(updatedTrainings);
+    setTrainings(updatedTrainings);
   };
 
   const renderView = () => {
