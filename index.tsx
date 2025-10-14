@@ -191,11 +191,8 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
   
   try {
     const doc = new jsPDF();
-    
-    const title = trainingName 
-      ? `Registro de Asistencia - ${trainingName}`
-      : 'Registro de Asistencia a Capacitaciones';
-    doc.text(title, 14, 16);
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const pageWidth = doc.internal.pageSize.getWidth();
     
     const tableColumns = ['Nombre', 'Apellido', 'DNI', 'Empresa', 'Capacitación', 'Fecha', 'Firma'];
     const tableRows = submissions.map(sub => [
@@ -211,23 +208,51 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
     autoTable(doc, {
       head: [tableColumns],
       body: tableRows,
-      startY: 24,
+      startY: 35, // Start table below the header
+      margin: { top: 35, bottom: 25 },
       theme: 'grid',
-      headStyles: { fillColor: [41, 128, 185] },
+      headStyles: { fillColor: [22, 78, 99], textColor: 255 }, // Dark Cyan, White text
+      alternateRowStyles: { fillColor: [241, 245, 249] }, // Light Blue-Gray
       styles: { fontSize: 8, cellPadding: 2, valign: 'middle' },
       columnStyles: {
-        6: { cellWidth: 40, minCellHeight: 20 }, // Signature column
+        6: { cellWidth: 35, minCellHeight: 18 }, // Signature column
+      },
+      didDrawPage: (data) => {
+          // HEADER
+          doc.setFontSize(18);
+          doc.setFont('helvetica', 'bold');
+          doc.setTextColor(40);
+          doc.text('Registro de Asistencia', 14, 15);
+          
+          doc.setFontSize(12);
+          doc.setFont('helvetica', 'normal');
+          doc.setTextColor(100);
+          const subTitle = trainingName ? `Capacitación: ${trainingName}` : 'Todas las Capacitaciones';
+          doc.text(subTitle, 14, 22);
+          doc.setDrawColor(200);
+          doc.setLineWidth(0.2);
+          doc.line(14, 25, pageWidth - 14, 25);
+
+          // FOOTER
+          const pageNum = doc.internal.getCurrentPageInfo().pageNumber;
+          const pageStr = "Página " + pageNum;
+          const dateStr = `Generado el: ${new Date().toLocaleDateString('es-ES')}`;
+          
+          doc.setFontSize(9);
+          doc.setTextColor(150);
+          
+          doc.text(dateStr, 14, pageHeight - 15);
+          const pageTextWidth = doc.getStringUnitWidth(pageStr) * doc.getFontSize() / doc.internal.scaleFactor;
+          doc.text(pageStr, pageWidth - 14 - pageTextWidth, pageHeight - 15);
       },
       didDrawCell: (data) => {
         if (data.column.index === 6 && data.cell.section === 'body') {
           const submission = submissions[data.row.index];
           if (submission && submission.signature) {
             try {
-              // Add user signature image to the cell, scaled to fit.
               const cellPadding = 2;
               const cellHeight = data.cell.height - (cellPadding * 2);
               const cellWidth = data.cell.width - (cellPadding * 2);
-
               const imgProps = doc.getImageProperties(submission.signature);
               const aspectRatio = imgProps.width / imgProps.height;
               
@@ -252,13 +277,13 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
       },
     });
 
-    const finalY = (doc as any).lastAutoTable ? (doc as any).lastAutoTable.finalY : 100;
-    const pageHeight = doc.internal.pageSize.getHeight();
+    const finalY = (doc as any).lastAutoTable.finalY;
     let signatureY = finalY + 15;
 
+    // Add new page for signature if it doesn't fit
     if (signatureY + 60 > pageHeight) {
       doc.addPage();
-      signatureY = 20;
+      signatureY = 35; // Position below header margin
     }
     
     try {
@@ -338,20 +363,9 @@ const generateSingleSubmissionPdf = (submission: UserSubmission, adminSignature:
     doc.setTextColor(100, 100, 100);
     doc.text(`Completada el: ${submission.timestamp}`, pageWidth / 2, 150, { align: 'center' });
 
-    // --- SEAL & SIGNATURE AREA ---
+    // --- SIGNATURE AREA ---
     const signatureAreaY = 190;
     const signatureX = (pageWidth / 2) - 40;
-
-    // SEAL
-    const sealX = pageWidth - margin - 35;
-    const sealY = signatureAreaY + 15;
-    doc.setFillColor(224, 231, 255); // indigo-100
-    doc.circle(sealX, sealY, 15, 'F');
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(41, 128, 185);
-    doc.setFontSize(10);
-    doc.text('SELLO DE', sealX, sealY - 2, { align: 'center' });
-    doc.text('FINALIZACIÓN', sealX, sealY + 2, { align: 'center' });
     
     // SIGNATURE
     if (adminSignature) {
@@ -1116,7 +1130,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   return (
     <div className="w-full max-w-7xl mx-auto p-4 md:p-8 space-y-6">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-wrap gap-4 justify-between items-center">
         <h1 className="text-3xl font-bold text-white">Panel de Administrador</h1>
         <button onClick={onLogout} className="flex items-center px-4 py-2 text-sm font-medium text-white bg-slate-600 rounded-lg hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-500">
           <ArrowLeft className="h-4 w-4 mr-2"/>
@@ -1124,13 +1138,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </button>
       </div>
 
-       <div className="flex items-center gap-2 p-1 bg-slate-800/50 border border-slate-700 rounded-lg">
+       <div className="flex flex-wrap justify-center sm:justify-start items-center gap-2 p-1 bg-slate-800/50 border border-slate-700 rounded-lg">
         <TabButton id="submissions" label="Usuarios Registrados" icon={Users} />
         <TabButton id="manage" label="Gestionar Capacitaciones" icon={ClipboardList} />
         <TabButton id="create" label="Crear Nueva Capacitación" icon={PlusCircle} />
       </div>
 
-      <div className="bg-slate-800 p-6 rounded-xl shadow-lg border border-slate-700">
+      <div className="bg-slate-800 p-4 sm:p-6 rounded-xl shadow-lg border border-slate-700">
         {activeTab === 'create' && (
             <div className="max-w-2xl mx-auto">
                 <h2 className="text-xl font-semibold text-gray-200 mb-4">Crear Nueva Capacitación</h2>
@@ -1278,8 +1292,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
                 
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-t border-slate-700 pt-4">
-                    <div className="flex items-center gap-2 bg-slate-700/50 border border-slate-600 rounded-lg p-2 flex-wrap flex-grow sm:flex-grow-0">
-                        <label htmlFor="trainingFilter" className="text-sm font-medium text-gray-300 pl-1 shrink-0">Filtrar:</label>
+                    <div className="flex flex-wrap items-center gap-2 bg-slate-700/50 border border-slate-600 rounded-lg p-2 flex-grow sm:flex-grow-0">
+                        <label htmlFor="trainingFilter" className="text-sm font-medium text-gray-300 pl-1 shrink-0 w-full sm:w-auto">Filtrar:</label>
                         <select
                             id="trainingFilter"
                             value={selectedTrainingFilterId}
