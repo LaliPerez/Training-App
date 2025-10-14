@@ -1,3 +1,4 @@
+
 // FIX: Removed invalid file markers from the beginning and end of the file.
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import ReactDOM from 'react-dom/client';
@@ -179,7 +180,7 @@ const apiService = {
 
 
 // --- SERVICES ---
-const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: string | null, adminSignatureClarification: string, adminJobTitle: string): void => {
+const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: string | null, adminSignatureClarification: string, adminJobTitle: string, trainingName?: string): void => {
   if (!adminSignature || !adminSignatureClarification || !adminJobTitle) {
       alert("Error: La firma y los datos del administrador deben estar configurados para generar el PDF.");
       return;
@@ -192,7 +193,10 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
   try {
     const doc = new jsPDF();
     
-    doc.text('Registro de Asistencia a Capacitaciones', 14, 16);
+    const title = trainingName 
+      ? `Registro de Asistencia - ${trainingName}`
+      : 'Registro de Asistencia a Capacitaciones';
+    doc.text(title, 14, 16);
     
     const tableColumns = ['Nombre', 'Apellido', 'DNI', 'Empresa', 'Capacitación', 'Fecha', 'Firma'];
     const tableRows = submissions.map(sub => [
@@ -785,6 +789,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   
   const [userSubmissions, setUserSubmissions] = useState<UserSubmission[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [selectedTrainingFilterId, setSelectedTrainingFilterId] = useState<string>('all');
+
 
   const adminSignatureRef = useRef<SignatureCanvas>(null);
   
@@ -1021,11 +1027,35 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsRefreshing(false);
   };
 
-  const downloadButtonTitle = userSubmissions.length === 0 
-    ? "No hay registros para descargar" 
+  const submissionsToDownload = useMemo(() => {
+    if (selectedTrainingFilterId === 'all') {
+        return userSubmissions;
+    }
+    return userSubmissions.filter(sub => sub.trainingId === selectedTrainingFilterId);
+  }, [userSubmissions, selectedTrainingFilterId]);
+
+  const handleDownloadFilteredSubmissions = () => {
+      if (submissionsToDownload.length === 0) {
+          alert('No hay registros para la selección actual.');
+          return;
+      }
+      if (!adminSignature || !adminSignatureClarification || !adminJobTitle) {
+          alert("Error: La firma y los datos del administrador deben estar configurados para generar el PDF.");
+          return;
+      }
+
+      const trainingName = selectedTrainingFilterId !== 'all' 
+          ? trainings.find(t => t.id === selectedTrainingFilterId)?.name 
+          : undefined;
+
+      generateSubmissionsPdf(submissionsToDownload, adminSignature, adminSignatureClarification, adminJobTitle, trainingName);
+  };
+    
+  const downloadButtonTitle = submissionsToDownload.length === 0 
+    ? "No hay registros para la selección actual" 
     : (!adminSignature || !adminSignatureClarification || !adminJobTitle) 
     ? "Debe configurar firma, aclaración y cargo para descargar" 
-    : "Descargar constancia de todos los registros";
+    : "Descargar constancia para la selección actual";
 
   return (
     <div className="w-full max-w-6xl mx-auto p-4 md:p-8 space-y-8">
@@ -1184,31 +1214,35 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
           </div>
 
-          <div className="flex gap-2 flex-wrap items-center border-t border-slate-700 pt-4">
-              <button
-                  onClick={() => {
-                      if (userSubmissions.length === 0) {
-                          alert('No hay registros de usuarios para generar el PDF.');
-                          return;
-                      }
-                      if (!adminSignature || !adminSignatureClarification || !adminJobTitle) {
-                          alert("Error: La firma y los datos del administrador deben estar configurados para generar el PDF.");
-                          return;
-                      }
-                      generateSubmissionsPdf(userSubmissions, adminSignature, adminSignatureClarification, adminJobTitle);
-                  }}
-                  disabled={userSubmissions.length === 0 || !adminSignature || !adminSignatureClarification || !adminJobTitle}
-                  title={downloadButtonTitle}
-                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-              >
-                  <FileDown className="h-5 w-5 mr-2" />
-                  Descargar Constancia Gral.
-              </button>
+          <div className="flex flex-wrap items-center gap-4 border-t border-slate-700 pt-4">
+              <div className="flex items-center gap-2">
+                  <label htmlFor="trainingFilter" className="sr-only">Filtrar por capacitación</label>
+                  <select
+                      id="trainingFilter"
+                      value={selectedTrainingFilterId}
+                      onChange={(e) => setSelectedTrainingFilterId(e.target.value)}
+                      className="bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm px-3 py-2 h-10"
+                  >
+                      <option value="all">Todas las Capacitaciones</option>
+                      {trainings.map(t => (
+                          <option key={t.id} value={t.id}>{t.name}</option>
+                      ))}
+                  </select>
+                  <button
+                      onClick={handleDownloadFilteredSubmissions}
+                      disabled={submissionsToDownload.length === 0 || !adminSignature || !adminSignatureClarification || !adminJobTitle}
+                      title={downloadButtonTitle}
+                      className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 h-10"
+                  >
+                      <FileDown className="h-5 w-5 mr-2" />
+                      Descargar PDF
+                  </button>
+              </div>
               <button
                   onClick={handleDeleteAllSubmissions}
                   disabled={userSubmissions.length === 0}
                   title={userSubmissions.length === 0 ? "No hay registros para borrar" : "Borrar todos los registros"}
-                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-red-600 hover:bg-red-700 disabled:bg-slate-600 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-red-600 hover:bg-red-700 disabled:bg-slate-600 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 h-10"
               >
                   <Trash2 className="h-5 w-5 mr-2" />
                   Borrar Todos los Registros
