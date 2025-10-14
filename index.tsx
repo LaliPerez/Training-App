@@ -7,6 +7,10 @@ import SignatureCanvas from 'react-signature-canvas';
 import QRCode from 'qrcode';
 import { ShieldCheck, User, PlusCircle, Users, FileDown, LogOut, Trash2, Edit, X, Share2, Copy, Eye, FileText, CheckCircle, ArrowLeft, Send, LogIn, RefreshCw, Award, ClipboardList, GraduationCap, Building } from 'lucide-react';
 
+const normalizeString = (str: string): string => {
+    if (!str) return '';
+    return str.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+};
 
 // --- TYPES ---
 interface TrainingLink {
@@ -198,7 +202,7 @@ const apiService = {
 
 
 // --- SERVICES ---
-const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: string | null, adminSignatureClarification: string, adminJobTitle: string, trainingName?: string): void => {
+const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: string | null, adminSignatureClarification: string, adminJobTitle: string, trainingName?: string, companyName?: string): void => {
   if (!adminSignature || !adminSignatureClarification || !adminJobTitle) {
       alert("Error: La firma y los datos del administrador deben estar configurados para generar el PDF.");
       return;
@@ -213,13 +217,12 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
     const pageHeight = doc.internal.pageSize.getHeight();
     const pageWidth = doc.internal.pageSize.getWidth();
     
-    const tableColumns = ['Nombre', 'Apellido', 'DNI', 'Empresa', 'Capacitación', 'Fecha', 'Firma'];
-    const tableRows = submissions.map(sub => [
+    const tableColumns = ['#', 'Nombre', 'Apellido', 'DNI', 'Fecha', 'Firma'];
+    const tableRows = submissions.map((sub, index) => [
+      (index + 1).toString(),
       sub.firstName,
       sub.lastName,
       sub.dni,
-      sub.company,
-      sub.trainingName,
       sub.timestamp,
       '', // Placeholder for the signature image
     ]);
@@ -234,7 +237,8 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
       alternateRowStyles: { fillColor: [241, 245, 249] }, // Light Blue-Gray
       styles: { fontSize: 8, cellPadding: 2, valign: 'middle' },
       columnStyles: {
-        6: { cellWidth: 35, minCellHeight: 18 }, // Signature column
+        0: { cellWidth: 8, halign: 'center' },
+        5: { cellWidth: 35, minCellHeight: 18 }, // Signature column
       },
       didDrawPage: (data) => {
           // HEADER
@@ -246,7 +250,19 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
           doc.setFontSize(12);
           doc.setFont('helvetica', 'normal');
           doc.setTextColor(100);
-          const subTitle = trainingName ? `Capacitación: ${trainingName}` : 'Todas las Capacitaciones';
+          
+          let subTitleParts: string[] = [];
+          if (trainingName) {
+              subTitleParts.push(`Capacitación: ${trainingName}`);
+          }
+          if (companyName) {
+              subTitleParts.push(`Empresa: ${companyName}`);
+          }
+          let subTitle = subTitleParts.join(' | ');
+          if (!subTitle) {
+              subTitle = 'Registros Generales';
+          }
+
           doc.text(subTitle, 14, 22);
           doc.setDrawColor(200);
           doc.setLineWidth(0.2);
@@ -265,7 +281,7 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
           doc.text(pageStr, pageWidth - 14 - pageTextWidth, pageHeight - 15);
       },
       didDrawCell: (data) => {
-        if (data.column.index === 6 && data.cell.section === 'body') {
+        if (data.column.index === 5 && data.cell.section === 'body') {
           const submission = submissions[data.row.index];
           if (submission && submission.signature) {
             try {
@@ -530,7 +546,7 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, companies, setTraini
   const availableTrainings = useMemo(() => {
       if (!selectedCompany) return [];
       return trainings.filter(t => 
-          !t.companies || t.companies.length === 0 || t.companies.includes(selectedCompany)
+          t.companies?.includes(selectedCompany)
       );
   }, [trainings, selectedCompany]);
   
@@ -922,9 +938,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [selectedTrainingFilterId, setSelectedTrainingFilterId] = useState<string>('all');
   const [companyFilter, setCompanyFilter] = useState('all');
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
-
+  const [selectedSubmissionIds, setSelectedSubmissionIds] = useState<Set<string>>(new Set());
 
   const adminSignatureRef = useRef<SignatureCanvas>(null);
+  const selectAllCheckboxRef = useRef<HTMLInputElement>(null);
   
   const fetchSubmissions = async () => {
     const subs = await apiService.getSubmissions();
@@ -972,6 +989,49 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setEditedCompanies(editingTraining.companies || []);
     }
   }, [editingTraining]);
+
+  const filteredSubmissions = useMemo(() => {
+    let results = [...userSubmissions]; // Create a shallow copy to sort
+    
+    if (selectedTrainingFilterId !== 'all') {
+        results = results.filter(sub => sub.trainingId === selectedTrainingFilterId);
+    }
+
+    if (companyFilter !== 'all') {
+        const normalizedCompanyFilter = normalizeString(companyFilter);
+        // Special logic to group all variations of 'Aguila' under one filter
+        if (normalizedCompanyFilter.includes('aguila')) {
+            results = results.filter(sub => normalizeString(sub.company).includes('aguila'));
+        } else {
+            // Standard filtering for other companies
+            results = results.filter(sub => normalizeString(sub.company) === normalizedCompanyFilter);
+        }
+    }
+
+    // Sort results by last name, then first name
+    results.sort((a, b) => {
+        const lastNameComp = normalizeString(a.lastName).localeCompare(normalizeString(b.lastName));
+        if (lastNameComp !== 0) return lastNameComp;
+        return normalizeString(a.firstName).localeCompare(normalizeString(b.firstName));
+    });
+
+    return results;
+  }, [userSubmissions, selectedTrainingFilterId, companyFilter]);
+
+  // Effect to clear selections when filters change
+  useEffect(() => {
+    setSelectedSubmissionIds(new Set());
+  }, [filteredSubmissions]);
+
+  // Effect to manage the state of the "select all" checkbox (checked, indeterminate)
+  useEffect(() => {
+    if (selectAllCheckboxRef.current) {
+      const numSelected = selectedSubmissionIds.size;
+      const numFiltered = filteredSubmissions.length;
+      selectAllCheckboxRef.current.checked = numFiltered > 0 && numSelected === numFiltered;
+      selectAllCheckboxRef.current.indeterminate = numSelected > 0 && numSelected < numFiltered;
+    }
+  }, [selectedSubmissionIds, filteredSubmissions]);
 
   // Handlers for creating new training links
   const handleNewLinkChange = (index: number, field: 'name' | 'url', value: string) => {
@@ -1056,7 +1116,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleAddGlobalCompany = async (e: React.FormEvent) => {
       e.preventDefault();
       const trimmed = newGlobalCompany.trim();
-      if (trimmed && !companies.includes(trimmed)) {
+      if (trimmed) {
+          const normalizedNew = normalizeString(trimmed);
+          const alreadyExists = companies.some(c => normalizeString(c) === normalizedNew);
+          if (alreadyExists) {
+              alert(`Error: Una empresa con un nombre similar a "${trimmed}" ya existe. Por favor, revise la lista.`);
+              return;
+          }
           await updateCompanies([...companies, trimmed].sort((a, b) => a.localeCompare(b)));
           setNewGlobalCompany('');
       }
@@ -1164,26 +1230,28 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsRefreshing(false);
   };
   
-  const uniqueCompanies = useMemo(() => {
-    const companies = new Set(userSubmissions.map(sub => sub.company));
-    return Array.from(companies).sort();
-  }, [userSubmissions]);
+  const handleSelectSubmission = (submissionId: string) => {
+    setSelectedSubmissionIds(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(submissionId)) {
+        newSet.delete(submissionId);
+      } else {
+        newSet.add(submissionId);
+      }
+      return newSet;
+    });
+  };
 
-  const filteredSubmissions = useMemo(() => {
-    let results = userSubmissions;
-    
-    if (selectedTrainingFilterId !== 'all') {
-        results = results.filter(sub => sub.trainingId === selectedTrainingFilterId);
+  const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.checked) {
+      const allFilteredIds = new Set(filteredSubmissions.map(s => s.id));
+      setSelectedSubmissionIds(allFilteredIds);
+    } else {
+      setSelectedSubmissionIds(new Set());
     }
+  };
 
-    if (companyFilter !== 'all') {
-        results = results.filter(sub => sub.company === companyFilter);
-    }
-
-    return results;
-  }, [userSubmissions, selectedTrainingFilterId, companyFilter]);
-
-  const handleDownloadFilteredSubmissions = () => {
+  const handleDownloadPdf = () => {
       if (isDownloadingPdf) return;
       
       const isConfigInvalid = !adminSignature || !adminSignatureClarification || !adminJobTitle;
@@ -1191,20 +1259,48 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
           alert("Error: La firma y los datos del administrador deben estar configurados para generar el PDF.");
           return;
       }
-      if (filteredSubmissions.length === 0) {
+
+      const submissionsToPrint = selectedSubmissionIds.size > 0
+        ? userSubmissions.filter(sub => selectedSubmissionIds.has(sub.id))
+        : filteredSubmissions;
+
+      if (submissionsToPrint.length === 0) {
           alert('No hay registros para la selección actual.');
           return;
       }
+      
+      let pdfTrainingName: string | undefined = undefined;
+
+      // Determine a title for the PDF
+      if (selectedSubmissionIds.size > 0) {
+          // If printing a selection, check if they are all from the same training
+          const firstTrainingId = submissionsToPrint[0]?.trainingId;
+          const allSameTraining = submissionsToPrint.every(s => s.trainingId === firstTrainingId);
+          if (allSameTraining) {
+              pdfTrainingName = submissionsToPrint[0]?.trainingName;
+          }
+      } else if (selectedTrainingFilterId !== 'all') {
+          // If printing filtered results, and a specific training is filtered
+          pdfTrainingName = trainings.find(t => t.id === selectedTrainingFilterId)?.name;
+      }
+      
+      let pdfCompanyName: string | undefined = undefined;
+
+      // Determine company name for the PDF
+      if (selectedSubmissionIds.size > 0) {
+          const firstCompany = submissionsToPrint[0]?.company;
+          const allSameCompany = submissionsToPrint.every(s => s.company === firstCompany);
+          if (allSameCompany) {
+              pdfCompanyName = firstCompany;
+          }
+      } else if (companyFilter !== 'all') {
+          pdfCompanyName = companyFilter;
+      }
 
       setIsDownloadingPdf(true);
-      // Use a short timeout to allow the UI to update to the loading state before the potentially blocking PDF generation starts.
       setTimeout(() => {
           try {
-              const trainingName = selectedTrainingFilterId !== 'all' 
-                  ? trainings.find(t => t.id === selectedTrainingFilterId)?.name 
-                  : undefined;
-
-              generateSubmissionsPdf(filteredSubmissions, adminSignature, adminSignatureClarification, adminJobTitle, trainingName);
+              generateSubmissionsPdf(submissionsToPrint, adminSignature, adminSignatureClarification, adminJobTitle, pdfTrainingName, pdfCompanyName);
           } catch(e) {
               console.error("Error al generar PDF:", e);
               alert("Ocurrió un error al generar el PDF. Por favor, revisa la consola para más detalles.")
@@ -1214,16 +1310,25 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }, 50);
   };
     
+  const numSelected = selectedSubmissionIds.size;
+  const submissionsToPrintCount = numSelected > 0 ? numSelected : filteredSubmissions.length;
+  const downloadButtonText = isDownloadingPdf ? 'Generando...' : (numSelected > 0 ? `Descargar PDF (${numSelected})` : 'Descargar PDF');
+  const isDownloadDisabled = isDownloadingPdf || submissionsToPrintCount === 0 || !adminSignature || !adminSignatureClarification || !adminJobTitle;
+  
   const downloadButtonTitle = useMemo(() => {
     if (isDownloadingPdf) return "Generando PDF...";
     if (!adminSignature || !adminSignatureClarification || !adminJobTitle) {
       return "Debe configurar firma, aclaración y cargo para descargar";
     }
-    if (filteredSubmissions.length === 0) {
-      return "No hay registros para la selección actual";
+    if (submissionsToPrintCount === 0) {
+      return "No hay registros seleccionados o filtrados para descargar";
     }
-    return "Descargar constancia general para la selección actual";
-  }, [isDownloadingPdf, adminSignature, adminSignatureClarification, adminJobTitle, filteredSubmissions.length]);
+    if (numSelected > 0) {
+      return `Descargar constancia para ${numSelected} registro(s) seleccionado(s)`;
+    }
+    return "Descargar constancia para todos los registros filtrados";
+  }, [isDownloadingPdf, adminSignature, adminSignatureClarification, adminJobTitle, submissionsToPrintCount, numSelected]);
+
 
   const noFiltersApplied = selectedTrainingFilterId === 'all' && companyFilter === 'all';
 
@@ -1348,7 +1453,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       allAvailableCompanies={companies}
                   />
                   <p className="mt-1 text-xs text-gray-500">
-                      Si se completa, los usuarios deberán seleccionar una empresa de esta lista. Si se deja en blanco, la capacitación será pública para todas las empresas.
+                      Asigne al menos una empresa. Los usuarios solo verán las capacitaciones asignadas a su empresa.
                   </p>
                 </div>
                 <div>
@@ -1548,7 +1653,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 className="bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm px-3 py-2 h-10 w-full"
                             >
                                 <option value="all">Todas las empresas</option>
-                                {uniqueCompanies.map(company => (
+                                {companies.map(company => (
                                     <option key={company} value={company}>{company}</option>
                                 ))}
                             </select>
@@ -1556,12 +1661,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         {/* Download Button */}
                         <div className="relative w-full sm:w-auto" title={downloadButtonTitle}>
                                 <button
-                                    onClick={handleDownloadFilteredSubmissions}
-                                    disabled={isDownloadingPdf || filteredSubmissions.length === 0 || !adminSignature || !adminSignatureClarification || !adminJobTitle}
+                                    onClick={handleDownloadPdf}
+                                    disabled={isDownloadDisabled}
                                     className="w-full sm:w-auto inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 h-10"
                                 >
                                     {isDownloadingPdf ? <RefreshCw className="h-5 w-5 mr-2 animate-spin" /> : <FileDown className="h-5 w-5 mr-2" />}
-                                    {isDownloadingPdf ? 'Generando...' : 'Descargar PDF'}
+                                    {downloadButtonText}
                                 </button>
                             </div>
                     </div>
@@ -1585,6 +1690,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <table className="min-w-full divide-y divide-slate-700">
                             <thead className="bg-slate-900/50">
                             <tr>
+                                <th scope="col" className="px-6 py-3">
+                                    <input
+                                        type="checkbox"
+                                        ref={selectAllCheckboxRef}
+                                        onChange={handleSelectAll}
+                                        className="h-4 w-4 bg-slate-700 border-slate-600 rounded text-indigo-600 focus:ring-indigo-500"
+                                    />
+                                </th>
+                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Apellido</th>
                                 <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Nombre</th>
                                 <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">DNI</th>
                                 <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Empresa</th>
@@ -1595,12 +1709,22 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             </thead>
                             <tbody className="bg-slate-800 divide-y divide-slate-700">
                             {filteredSubmissions.map((sub) => (
-                                <tr key={sub.id} className="hover:bg-slate-700/50" onClick={() => setSelectedSubmission(sub)}>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-white cursor-pointer">{sub.firstName} {sub.lastName}</td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer">{sub.dni}</td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer">{sub.company}</td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer">{sub.trainingName}</td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer">{sub.timestamp}</td>
+                                <tr key={sub.id} className={`transition-colors ${selectedSubmissionIds.has(sub.id) ? 'bg-slate-700' : 'hover:bg-slate-700/50'}`}>
+                                <td className="px-6 py-4 whitespace-nowrap">
+                                    <input
+                                        type="checkbox"
+                                        checked={selectedSubmissionIds.has(sub.id)}
+                                        onChange={() => handleSelectSubmission(sub.id)}
+                                        onClick={(e) => e.stopPropagation()}
+                                        className="h-4 w-4 bg-slate-700 border-slate-600 rounded text-indigo-600 focus:ring-indigo-500"
+                                    />
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-white cursor-pointer" onClick={() => setSelectedSubmission(sub)}>{sub.lastName}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer" onClick={() => setSelectedSubmission(sub)}>{sub.firstName}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer" onClick={() => setSelectedSubmission(sub)}>{sub.dni}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer" onClick={() => setSelectedSubmission(sub)}>{sub.company}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer" onClick={() => setSelectedSubmission(sub)}>{sub.trainingName}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer" onClick={() => setSelectedSubmission(sub)}>{sub.timestamp}</td>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 text-right">
                                     <button 
                                         onClick={(e) => {
@@ -1658,7 +1782,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       allAvailableCompanies={companies}
                   />
                     <p className="mt-1 text-xs text-gray-500">
-                        Si se completa, los usuarios deberán seleccionar una empresa de esta lista. Si se deja en blanco, la capacitación será pública para todas las empresas.
+                        Asigne al menos una empresa. Los usuarios solo verán las capacitaciones asignadas a su empresa.
                     </p>
                 </div>
                 <div>
