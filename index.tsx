@@ -1046,6 +1046,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleDeleteSubmission = async (submissionId: string) => {
     if (window.confirm('¿Estás seguro de que quieres eliminar este registro? Esta acción es irreversible.')) {
       await apiService.deleteSubmission(submissionId);
+      await fetchSubmissions();
     }
   };
 
@@ -1053,6 +1054,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (window.confirm('¿Estás seguro de que quieres eliminar TODOS los registros? Esta acción es irreversible.')) {
         if (window.confirm('Por favor, confirma de nuevo. Esta acción eliminará permanentemente todos los registros de usuarios.')) {
             await apiService.deleteAllSubmissions();
+            await fetchSubmissions();
         }
     }
   };
