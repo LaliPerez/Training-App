@@ -5,7 +5,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import SignatureCanvas from 'react-signature-canvas';
 import QRCode from 'qrcode';
-import { ShieldCheck, User, PlusCircle, Users, FileDown, LogOut, Trash2, Edit, X, Share2, Copy, Eye, FileText, CheckCircle, ArrowLeft, Send, LogIn, RefreshCw } from 'lucide-react';
+import { ShieldCheck, User, PlusCircle, Users, FileDown, LogOut, Trash2, Edit, X, Share2, Copy, Eye, FileText, CheckCircle, ArrowLeft, Send, LogIn, RefreshCw, Award, ClipboardList, GraduationCap } from 'lucide-react';
 
 
 // --- TYPES ---
@@ -273,12 +273,12 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
         doc.text("Error al cargar la firma.", 14, signatureY + 20);
     }
 
-    const pdfBlob = doc.output('blob');
-    const url = URL.createObjectURL(pdfBlob);
-    const newWindow = window.open(url, '_blank');
-    if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
-        alert('Tu navegador ha bloqueado la apertura de una nueva pestaña. Por favor, permite las ventanas emergentes para este sitio e inténtalo de nuevo.');
-    }
+    const pdfFileName = (trainingName 
+      ? `asistencia_${trainingName.replace(/\s+/g, '_')}`
+      : 'asistencia_general'
+    ).toLowerCase() + '.pdf';
+    
+    doc.save(pdfFileName);
 
   } catch(e) {
     console.error("Fallo al generar el PDF general de registros:", e);
@@ -286,60 +286,97 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
   }
 };
 
-
 const generateSingleSubmissionPdf = (submission: UserSubmission, adminSignature: string | null, adminSignatureClarification: string, adminJobTitle: string): void => {
   try {
     const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 15;
+
+    // --- BORDER ---
+    doc.setDrawColor(107, 114, 128); // gray-500
+    doc.setLineWidth(1);
+    doc.rect(margin / 2, margin / 2, pageWidth - margin, pageHeight - margin);
+    doc.setLineWidth(0.2);
+    doc.rect(margin / 2 + 2, margin / 2 + 2, pageWidth - margin - 4, pageHeight - margin - 4);
     
-    doc.setFontSize(22);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Constancia de Capacitación', doc.internal.pageSize.getWidth() / 2, 30, { align: 'center' });
+    // --- HEADER ---
+    doc.setFont('times', 'bold');
+    doc.setFontSize(36);
+    doc.setTextColor(41, 128, 185); // A professional blue
+    doc.text('Certificado de Finalización', pageWidth / 2, 40, { align: 'center' });
 
-    doc.setFontSize(12);
+    // --- SUB-HEADER ---
     doc.setFont('helvetica', 'normal');
-    doc.text('Por la presente se certifica que:', 20, 60);
+    doc.setFontSize(12);
+    doc.setTextColor(100, 100, 100);
+    doc.text('Por la presente se certifica que:', pageWidth / 2, 60, { align: 'center' });
 
+    // --- RECIPIENT NAME ---
+    doc.setFont('times', 'bold');
+    doc.setFontSize(28);
+    doc.setTextColor(0, 0, 0);
+    doc.text(`${submission.firstName} ${submission.lastName}`, pageWidth / 2, 85, { align: 'center' });
+    
+    // --- RECIPIENT DETAILS ---
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(12);
+    doc.text(`Con DNI ${submission.dni}, de la empresa ${submission.company},`, pageWidth / 2, 95, { align: 'center' });
+
+    // --- COMPLETION STATEMENT ---
+    doc.text('ha completado satisfactoriamente la capacitación de:', pageWidth / 2, 120, { align: 'center' });
+
+    // --- TRAINING NAME ---
+    doc.setFont('helvetica', 'bold');
     doc.setFontSize(18);
-    doc.setFont('helvetica', 'bold');
-    doc.text(`${submission.firstName} ${submission.lastName}`, doc.internal.pageSize.getWidth() / 2, 80, { align: 'center' });
+    doc.setTextColor(41, 128, 185);
+    doc.text(`"${submission.trainingName}"`, pageWidth / 2, 135, { align: 'center' });
 
-    doc.setFontSize(12);
+    // --- COMPLETION DATE ---
     doc.setFont('helvetica', 'normal');
-    doc.text(`Con DNI ${submission.dni}, de la empresa ${submission.company},`, doc.internal.pageSize.getWidth() / 2, 90, { align: 'center' });
+    doc.setFontSize(12);
+    doc.setTextColor(100, 100, 100);
+    doc.text(`Completada el: ${submission.timestamp}`, pageWidth / 2, 150, { align: 'center' });
+
+    // --- SEAL & SIGNATURE AREA ---
+    const signatureAreaY = 190;
+    const signatureX = (pageWidth / 2) - 40;
+
+    // SEAL
+    const sealX = pageWidth - margin - 35;
+    const sealY = signatureAreaY + 15;
+    doc.setFillColor(224, 231, 255); // indigo-100
+    doc.circle(sealX, sealY, 15, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(41, 128, 185);
+    doc.setFontSize(10);
+    doc.text('SELLO DE', sealX, sealY - 2, { align: 'center' });
+    doc.text('FINALIZACIÓN', sealX, sealY + 2, { align: 'center' });
     
-    doc.text('ha completado satisfactoriamente la capacitación:', 20, 110);
-
-    doc.setFontSize(16);
-    doc.setFont('helvetica', 'bold');
-    doc.text(`"${submission.trainingName}"`, doc.internal.pageSize.getWidth() / 2, 125, { align: 'center' });
-
-    doc.setFontSize(12);
-    doc.setFont('helvetica', 'normal');
-    doc.text(`Completada el: ${submission.timestamp}`, 20, 145);
-
-    const signatureY = 180;
+    // SIGNATURE
     if (adminSignature) {
-        const signatureX = (doc.internal.pageSize.getWidth() / 2) - 30;
-        doc.addImage(adminSignature, 'PNG', signatureX, signatureY, 60, 30);
-        doc.setDrawColor(0); // Black line
-        doc.line(signatureX, signatureY + 33, signatureX + 60, signatureY + 33); // Line under signature
-        if (adminSignatureClarification) {
-            doc.setFont('helvetica', 'bold');
-            doc.text(adminSignatureClarification, doc.internal.pageSize.getWidth() / 2, signatureY + 38, { align: 'center'});
-        }
-        if (adminJobTitle) {
-            doc.setFontSize(11);
-            doc.setFont('helvetica', 'italic');
-            doc.text(adminJobTitle, doc.internal.pageSize.getWidth() / 2, signatureY + 44, { align: 'center'});
-        }
+      try {
+        doc.addImage(adminSignature, 'PNG', signatureX, signatureAreaY, 80, 40);
+      } catch (e) { console.error("Could not add admin signature image to PDF", e); }
     }
+    
+    doc.setDrawColor(0); // Black line
+    doc.setLineWidth(0.2);
+    doc.line(signatureX, signatureAreaY + 43, signatureX + 80, signatureAreaY + 43);
 
-    const pdfBlob = doc.output('blob');
-    const url = URL.createObjectURL(pdfBlob);
-    const newWindow = window.open(url, '_blank');
-    if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
-        alert('Tu navegador ha bloqueado la apertura de una nueva pestaña. Por favor, permite las ventanas emergentes para este sitio e inténtalo de nuevo.');
-    }
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.setTextColor(0, 0, 0);
+    doc.text(adminSignatureClarification, signatureX + 40, signatureAreaY + 50, { align: 'center' });
+
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(10);
+    doc.setTextColor(100, 100, 100);
+    doc.text(adminJobTitle, signatureX + 40, signatureAreaY + 56, { align: 'center' });
+    
+    const pdfFileName = `constancia_${submission.trainingName.replace(/\s+/g, '_')}_${submission.dni}.pdf`.toLowerCase();
+    doc.save(pdfFileName);
+
   } catch (e) {
     console.error("Error al generar o mostrar el PDF:", e);
     alert("Ocurrió un error al generar la constancia. Por favor, inténtalo de nuevo o contacta al administrador.");
@@ -552,7 +589,7 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateFor
                             }}
                             disabled={downloadDisabled}
                             title={downloadTitle}
-                            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-slate-500 hover:bg-slate-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-400 disabled:bg-slate-600 disabled:cursor-not-allowed"
+                            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-slate-500 hover:bg-slate-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-400 disabled:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             <FileDown className="h-4 w-4 mr-2" />
                             {isLoadingAdminConfig ? 'Cargando...' : 'Descargar Mi Constancia'}
@@ -633,7 +670,7 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateFor
                     <button 
                         type="submit" 
                         disabled={!formData.signature || isSubmitting}
-                        className="w-full flex justify-center items-center py-3 px-4 border border-transparent rounded-md shadow-sm text-base font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-slate-600 disabled:cursor-not-allowed">
+                        className="w-full flex justify-center items-center py-3 px-4 border border-transparent rounded-md shadow-sm text-base font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed">
                         <Send className="h-5 w-5 mr-2" />
                         {isSubmitting ? 'Enviando...' : 'Enviar Registro'}
                     </button>
@@ -763,6 +800,7 @@ interface AdminDashboardProps {
 const AdminDashboard: React.FC<AdminDashboardProps> = ({ 
     trainings, addTraining, updateTraining, deleteTraining, onLogout
 }) => {
+  const [activeTab, setActiveTab] = useState('submissions');
   const [trainingName, setTrainingName] = useState('');
   const [newTrainingLinks, setNewTrainingLinks] = useState<LinkInput[]>([{ tempId: Date.now(), name: '', url: '' }]);
   const [feedback, setFeedback] = useState('');
@@ -820,7 +858,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const intervalId = setInterval(() => {
         fetchSubmissions();
         fetchAdminConfig();
-    }, 5000); // Poll every 5 seconds for updates
+    }, 5000); // Poll every 5 seconds
 
     return () => {
         clearInterval(intervalId); // Cleanup on unmount
@@ -949,21 +987,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     });
   };
 
-  const openUserView = () => {
-    if (trainings.length === 0) {
-        alert("No hay capacitaciones para previsualizar. Crea una primero.");
-        return;
-    }
-    const pristineTrainings = trainings.map(training => ({
-      ...training,
-      links: training.links.map(link => ({...link, viewed: false }))
-    }));
-
-    const data = btoa(encodeURIComponent(JSON.stringify(pristineTrainings)));
-    const userViewUrl = `${window.location.origin}${window.location.pathname}?data=${data}`;
-    window.open(userViewUrl, '_blank');
-  };
-
   const handleSaveAdminSignature = async () => {
     if (adminSignatureRef.current) {
       if (adminSignatureRef.current.isEmpty()) {
@@ -1037,16 +1060,18 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleDownloadFilteredSubmissions = () => {
       if (isDownloadingPdf) return;
       
+      const isConfigInvalid = !adminSignature || !adminSignatureClarification || !adminJobTitle;
+      if (isConfigInvalid) {
+          alert("Error: La firma y los datos del administrador deben estar configurados para generar el PDF.");
+          return;
+      }
       if (filteredSubmissions.length === 0) {
           alert('No hay registros para la selección actual.');
           return;
       }
-      if (!adminSignature || !adminSignatureClarification || !adminJobTitle) {
-          alert("Error: La firma y los datos del administrador deben estar configurados para generar el PDF.");
-          return;
-      }
 
       setIsDownloadingPdf(true);
+      // Use a short timeout to allow the UI to update to the loading state before the potentially blocking PDF generation starts.
       setTimeout(() => {
           try {
               const trainingName = selectedTrainingFilterId !== 'all' 
@@ -1071,12 +1096,26 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (filteredSubmissions.length === 0) {
       return "No hay registros para la selección actual";
     }
-    return "Descargar constancia para la selección actual";
+    return "Descargar constancia general para la selección actual";
   }, [isDownloadingPdf, adminSignature, adminSignatureClarification, adminJobTitle, filteredSubmissions.length]);
 
 
+  const TabButton = ({ id, label, icon: Icon }) => (
+    <button
+      onClick={() => setActiveTab(id)}
+      className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+        activeTab === id
+          ? 'bg-slate-700 text-white'
+          : 'text-gray-400 hover:bg-slate-800 hover:text-white'
+      }`}
+    >
+      <Icon className="h-4 w-4" />
+      {label}
+    </button>
+  );
+
   return (
-    <div className="w-full max-w-6xl mx-auto p-4 md:p-8 space-y-8">
+    <div className="w-full max-w-7xl mx-auto p-4 md:p-8 space-y-6">
       <div className="flex justify-between items-center">
         <h1 className="text-3xl font-bold text-white">Panel de Administrador</h1>
         <button onClick={onLogout} className="flex items-center px-4 py-2 text-sm font-medium text-white bg-slate-600 rounded-lg hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-500">
@@ -1085,249 +1124,251 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        <div className="space-y-8">
-          <div className="bg-slate-800 p-6 rounded-xl shadow-lg border border-slate-700">
-            <h2 className="text-xl font-semibold text-gray-200 mb-4">Crear Nueva Capacitación</h2>
-            <form onSubmit={handleAddTraining} className="space-y-4">
-              <div>
-                <label htmlFor="trainingName" className="block text-sm font-medium text-gray-300">Nombre de la Capacitación</label>
-                <input
-                  id="trainingName"
-                  type="text"
-                  value={trainingName}
-                  onChange={(e) => setTrainingName(e.target.value)}
-                  placeholder="Ej: Inducción de Seguridad"
-                  required
-                  className="mt-1 block w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                />
-              </div>
-               <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-2">Enlaces</label>
-                  <div className="space-y-3">
-                      {newTrainingLinks.map((link, index) => (
-                          <div key={link.tempId} className="flex items-center gap-2 p-2 bg-slate-700/50 rounded-md border border-slate-600">
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 flex-grow">
-                                  <input
-                                      type="text"
-                                      value={link.name}
-                                      onChange={(e) => handleNewLinkChange(index, 'name', e.target.value)}
-                                      placeholder={`Nombre del Enlace ${index + 1} (Opcional)`}
-                                      className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                                  />
-                                  <input
-                                      type="url"
-                                      value={link.url}
-                                      onChange={(e) => handleNewLinkChange(index, 'url', e.target.value)}
-                                      placeholder="https://ejemplo.com/recurso"
-                                      required
-                                      className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                                  />
-                              </div>
-                              <button
-                                  type="button"
-                                  onClick={() => removeNewLink(index)}
-                                  disabled={newTrainingLinks.length <= 1}
-                                  className="p-2 text-red-400 hover:text-red-300 disabled:text-gray-600 disabled:cursor-not-allowed hover:bg-red-900/30 rounded-full transition-colors flex-shrink-0"
-                                  title="Eliminar enlace"
-                              >
-                                  <Trash2 className="h-4 w-4" />
-                              </button>
-                          </div>
-                      ))}
-                  </div>
-                  <button
-                      type="button"
-                      onClick={addNewLink}
-                      className="mt-3 inline-flex items-center px-3 py-1.5 border border-slate-600 text-xs font-medium rounded-md shadow-sm text-gray-300 bg-slate-700 hover:bg-slate-600 focus:outline-none"
-                  >
-                      <PlusCircle className="h-4 w-4 mr-2" />
-                      Añadir Otro Enlace
-                  </button>
-              </div>
+       <div className="flex items-center gap-2 p-1 bg-slate-800/50 border border-slate-700 rounded-lg">
+        <TabButton id="submissions" label="Usuarios Registrados" icon={Users} />
+        <TabButton id="manage" label="Gestionar Capacitaciones" icon={ClipboardList} />
+        <TabButton id="create" label="Crear Nueva Capacitación" icon={PlusCircle} />
+      </div>
 
-              <div className="flex items-center justify-between">
-                <button
-                  type="submit"
-                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                >
-                  <PlusCircle className="h-5 w-5 mr-2" />
-                  Agregar Capacitación
-                </button>
-                {feedback && <p className="text-sm text-green-500">{feedback}</p>}
-              </div>
-            </form>
-          </div>
-          
-          <div className="bg-slate-800 p-6 rounded-xl shadow-lg border border-slate-700">
-            <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl font-semibold text-gray-200">Gestionar Capacitaciones</h2>
-                <div className="flex items-center gap-2">
+      <div className="bg-slate-800 p-6 rounded-xl shadow-lg border border-slate-700">
+        {activeTab === 'create' && (
+            <div className="max-w-2xl mx-auto">
+                <h2 className="text-xl font-semibold text-gray-200 mb-4">Crear Nueva Capacitación</h2>
+                <form onSubmit={handleAddTraining} className="space-y-4">
+                <div>
+                    <label htmlFor="trainingName" className="block text-sm font-medium text-gray-300">Nombre de la Capacitación</label>
+                    <input
+                    id="trainingName"
+                    type="text"
+                    value={trainingName}
+                    onChange={(e) => setTrainingName(e.target.value)}
+                    placeholder="Ej: Inducción de Seguridad"
+                    required
+                    className="mt-1 block w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                    />
+                </div>
+                <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">Enlaces</label>
+                    <div className="space-y-3">
+                        {newTrainingLinks.map((link, index) => (
+                            <div key={link.tempId} className="flex items-center gap-2 p-2 bg-slate-700/50 rounded-md border border-slate-600">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 flex-grow">
+                                    <input
+                                        type="text"
+                                        value={link.name}
+                                        onChange={(e) => handleNewLinkChange(index, 'name', e.target.value)}
+                                        placeholder={`Nombre del Enlace ${index + 1} (Opcional)`}
+                                        className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                                    />
+                                    <input
+                                        type="url"
+                                        value={link.url}
+                                        onChange={(e) => handleNewLinkChange(index, 'url', e.target.value)}
+                                        placeholder="https://ejemplo.com/recurso"
+                                        required
+                                        className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                                    />
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => removeNewLink(index)}
+                                    disabled={newTrainingLinks.length <= 1}
+                                    className="p-2 text-red-400 hover:text-red-300 disabled:text-gray-600 disabled:cursor-not-allowed hover:bg-red-900/30 rounded-full transition-colors flex-shrink-0"
+                                    title="Eliminar enlace"
+                                >
+                                    <Trash2 className="h-4 w-4" />
+                                </button>
+                            </div>
+                        ))}
+                    </div>
                     <button
-                        onClick={openUserView}
-                        disabled={trainings.length === 0}
-                        title={trainings.length === 0 ? "Crea una capacitación para previsualizar" : "Previsualizar cómo ven los usuarios"}
-                        className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md shadow-sm text-white bg-sky-600 hover:bg-sky-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-sky-500 disabled:bg-slate-600 disabled:cursor-not-allowed"
+                        type="button"
+                        onClick={addNewLink}
+                        className="mt-3 inline-flex items-center px-3 py-1.5 border border-slate-600 text-xs font-medium rounded-md shadow-sm text-gray-300 bg-slate-700 hover:bg-slate-600 focus:outline-none"
                     >
-                        <Eye className="h-4 w-4 mr-2" />
-                        Vista de Usuario
+                        <PlusCircle className="h-4 w-4 mr-2" />
+                        Añadir Otro Enlace
                     </button>
                 </div>
-            </div>
-            <div className="space-y-3 max-h-96 overflow-y-auto">
-              {trainings.length > 0 ? (
-                trainings.map(training => (
-                  <div key={training.id} className="flex items-center justify-between p-3 bg-slate-700/50 rounded-lg border border-slate-600">
-                    <span className="font-medium text-gray-200 truncate pr-2" title={training.name}>{training.name}</span>
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      <button onClick={() => handleShare(training)} className="p-2 text-teal-400 hover:text-teal-300 hover:bg-teal-900/30 rounded-full transition-colors" title="Compartir">
-                        <Share2 className="h-4 w-4" />
-                      </button>
-                      <button onClick={() => setEditingTraining(training)} className="p-2 text-blue-400 hover:text-blue-300 hover:bg-blue-900/30 rounded-full transition-colors" title="Editar">
-                        <Edit className="h-4 w-4" />
-                      </button>
-                      <button onClick={() => handleDeleteTraining(training.id)} className="p-2 text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded-full transition-colors" title="Eliminar">
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <p className="text-sm text-gray-500 text-center py-4">No hay capacitaciones creadas.</p>
-              )}
-            </div>
-          </div>
-        </div>
 
-        <div className="bg-slate-800 p-6 rounded-xl shadow-lg border border-slate-700">
-          <div className="flex flex-col md:flex-row justify-between md:items-center mb-4 gap-4">
-            <div className="flex items-center gap-3">
-              <h2 className="text-xl font-semibold text-gray-200">
-                Usuarios Registrados 
-                <span className="text-base font-normal text-gray-400 ml-2">
-                  ({selectedTrainingFilterId === 'all' 
-                    ? userSubmissions.length 
-                    : `${filteredSubmissions.length} de ${userSubmissions.length}`})
-                </span>
-              </h2>
-              <button 
-                  onClick={handleRefresh} 
-                  disabled={isRefreshing} 
-                  title="Actualizar registros"
-                  className="p-1.5 text-gray-400 hover:text-white rounded-full hover:bg-slate-700 transition-colors disabled:cursor-wait"
-              >
-                  <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-              </button>
+                <div className="flex items-center justify-between">
+                    <button
+                    type="submit"
+                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                    >
+                    <PlusCircle className="h-5 w-5 mr-2" />
+                    Agregar Capacitación
+                    </button>
+                    {feedback && <p className="text-sm text-green-500">{feedback}</p>}
+                </div>
+                </form>
             </div>
-              <div className="flex gap-2 flex-wrap items-center">
-                  <button 
-                    onClick={() => setShowAdminSignatureModal(true)}
-                    className="inline-flex items-center px-4 py-2 border border-slate-600 text-sm font-medium rounded-md shadow-sm text-gray-300 bg-slate-700 hover:bg-slate-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                  >
-                    <Edit className="h-4 w-4 mr-2" />
-                    {adminSignature ? 'Cambiar Firma' : 'Configurar Firma'}
-                  </button>
-                  {adminSignature && (
-                    <div className="flex items-center gap-2 border border-slate-700 rounded-md bg-slate-700 p-1">
-                      <img src={adminSignature} alt="Admin signature preview" className="h-10 w-20 object-contain bg-white rounded-sm" />
-                       <div className="pr-2">
-                        {adminSignatureClarification && <p className="text-xs text-gray-300">{adminSignatureClarification}</p>}
-                        {adminJobTitle && <p className="text-xs text-gray-400 italic">{adminJobTitle}</p>}
-                       </div>
-                    </div>
-                  )}
-              </div>
-          </div>
-          
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-t border-slate-700 pt-4">
-              <div className="flex items-center gap-2 bg-slate-700/50 border border-slate-600 rounded-lg p-2 flex-wrap">
-                  <label htmlFor="trainingFilter" className="text-sm font-medium text-gray-300 pl-1 shrink-0">Filtrar:</label>
-                  <select
-                      id="trainingFilter"
-                      value={selectedTrainingFilterId}
-                      onChange={(e) => setSelectedTrainingFilterId(e.target.value)}
-                      className="bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm px-3 py-2 h-10 w-full sm:w-auto flex-grow"
-                  >
-                      <option value="all">Todas las Capacitaciones</option>
-                      {trainings.map(t => (
-                          <option key={t.id} value={t.id}>{t.name}</option>
-                      ))}
-                  </select>
-                  <button
-                      onClick={handleDownloadFilteredSubmissions}
-                      disabled={isDownloadingPdf || filteredSubmissions.length === 0 || !adminSignature || !adminSignatureClarification || !adminJobTitle}
-                      title={downloadButtonTitle}
-                      className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 h-10 w-full sm:w-auto"
-                  >
-                      {isDownloadingPdf ? <RefreshCw className="h-5 w-5 mr-2 animate-spin" /> : <FileDown className="h-5 w-5 mr-2" />}
-                      {isDownloadingPdf ? 'Generando...' : 'Descargar PDF'}
-                  </button>
-              </div>
+        )}
 
-              <button
-                  onClick={handleDeleteAllSubmissions}
-                  disabled={userSubmissions.length === 0}
-                  title={userSubmissions.length === 0 ? "No hay registros para borrar" : "Borrar todos los registros"}
-                  className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-red-600 hover:bg-red-700 disabled:bg-slate-600 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 h-10"
-              >
-                  <Trash2 className="h-5 w-5 mr-2" />
-                  Borrar Todo
-              </button>
-          </div>
-
-          <div className="overflow-x-auto mt-4">
-            {userSubmissions.length > 0 ? (
-              <>
-                {filteredSubmissions.length > 0 ? (
-                  <table className="min-w-full divide-y divide-slate-700">
-                    <thead className="bg-slate-700">
-                      <tr>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Nombre</th>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">DNI</th>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Capacitación</th>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Fecha</th>
-                        <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">Acciones</th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-slate-800 divide-y divide-slate-700">
-                      {filteredSubmissions.map((sub) => (
-                        <tr key={sub.id} className="hover:bg-slate-700">
-                          <td onClick={() => setSelectedSubmission(sub)} className="px-6 py-4 whitespace-nowrap text-sm font-medium text-white cursor-pointer">{sub.firstName} {sub.lastName}</td>
-                          <td onClick={() => setSelectedSubmission(sub)} className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer">{sub.dni}</td>
-                          <td onClick={() => setSelectedSubmission(sub)} className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer">{sub.trainingName}</td>
-                          <td onClick={() => setSelectedSubmission(sub)} className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer">{sub.timestamp}</td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 text-right">
-                            <button 
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleDeleteSubmission(sub.id);
-                                }}
-                                title="Eliminar registro"
-                                className="p-2 text-red-500 hover:text-red-400 hover:bg-red-900/30 rounded-full transition-colors"
-                            >
+        {activeTab === 'manage' && (
+            <div>
+                 <h2 className="text-xl font-semibold text-gray-200 mb-4">Gestionar Capacitaciones</h2>
+                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {trainings.length > 0 ? (
+                        trainings.map(training => (
+                        <div key={training.id} className="flex flex-col justify-between p-4 bg-slate-700/50 rounded-lg border border-slate-600">
+                            <div>
+                                <h3 className="font-bold text-lg text-indigo-400 truncate" title={training.name}>{training.name}</h3>
+                                <p className="text-sm text-gray-400">{training.links.length} materiale(s)</p>
+                            </div>
+                            <div className="flex items-center gap-2 mt-4 border-t border-slate-600 pt-3">
+                            <button onClick={() => handleShare(training)} className="flex-1 inline-flex items-center justify-center gap-2 px-3 py-1.5 text-xs font-medium rounded-md text-teal-300 bg-teal-900/40 hover:bg-teal-900/60 transition-colors" title="Compartir">
+                                <Share2 className="h-4 w-4" /> Compartir
+                            </button>
+                            <button onClick={() => setEditingTraining(training)} className="p-2 text-blue-400 hover:text-blue-300 hover:bg-blue-900/30 rounded-full transition-colors" title="Editar">
+                                <Edit className="h-4 w-4" />
+                            </button>
+                            <button onClick={() => handleDeleteTraining(training.id)} className="p-2 text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded-full transition-colors" title="Eliminar">
                                 <Trash2 className="h-4 w-4" />
                             </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                ) : (
-                  <div className="text-center py-8">
-                    <Users className="mx-auto h-12 w-12 text-gray-500" />
-                    <p className="mt-2 text-sm text-gray-500">No se encontraron registros para la capacitación seleccionada.</p>
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="text-center py-8">
-                <Users className="mx-auto h-12 w-12 text-gray-500" />
-                <p className="mt-2 text-sm text-gray-500">Aún no hay registros de usuarios.</p>
-                <p className="mt-1 text-xs text-gray-600">Cuando un usuario complete una capacitación, su registro aparecerá aquí automáticamente.</p>
-              </div>
-            )}
-          </div>
-        </div>
+                            </div>
+                        </div>
+                        ))
+                    ) : (
+                        <p className="text-sm text-gray-500 text-center py-4 col-span-full">No hay capacitaciones creadas.</p>
+                    )}
+                </div>
+            </div>
+        )}
+
+        {activeTab === 'submissions' && (
+            <div>
+                <div className="flex flex-col md:flex-row justify-between md:items-center mb-4 gap-4">
+                    <div className="flex items-center gap-3">
+                    <h2 className="text-xl font-semibold text-gray-200">
+                        Usuarios Registrados 
+                        <span className="text-base font-normal text-gray-400 ml-2">
+                        ({selectedTrainingFilterId === 'all' 
+                            ? userSubmissions.length 
+                            : `${filteredSubmissions.length} de ${userSubmissions.length}`})
+                        </span>
+                    </h2>
+                    <button 
+                        onClick={handleRefresh} 
+                        disabled={isRefreshing} 
+                        title="Actualizar registros"
+                        className="p-1.5 text-gray-400 hover:text-white rounded-full hover:bg-slate-700 transition-colors disabled:cursor-wait"
+                    >
+                        <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+                    </button>
+                    </div>
+                    <div className="flex gap-2 flex-wrap items-center">
+                        <button 
+                            onClick={() => setShowAdminSignatureModal(true)}
+                            className="inline-flex items-center px-4 py-2 border border-slate-600 text-sm font-medium rounded-md shadow-sm text-gray-300 bg-slate-700 hover:bg-slate-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                        >
+                            <Edit className="h-4 w-4 mr-2" />
+                            {adminSignature ? 'Gestionar Firma' : 'Configurar Firma'}
+                        </button>
+                        {adminSignature && (
+                            <div className="flex items-center gap-2 border border-slate-700 rounded-md bg-slate-700 p-1">
+                            <img src={adminSignature} alt="Admin signature preview" className="h-10 w-20 object-contain bg-white rounded-sm" />
+                            <div className="pr-2">
+                                {adminSignatureClarification && <p className="text-xs text-gray-300">{adminSignatureClarification}</p>}
+                                {adminJobTitle && <p className="text-xs text-gray-400 italic">{adminJobTitle}</p>}
+                            </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+                
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-t border-slate-700 pt-4">
+                    <div className="flex items-center gap-2 bg-slate-700/50 border border-slate-600 rounded-lg p-2 flex-wrap flex-grow sm:flex-grow-0">
+                        <label htmlFor="trainingFilter" className="text-sm font-medium text-gray-300 pl-1 shrink-0">Filtrar:</label>
+                        <select
+                            id="trainingFilter"
+                            value={selectedTrainingFilterId}
+                            onChange={(e) => setSelectedTrainingFilterId(e.target.value)}
+                            className="bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm px-3 py-2 h-10 w-full sm:w-auto flex-grow"
+                        >
+                            <option value="all">Todas las Capacitaciones</option>
+                            {trainings.map(t => (
+                                <option key={t.id} value={t.id}>{t.name}</option>
+                            ))}
+                        </select>
+                        <div className="relative w-full sm:w-auto" title={downloadButtonTitle}>
+                                <button
+                                    onClick={handleDownloadFilteredSubmissions}
+                                    disabled={isDownloadingPdf || filteredSubmissions.length === 0 || !adminSignature || !adminSignatureClarification || !adminJobTitle}
+                                    className="w-full sm:w-auto inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 h-10"
+                                >
+                                    {isDownloadingPdf ? <RefreshCw className="h-5 w-5 mr-2 animate-spin" /> : <FileDown className="h-5 w-5 mr-2" />}
+                                    {isDownloadingPdf ? 'Generando...' : 'Descargar PDF'}
+                                </button>
+                            </div>
+                    </div>
+
+                    <div className="relative" title={userSubmissions.length === 0 ? "No hay registros para borrar" : "Borrar todos los registros"}>
+                        <button
+                            onClick={handleDeleteAllSubmissions}
+                            disabled={userSubmissions.length === 0}
+                            className="w-full sm:w-auto inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-red-600 hover:bg-red-700 disabled:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 h-10"
+                        >
+                            <Trash2 className="h-5 w-5 mr-2" />
+                            Borrar Todo
+                        </button>
+                    </div>
+                </div>
+
+                <div className="overflow-x-auto mt-4">
+                    {userSubmissions.length > 0 ? (
+                    <>
+                        {filteredSubmissions.length > 0 ? (
+                        <table className="min-w-full divide-y divide-slate-700">
+                            <thead className="bg-slate-900/50">
+                            <tr>
+                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Nombre</th>
+                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">DNI</th>
+                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Capacitación</th>
+                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Fecha</th>
+                                <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">Acciones</th>
+                            </tr>
+                            </thead>
+                            <tbody className="bg-slate-800 divide-y divide-slate-700">
+                            {filteredSubmissions.map((sub) => (
+                                <tr key={sub.id} className="hover:bg-slate-700/50" onClick={() => setSelectedSubmission(sub)}>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-white cursor-pointer">{sub.firstName} {sub.lastName}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer">{sub.dni}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer">{sub.trainingName}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer">{sub.timestamp}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 text-right">
+                                    <button 
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleDeleteSubmission(sub.id);
+                                        }}
+                                        title="Eliminar registro"
+                                        className="p-2 text-red-500 hover:text-red-400 hover:bg-red-900/30 rounded-full transition-colors"
+                                    >
+                                        <Trash2 className="h-4 w-4" />
+                                    </button>
+                                </td>
+                                </tr>
+                            ))}
+                            </tbody>
+                        </table>
+                        ) : (
+                        <div className="text-center py-8">
+                            <Users className="mx-auto h-12 w-12 text-gray-500" />
+                            <p className="mt-2 text-sm text-gray-500">No se encontraron registros para la capacitación seleccionada.</p>
+                        </div>
+                        )}
+                    </>
+                    ) : (
+                    <div className="text-center py-8">
+                        <Users className="mx-auto h-12 w-12 text-gray-500" />
+                        <p className="mt-2 text-sm text-gray-500">Aún no hay registros de usuarios.</p>
+                        <p className="mt-1 text-xs text-gray-600">Cuando un usuario complete una capacitación, su registro aparecerá aquí automáticamente.</p>
+                    </div>
+                    )}
+                </div>
+            </div>
+        )}
       </div>
       
       {editingTraining && (
