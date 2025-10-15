@@ -218,11 +218,11 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
     const pageWidth = doc.internal.pageSize.getWidth();
     const headerHeight = 28;
     
-    const tableColumns = ['#', 'Apellido', 'Nombre', 'DNI', 'Fecha', 'Firma'];
+    const tableColumns = ['#', 'Nombre', 'Apellido', 'DNI', 'Fecha', 'Firma'];
     const tableRows = submissions.map((sub, index) => [
       (index + 1).toString(),
-      sub.lastName,
       sub.firstName,
+      sub.lastName,
       sub.dni,
       sub.timestamp,
       '', // Placeholder for the signature image
