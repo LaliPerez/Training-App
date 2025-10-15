@@ -590,12 +590,26 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, companies, setTraini
     });
   };
   
-  const handleViewLink = (index: number) => {
-    if (selectedTraining) {
-      handleLinkClick(selectedTraining.id, selectedTraining.links[index].id);
+  const handleOpenLink = (index: number) => {
+    if (!selectedTraining) return;
+
+    const linkToOpen = selectedTraining.links[index];
+    
+    // Always mark the link as viewed first
+    handleLinkClick(selectedTraining.id, linkToOpen.id);
+
+    // Check if the URL is from a service known to block iframing (like Google)
+    const isGoogleLink = /google\.com/.test(linkToOpen.url);
+
+    if (isGoogleLink) {
+      // For Google links (Drive, Docs, etc.), open in a new tab for compatibility
+      window.open(linkToOpen.url, '_blank', 'noopener,noreferrer');
+    } else {
+      // For all other links, use the integrated modal viewer
       setViewingLinkIndex(index);
     }
   };
+
 
   const handleCloseViewer = () => {
       setViewingLinkIndex(null);
@@ -603,13 +617,33 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, companies, setTraini
 
   const handleNextLink = () => {
       if (viewingLinkIndex !== null && selectedTraining && viewingLinkIndex < selectedTraining.links.length - 1) {
-          handleViewLink(viewingLinkIndex + 1);
+          const nextIndex = viewingLinkIndex + 1;
+          const nextLink = selectedTraining.links[nextIndex];
+          handleLinkClick(selectedTraining.id, nextLink.id);
+
+          const isGoogleLink = /google\.com/.test(nextLink.url);
+          if (isGoogleLink) {
+              window.open(nextLink.url, '_blank', 'noopener,noreferrer');
+              // Optionally close the modal if you navigate away
+              // handleCloseViewer(); 
+          } else {
+              setViewingLinkIndex(nextIndex);
+          }
       }
   };
 
   const handlePrevLink = () => {
-       if (viewingLinkIndex !== null && viewingLinkIndex > 0) {
-          handleViewLink(viewingLinkIndex - 1);
+       if (viewingLinkIndex !== null && selectedTraining && viewingLinkIndex > 0) {
+          const prevIndex = viewingLinkIndex - 1;
+          const prevLink = selectedTraining.links[prevIndex];
+          handleLinkClick(selectedTraining.id, prevLink.id);
+          
+          const isGoogleLink = /google\.com/.test(prevLink.url);
+          if (isGoogleLink) {
+               window.open(prevLink.url, '_blank', 'noopener,noreferrer');
+          } else {
+              setViewingLinkIndex(prevIndex);
+          }
       }
   };
 
@@ -744,7 +778,7 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, companies, setTraini
                 {selectedTraining.links.map((link, index) => (
                     <button
                         key={link.id}
-                        onClick={() => handleViewLink(index)}
+                        onClick={() => handleOpenLink(index)}
                         title={link.url}
                         className={`flex items-center justify-between p-4 rounded-lg border transition-all w-full text-left ${link.viewed ? 'bg-green-900/30 border-green-500/50' : 'bg-slate-900/50 border-slate-700 hover:bg-slate-700'}`}
                     >
