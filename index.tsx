@@ -5,7 +5,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import SignatureCanvas from 'react-signature-canvas';
 import QRCode from 'qrcode';
-import { ShieldCheck, User, PlusCircle, Users, FileDown, LogOut, Trash2, Edit, X, Share2, Copy, Eye, FileText, CheckCircle, ArrowLeft, Send, LogIn, RefreshCw, Award, ClipboardList, GraduationCap, Building, ArrowRight } from 'lucide-react';
+import { ShieldCheck, User, PlusCircle, Users, FileDown, LogOut, Trash2, Edit, X, Share2, Copy, Eye, FileText, CheckCircle, ArrowLeft, Send, LogIn, RefreshCw, Award, ClipboardList, GraduationCap, Building, ArrowRight, QrCode } from 'lucide-react';
 
 const normalizeString = (str: string): string => {
     if (!str) return '';
@@ -461,15 +461,11 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ onSignatureEnd, signatureRe
 
 // UserPortal.tsx
 interface UserPortalProps {
-  trainings: Training[];
-  companies: string[];
+  trainings: Training[]; // Will always contain a single training
   setTrainingsStateForUser: React.Dispatch<React.SetStateAction<Training[]>>;
-  onBack: () => void;
 }
 
-const UserPortal: React.FC<UserPortalProps> = ({ trainings, companies, setTrainingsStateForUser: setTrainings, onBack }) => {
-  const [selectedCompany, setSelectedCompany] = useState<string>('');
-  const [selectedTrainingId, setSelectedTrainingId] = useState<string | null>(null);
+const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateForUser: setTrainings }) => {
   const [formCompleted, setFormCompleted] = useState(false);
   const [lastSubmission, setLastSubmission] = useState<UserSubmission | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -488,14 +484,19 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, companies, setTraini
   const [isLoadingAdminConfig, setIsLoadingAdminConfig] = useState(true);
   const [viewingLinkIndex, setViewingLinkIndex] = useState<number | null>(null);
 
+  const selectedTraining = trainings[0] || null;
 
-  useEffect(() => {
-    // If the portal is loaded with a single, specific training (from a share link)
-    // and no training has been selected yet, automatically select it to bypass the company selection screen.
-    if (trainings.length === 1 && !selectedTrainingId) {
-        setSelectedTrainingId(trainings[0].id);
+  const isKnownIncompatibleLink = (url: string): boolean => {
+    try {
+        const domain = new URL(url).hostname.toLowerCase();
+        if (domain.endsWith('google.com')) return true;
+        if (['forms.gle', 'youtu.be', 'youtube.com'].includes(domain)) return true;
+        return false;
+    } catch (e) {
+        console.warn("Could not parse URL to check compatibility, opening externally:", url);
+        return true; 
     }
-  }, [trainings, selectedTrainingId]);
+  };
 
   useEffect(() => {
     const fetchAdminConfig = async () => {
@@ -509,66 +510,44 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, companies, setTraini
       }
     };
     fetchAdminConfig();
-  }, []); // Run only once on mount
-
-  const selectedTraining = useMemo(() => {
-    return trainings.find(t => t.id === selectedTrainingId) || null;
-  }, [selectedTrainingId, trainings]);
+  }, []);
 
   useEffect(() => {
     if (selectedTraining) {
       const authorizedCompanies = selectedTraining.companies || [];
-      if (selectedCompany) {
-        // Standard flow: user selected a company before the training. This is the source of truth.
-        setFormData(prev => ({ ...prev, company: selectedCompany }));
-      } else if (authorizedCompanies.length === 1) {
-        // Direct link flow with only one company assigned: auto-select it.
+      if (authorizedCompanies.length === 1) {
         setFormData(prev => ({ ...prev, company: authorizedCompanies[0] }));
       } else {
-        // Direct link flow with multiple (or zero) companies: force user to choose.
-        // Clear any stale value.
         setFormData(prev => ({ ...prev, company: '' }));
       }
     }
-  }, [selectedTraining, selectedCompany]);
+  }, [selectedTraining]);
 
 
   useEffect(() => {
-    if (trainings.length > 0) {
-        const loadedTrainings = trainings.map(t => {
-            const progress = localStorage.getItem(`training-progress-${t.id}`);
-            if (progress) {
-                try {
-                    const viewedLinkIds: string[] = JSON.parse(progress);
-                    const updatedLinks = t.links.map(l => 
-                        viewedLinkIds.includes(l.id) ? { ...l, viewed: true } : l
-                    );
-                    return { ...t, links: updatedLinks };
-                } catch (e) {
-                    console.error("Failed to parse training progress from localStorage", e);
-                    return t;
+    if (selectedTraining) {
+        const progress = localStorage.getItem(`training-progress-${selectedTraining.id}`);
+        if (progress) {
+            try {
+                const viewedLinkIds: string[] = JSON.parse(progress);
+                const updatedLinks = selectedTraining.links.map(l => 
+                    viewedLinkIds.includes(l.id) ? { ...l, viewed: true } : l
+                );
+                const updatedTraining = { ...selectedTraining, links: updatedLinks };
+                if (JSON.stringify(updatedTraining) !== JSON.stringify(selectedTraining)) {
+                    setTrainings([updatedTraining]);
                 }
+            } catch (e) {
+                console.error("Failed to parse training progress from localStorage", e);
             }
-            return t;
-        });
-
-        if (JSON.stringify(loadedTrainings) !== JSON.stringify(trainings)) {
-            setTrainings(loadedTrainings);
         }
     }
-  }, [trainings, setTrainings]);
+  }, [selectedTraining, setTrainings]);
 
   const allLinksViewed = useMemo(() => {
     if (!selectedTraining) return false;
     return selectedTraining.links.every(link => link.viewed);
   }, [selectedTraining]);
-
-  const availableTrainings = useMemo(() => {
-      if (!selectedCompany) return [];
-      return trainings.filter(t => 
-          t.companies?.includes(selectedCompany)
-      );
-  }, [trainings, selectedCompany]);
   
   const handleLinkClick = (trainingId: string, linkId: string) => {
     setTrainings(currentTrainings => {
@@ -594,18 +573,11 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, companies, setTraini
     if (!selectedTraining) return;
 
     const linkToOpen = selectedTraining.links[index];
-    
-    // Always mark the link as viewed first
     handleLinkClick(selectedTraining.id, linkToOpen.id);
 
-    // Check if the URL is from a service known to block iframing (like Google)
-    const isGoogleLink = /google\.com/.test(linkToOpen.url);
-
-    if (isGoogleLink) {
-      // For Google links (Drive, Docs, etc.), open in a new tab for compatibility
+    if (isKnownIncompatibleLink(linkToOpen.url)) {
       window.open(linkToOpen.url, '_blank', 'noopener,noreferrer');
     } else {
-      // For all other links, use the integrated modal viewer
       setViewingLinkIndex(index);
     }
   };
@@ -621,11 +593,9 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, companies, setTraini
           const nextLink = selectedTraining.links[nextIndex];
           handleLinkClick(selectedTraining.id, nextLink.id);
 
-          const isGoogleLink = /google\.com/.test(nextLink.url);
-          if (isGoogleLink) {
+          if (isKnownIncompatibleLink(nextLink.url)) {
               window.open(nextLink.url, '_blank', 'noopener,noreferrer');
-              // Optionally close the modal if you navigate away
-              // handleCloseViewer(); 
+              handleCloseViewer();
           } else {
               setViewingLinkIndex(nextIndex);
           }
@@ -638,9 +608,9 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, companies, setTraini
           const prevLink = selectedTraining.links[prevIndex];
           handleLinkClick(selectedTraining.id, prevLink.id);
           
-          const isGoogleLink = /google\.com/.test(prevLink.url);
-          if (isGoogleLink) {
+          if (isKnownIncompatibleLink(prevLink.url)) {
                window.open(prevLink.url, '_blank', 'noopener,noreferrer');
+               handleCloseViewer();
           } else {
               setViewingLinkIndex(prevIndex);
           }
@@ -739,7 +709,7 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, companies, setTraini
                     </div>
                 </div>
                  <div className="text-center mt-6">
-                    <button onClick={onBack} className="text-indigo-400 hover:text-indigo-300">Volver a la página principal</button>
+                    <button onClick={() => window.location.reload()} className="text-indigo-400 hover:text-indigo-300">Realizar otra capacitación</button>
                 </div>
             </div>
         </div>
@@ -748,240 +718,166 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, companies, setTraini
 
   const viewingLink = viewingLinkIndex !== null && selectedTraining ? selectedTraining.links[viewingLinkIndex] : null;
 
-  if (selectedTraining) {
-    const progress = (selectedTraining.links.filter(l => l.viewed).length / selectedTraining.links.length) * 100;
-    const authorizedCompanies = selectedTraining?.companies || [];
-    const isCompanyDetermined = !!selectedCompany || authorizedCompanies.length === 1;
+  if (!selectedTraining) {
+      // This state should ideally not be reached if accessed via QR, but it's a good fallback.
+      return <div className="text-center p-8 bg-slate-800 rounded-lg">
+          <h2 className="text-xl text-white">Error</h2>
+          <p className="text-gray-400">No se pudo cargar la capacitación. Por favor, intente escanear el código QR de nuevo.</p>
+      </div>;
+  }
+    
+  const progress = (selectedTraining.links.filter(l => l.viewed).length / selectedTraining.links.length) * 100;
+  const authorizedCompanies = selectedTraining?.companies || [];
+  const isCompanyDetermined = authorizedCompanies.length === 1;
 
-    return (
-        <div className="w-full max-w-4xl mx-auto bg-slate-800 p-8 rounded-xl shadow-lg">
-            <div className="flex justify-between items-center mb-4">
-                <button onClick={() => setSelectedTrainingId(null)} className="flex items-center text-sm text-indigo-400 hover:text-indigo-300">
-                    <ArrowLeft className="h-4 w-4 mr-2" />
-                    Volver a la lista de capacitaciones
-                </button>
-                <button onClick={onBack} className="flex items-center text-sm text-gray-400 hover:text-gray-200">
-                    Volver al menú principal
-                </button>
-            </div>
-            <h2 className="text-2xl font-bold text-white mb-2">{selectedTraining.name}</h2>
-            <p className="text-gray-400 mb-4">Revisa los siguientes enlaces para completar la capacitación. Una vez revisados todos, podrás registrar tu asistencia.</p>
-            
-            <div className="mb-4">
-                <div className="w-full bg-slate-700 rounded-full h-2.5">
-                    <div className="bg-indigo-500 h-2.5 rounded-full" style={{ width: `${progress}%` }}></div>
-                </div>
-                <p className="text-sm text-right text-gray-400 mt-1">{Math.round(progress)}% completado</p>
-            </div>
+  return (
+      <div className="w-full max-w-4xl mx-auto bg-slate-800 p-8 rounded-xl shadow-lg">
+          
+          <h2 className="text-2xl font-bold text-white mb-2">{selectedTraining.name}</h2>
+          <p className="text-gray-400 mb-4">Revisa los siguientes enlaces para completar la capacitación. Una vez revisados todos, podrás registrar tu asistencia.</p>
+          
+          <div className="mb-4">
+              <div className="w-full bg-slate-700 rounded-full h-2.5">
+                  <div className="bg-indigo-500 h-2.5 rounded-full" style={{ width: `${progress}%` }}></div>
+              </div>
+              <p className="text-sm text-right text-gray-400 mt-1">{Math.round(progress)}% completado</p>
+          </div>
 
-            <div className="space-y-3 mb-8">
-                {selectedTraining.links.map((link, index) => (
-                    <button
-                        key={link.id}
-                        onClick={() => handleOpenLink(index)}
-                        title={link.url}
-                        className={`flex items-center justify-between p-4 rounded-lg border transition-all w-full text-left ${link.viewed ? 'bg-green-900/30 border-green-500/50' : 'bg-slate-900/50 border-slate-700 hover:bg-slate-700'}`}
-                    >
-                        <div className="flex items-center min-w-0">
-                            <FileText className="h-5 w-5 mr-3 text-indigo-400 flex-shrink-0"/>
-                            <div className="min-w-0">
-                                <span className="font-medium text-white">{link.name?.trim() ? link.name : `Material de Estudio ${index + 1}`}</span>
-                                <p className="text-sm text-gray-400 truncate">{link.url}</p>
-                            </div>
-                        </div>
-                        {link.viewed && <CheckCircle className="h-6 w-6 text-green-500 flex-shrink-0 ml-4" />}
-                    </button>
-                ))}
-            </div>
+          <div className="space-y-3 mb-8">
+              {selectedTraining.links.map((link, index) => (
+                  <button
+                      key={link.id}
+                      onClick={() => handleOpenLink(index)}
+                      title={link.url}
+                      className={`flex items-center justify-between p-4 rounded-lg border transition-all w-full text-left ${link.viewed ? 'bg-green-900/30 border-green-500/50' : 'bg-slate-900/50 border-slate-700 hover:bg-slate-700'}`}
+                  >
+                      <div className="flex items-center min-w-0">
+                          <FileText className="h-5 w-5 mr-3 text-indigo-400 flex-shrink-0"/>
+                          <div className="min-w-0">
+                              <span className="font-medium text-white">{link.name?.trim() ? link.name : `Material de Estudio ${index + 1}`}</span>
+                              <p className="text-sm text-gray-400 truncate">{link.url}</p>
+                          </div>
+                      </div>
+                      {link.viewed && <CheckCircle className="h-6 w-6 text-green-500 flex-shrink-0 ml-4" />}
+                  </button>
+              ))}
+          </div>
 
-            {allLinksViewed && (
-                <form onSubmit={handleSubmit} className="space-y-6 animate-fade-in">
-                     <h3 className="text-xl font-semibold text-white border-t border-slate-700 pt-6">Completa tus datos</h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <input type="text" name="firstName" value={formData.firstName} placeholder="Nombre" onChange={handleInputChange} required className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
-                        <input type="text" name="lastName" value={formData.lastName} placeholder="Apellido" onChange={handleInputChange} required className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
-                        <input type="text" name="dni" value={formData.dni} placeholder="DNI" onChange={handleInputChange} required className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
-                        <div>
-                          {isCompanyDetermined ? (
+          {allLinksViewed && (
+              <form onSubmit={handleSubmit} className="space-y-6 animate-fade-in">
+                   <h3 className="text-xl font-semibold text-white border-t border-slate-700 pt-6">Completa tus datos</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <input type="text" name="firstName" value={formData.firstName} placeholder="Nombre" onChange={handleInputChange} required className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
+                      <input type="text" name="lastName" value={formData.lastName} placeholder="Apellido" onChange={handleInputChange} required className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
+                      <input type="text" name="dni" value={formData.dni} placeholder="DNI" onChange={handleInputChange} required className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
+                      <div>
+                        {isCompanyDetermined ? (
+                          <input 
+                            type="text" 
+                            name="company" 
+                            value={formData.company} 
+                            readOnly 
+                            disabled 
+                            className="w-full p-3 bg-slate-900 border border-slate-700 rounded-md text-gray-400 cursor-not-allowed"
+                          />
+                        ) : authorizedCompanies.length > 1 ? (
+                          <select 
+                            name="company" 
+                            value={formData.company} 
+                            onChange={handleInputChange} 
+                            required 
+                            className="w-full p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"
+                          >
+                            <option value="" disabled>-- Selecciona tu empresa --</option>
+                            {authorizedCompanies.map(c => (
+                              <option key={c} value={c}>{c}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <>
                             <input 
                               type="text" 
-                              name="company" 
-                              value={formData.company} 
+                              value="No asignada" 
                               readOnly 
                               disabled 
                               className="w-full p-3 bg-slate-900 border border-slate-700 rounded-md text-gray-400 cursor-not-allowed"
                             />
-                          ) : authorizedCompanies.length > 1 ? (
-                            <select 
-                              name="company" 
-                              value={formData.company} 
-                              onChange={handleInputChange} 
-                              required 
-                              className="w-full p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"
-                            >
-                              <option value="" disabled>-- Selecciona tu empresa --</option>
-                              {authorizedCompanies.map(c => (
-                                <option key={c} value={c}>{c}</option>
-                              ))}
-                            </select>
-                          ) : (
-                            <>
-                              <input 
-                                type="text" 
-                                value="No asignada" 
-                                readOnly 
-                                disabled 
-                                className="w-full p-3 bg-slate-900 border border-slate-700 rounded-md text-gray-400 cursor-not-allowed"
-                              />
-                              <p className="mt-1 text-xs text-yellow-400">Advertencia: Esta capacitación no tiene empresas asignadas. Contacta al administrador.</p>
-                            </>
-                          )}
-                        </div>
-                        <input type="email" name="email" value={formData.email} placeholder="Email (Opcional)" onChange={handleInputChange} className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
-                        <input type="tel" name="phone" value={formData.phone} placeholder="Teléfono (Opcional)" onChange={handleInputChange} className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
-                    </div>
-                     <div>
-                        <label className="block text-sm font-medium text-gray-300 mb-2">Firma Digital (Obligatorio)</label>
-                         <SignaturePad onSignatureEnd={handleSignatureEnd} signatureRef={signatureRef} />
-                        <button type="button" onClick={clearSignature} className="text-sm text-indigo-400 hover:underline mt-2">Limpiar firma</button>
-                    </div>
-                    <button 
-                        type="submit" 
-                        disabled={!formData.signature || isSubmitting}
-                        className="w-full flex justify-center items-center py-3 px-4 border border-transparent rounded-md shadow-sm text-base font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed">
-                        <Send className="h-5 w-5 mr-2" />
-                        {isSubmitting ? 'Enviando...' : 'Enviar Registro'}
-                    </button>
-                </form>
-            )}
-
-            {/* Link Viewer Modal */}
-            {viewingLink && (
-                <div className="fixed inset-0 bg-black bg-opacity-80 flex flex-col p-2 sm:p-4 z-50 animate-fade-in">
-                    {/* Header */}
-                    <div className="flex justify-between items-center p-2 bg-slate-800 rounded-t-lg border-b border-slate-700 flex-shrink-0">
-                        <h2 className="text-lg font-semibold text-white truncate pr-4">
-                            {viewingLink.name?.trim() ? viewingLink.name : `Material ${viewingLinkIndex! + 1}`}
-                        </h2>
-                        <div className="flex items-center gap-2">
-                            <a href={viewingLink.url} target="_blank" rel="noopener noreferrer" className="p-2 text-gray-400 hover:text-white" title="Abrir en nueva pestaña">
-                                <Share2 className="h-5 w-5" />
-                            </a>
-                            <button onClick={handleCloseViewer} className="p-2 text-gray-400 hover:text-white" title="Cerrar visor">
-                                <X className="h-6 w-6" />
-                            </button>
-                        </div>
-                    </div>
-                    {/* Content (Iframe) */}
-                    <div className="flex-grow bg-slate-900">
-                        <iframe
-                            src={viewingLink.url}
-                            title={viewingLink.name || 'Material de capacitación'}
-                            className="w-full h-full border-0"
-                            sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
-                        ></iframe>
-                    </div>
-                    {/* Footer (Navigation) */}
-                    <div className="flex justify-between items-center p-2 bg-slate-800 rounded-b-lg border-t border-slate-700 flex-shrink-0">
-                        <button
-                            onClick={handlePrevLink}
-                            disabled={viewingLinkIndex === 0}
-                            className="px-4 py-2 text-sm font-medium rounded-md flex items-center gap-2 text-white bg-slate-600 hover:bg-slate-500 disabled:bg-slate-700 disabled:text-gray-500 disabled:cursor-not-allowed"
-                        >
-                            <ArrowLeft className="h-4 w-4" />
-                            Anterior
-                        </button>
-                        <span className="text-sm text-gray-400">
-                            {viewingLinkIndex! + 1} / {selectedTraining.links.length}
-                        </span>
-                        <button
-                            onClick={handleNextLink}
-                            disabled={viewingLinkIndex === selectedTraining.links.length - 1}
-                            className="px-4 py-2 text-sm font-medium rounded-md flex items-center gap-2 text-white bg-slate-600 hover:bg-slate-500 disabled:bg-slate-700 disabled:text-gray-500 disabled:cursor-not-allowed"
-                        >
-                            Siguiente
-                            <ArrowRight className="h-4 w-4" />
-                        </button>
-                    </div>
-                </div>
-            )}
-        </div>
-    );
-  }
-
-  // Company selection or training list view
-  if (selectedCompany) {
-      return (
-          <div className="w-full max-w-4xl mx-auto">
-              <button onClick={() => setSelectedCompany('')} className="flex items-center text-sm text-indigo-400 hover:text-indigo-300 mb-4">
-                  <ArrowLeft className="h-4 w-4 mr-2" />
-                  Cambiar de empresa
-              </button>
-              <div className="text-center mb-8">
-                  <h1 className="text-3xl font-bold text-white">Capacitaciones para {selectedCompany}</h1>
-                  <p className="mt-2 text-gray-400">Selecciona una capacitación para comenzar.</p>
-              </div>
-              <div className="space-y-4">
-                  {availableTrainings.length > 0 ? (
-                      availableTrainings.map(training => (
-                          <button
-                              key={training.id}
-                              onClick={() => setSelectedTrainingId(training.id)}
-                              className="w-full text-left p-6 bg-slate-800 rounded-xl shadow-md hover:shadow-lg transition-shadow border border-slate-700"
-                          >
-                              <h3 className="text-xl font-semibold text-indigo-400">{training.name}</h3>
-                              <p className="text-gray-400 mt-1">{training.links.length} enlace(s)</p>
-                          </button>
-                      ))
-                  ) : (
-                      <div className="text-center p-8 bg-slate-800 rounded-lg border border-slate-700">
-                          <GraduationCap className="mx-auto h-12 w-12 text-gray-500" />
-                          <h3 className="mt-4 text-xl font-semibold text-white">No hay capacitaciones asignadas</h3>
-                          <p className="mt-2 text-gray-400 max-w-md mx-auto">
-                              No se encontraron capacitaciones asignadas para "{selectedCompany}". Por favor, contacta a tu administrador.
-                          </p>
+                            <p className="mt-1 text-xs text-yellow-400">Advertencia: Esta capacitación no tiene empresas asignadas. Contacta al administrador.</p>
+                          </>
+                        )}
                       </div>
-                  )}
-              </div>
-          </div>
-      );
-  }
+                      <input type="email" name="email" value={formData.email} placeholder="Email (Opcional)" onChange={handleInputChange} className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
+                      <input type="tel" name="phone" value={formData.phone} placeholder="Teléfono (Opcional)" onChange={handleInputChange} className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
+                  </div>
+                   <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-2">Firma Digital (Obligatorio)</label>
+                       <SignaturePad onSignatureEnd={handleSignatureEnd} signatureRef={signatureRef} />
+                      <button type="button" onClick={clearSignature} className="text-sm text-indigo-400 hover:underline mt-2">Limpiar firma</button>
+                  </div>
+                  <button 
+                      type="submit" 
+                      disabled={!formData.signature || isSubmitting}
+                      className="w-full flex justify-center items-center py-3 px-4 border border-transparent rounded-md shadow-sm text-base font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed">
+                      <Send className="h-5 w-5 mr-2" />
+                      {isSubmitting ? 'Enviando...' : 'Enviar Registro'}
+                  </button>
+              </form>
+          )}
 
-  // Initial company selection view
-  return (
-    <div className="w-full max-w-lg mx-auto">
-      <button onClick={onBack} className="flex items-center text-sm text-indigo-400 hover:text-indigo-300 mb-4">
-          <ArrowLeft className="h-4 w-4 mr-2" />
-          Volver al menú principal
-      </button>
-      <div className="bg-slate-800 p-8 rounded-xl shadow-lg text-center">
-        <Building className="mx-auto h-12 w-12 text-indigo-400" />
-        <h1 className="text-3xl font-bold text-white mt-4">Selecciona tu Empresa</h1>
-        <p className="mt-2 text-gray-400">Para continuar, por favor elige tu empresa de la lista.</p>
-        
-        {companies.length > 0 ? (
-            <div className="mt-6">
-                <select
-                    value={selectedCompany}
-                    onChange={(e) => setSelectedCompany(e.target.value)}
-                    className="w-full p-3 bg-slate-700 border border-slate-600 rounded-md text-white focus:ring-indigo-500 focus:border-indigo-500"
-                >
-                    <option value="" disabled>-- Elige una opción --</option>
-                    {companies.map(company => (
-                        <option key={company} value={company}>{company}</option>
-                    ))}
-                </select>
-            </div>
-        ) : (
-            <div className="mt-6 text-center p-4 bg-slate-900/50 rounded-lg border border-slate-700">
-                <p className="text-gray-400">No hay empresas configuradas por el administrador.</p>
-                <p className="text-sm text-gray-500 mt-1">Por favor, contacta al administrador para que agregue tu empresa.</p>
-            </div>
-        )}
+          {/* Link Viewer Modal */}
+          {viewingLink && (
+              <div className="fixed inset-0 bg-black bg-opacity-80 flex flex-col p-2 sm:p-4 z-50 animate-fade-in">
+                  {/* Header */}
+                  <div className="flex justify-between items-center p-2 bg-slate-800 rounded-t-lg border-b border-slate-700 flex-shrink-0">
+                      <h2 className="text-lg font-semibold text-white truncate pr-4">
+                          {viewingLink.name?.trim() ? viewingLink.name : `Material ${viewingLinkIndex! + 1}`}
+                      </h2>
+                      <div className="flex items-center gap-2">
+                          <a href={viewingLink.url} target="_blank" rel="noopener noreferrer" className="p-2 text-gray-400 hover:text-white" title="Abrir en nueva pestaña">
+                              <Share2 className="h-5 w-5" />
+                          </a>
+                          <button onClick={handleCloseViewer} className="p-2 text-gray-400 hover:text-white" title="Cerrar visor">
+                              <X className="h-6 w-6" />
+                          </button>
+                      </div>
+                  </div>
+                  {/* Content (Iframe) */}
+                  <div className="flex-grow bg-slate-900">
+                      <iframe
+                          src={viewingLink.url}
+                          title={viewingLink.name || 'Material de capacitación'}
+                          className="w-full h-full border-0"
+                          sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+                      ></iframe>
+                  </div>
+                  {/* Footer (Navigation) */}
+                  <div className="flex justify-between items-center p-2 bg-slate-800 rounded-b-lg border-t border-slate-700 flex-shrink-0">
+                      <button
+                          onClick={handlePrevLink}
+                          disabled={viewingLinkIndex === 0}
+                          className="px-4 py-2 text-sm font-medium rounded-md flex items-center gap-2 text-white bg-slate-600 hover:bg-slate-500 disabled:bg-slate-700 disabled:text-gray-500 disabled:cursor-not-allowed"
+                      >
+                          <ArrowLeft className="h-4 w-4" />
+                          Anterior
+                      </button>
+                      <span className="text-sm text-gray-400">
+                          {viewingLinkIndex! + 1} / {selectedTraining.links.length}
+                      </span>
+                      <button
+                          onClick={handleNextLink}
+                          disabled={viewingLinkIndex === selectedTraining.links.length - 1}
+                          className="px-4 py-2 text-sm font-medium rounded-md flex items-center gap-2 text-white bg-slate-600 hover:bg-slate-500 disabled:bg-slate-700 disabled:text-gray-500 disabled:cursor-not-allowed"
+                      >
+                          Siguiente
+                          <ArrowRight className="h-4 w-4" />
+                      </button>
+                  </div>
+              </div>
+          )}
       </div>
-    </div>
   );
 };
+
 
 // AdminLogin.tsx
 interface AdminLoginProps {
@@ -2183,12 +2079,34 @@ const LoadingSpinner: React.FC = () => (
     </div>
 );
 
+// A new component for the "QR Required" screen.
+interface QrRequiredScreenProps {
+    onAdminLoginClick: () => void;
+}
+const QrRequiredScreen: React.FC<QrRequiredScreenProps> = ({ onAdminLoginClick }) => (
+    <div className="w-full max-w-md mx-auto relative">
+      <div className="bg-slate-800 p-8 rounded-xl shadow-lg text-center">
+        <QrCode className="mx-auto h-16 w-16 text-indigo-400" />
+        <h1 className="text-3xl font-bold text-white mt-4">Acceso a Capacitación</h1>
+        <p className="mt-2 text-gray-400">Por favor, escanee el código QR proporcionado por su administrador para comenzar.</p>
+      </div>
+       <div className="absolute -bottom-14 left-0 right-0 text-center">
+            <button
+                onClick={onAdminLoginClick}
+                className="text-sm font-medium text-slate-500 hover:text-slate-300 transition-colors"
+            >
+                Acceso Administrador
+            </button>
+        </div>
+    </div>
+);
+
 
 // --- APP ---
-type View = 'selector' | 'login' | 'admin' | 'user';
+type View = 'login' | 'admin' | 'user';
 
 const App: React.FC = () => {
-  const [view, setView] = useState<View>('selector');
+  const [view, setView] = useState<View>('user');
   const [trainings, setTrainings] = useState<Training[]>([]);
   const [companies, setCompanies] = useState<string[]>([]);
   const [userPortalTrainings, setUserPortalTrainings] = useState<Training[]>([]);
@@ -2210,13 +2128,11 @@ const App: React.FC = () => {
         if (shareKey) {
           const sharedTrainingRef = await apiService.getSharedTraining(shareKey);
           
-          // Find the LATEST version of the training from the main list using the ID from the shared reference
           const latestTraining = sharedTrainingRef 
             ? adminTrainings.find(t => t.id === sharedTrainingRef.id) 
             : null;
 
           if (latestTraining) {
-            // Create a pristine version for the user session, ensuring links are marked as not viewed
             const pristineUserSessionTraining = {
               ...latestTraining,
               links: latestTraining.links.map(link => ({ ...link, viewed: false }))
@@ -2224,7 +2140,6 @@ const App: React.FC = () => {
 
             localStorage.removeItem(`training-progress-${latestTraining.id}`);
             setUserPortalTrainings([pristineUserSessionTraining]);
-            setView('user');
           } else {
             alert("Esta capacitación ya no está disponible o ha sido eliminada por el administrador.");
           }
@@ -2238,7 +2153,7 @@ const App: React.FC = () => {
          console.error("Failed to load data from URL or remote store", error);
          alert("Ocurrió un error al cargar la capacitación.");
       } finally {
-        setIsLoading(false); // Set loading to false when all is done
+        setIsLoading(false);
       }
     };
 
@@ -2249,7 +2164,6 @@ const App: React.FC = () => {
         try {
             const latestTrainings = await apiService.getTrainings();
             setTrainings(currentTrainings => {
-                // Prevent re-render if data is identical
                 if (JSON.stringify(currentTrainings) !== JSON.stringify(latestTrainings)) {
                     return latestTrainings;
                 }
@@ -2331,7 +2245,7 @@ const App: React.FC = () => {
   const renderView = () => {
     switch (view) {
       case 'login':
-        return <AdminLogin onLoginSuccess={() => setView('admin')} onBack={() => setView('selector')} />;
+        return <AdminLogin onLoginSuccess={() => setView('admin')} onBack={() => setView('user')} />;
       case 'admin':
         return <AdminDashboard 
                     trainings={trainings}
@@ -2340,54 +2254,28 @@ const App: React.FC = () => {
                     updateTraining={updateTraining}
                     deleteTraining={deleteTraining}
                     updateCompanies={updateCompanies}
-                    onLogout={() => setView('selector')}
-                />;
-      case 'user':
-        return <UserPortal 
-                    trainings={userPortalTrainings.length > 0 ? userPortalTrainings : trainings} 
-                    companies={companies}
-                    setTrainingsStateForUser={userPortalTrainings.length > 0 ? setUserPortalTrainings : setTrainings} 
-                    onBack={() => {
-                        // Clear any specific shared training when going back
-                        if (userPortalTrainings.length > 0) {
-                            setUserPortalTrainings([]);
-                        }
-                        setView('selector');
+                    onLogout={() => {
+                        setUserPortalTrainings([]); // Clear any loaded training
+                        setView('user');
                     }}
                 />;
-      case 'selector':
+      case 'user':
       default:
-        return (
-          <div className="text-center">
-            <h1 className="text-4xl font-extrabold text-white tracking-tight sm:text-5xl">Bienvenido a Trainer App</h1>
-            <p className="mt-4 max-w-xl mx-auto text-lg text-gray-400">Completa las capacitaciones asignadas para registrar tu asistencia.</p>
-            <div className="mt-8 flex justify-center">
-              <button
-                onClick={() => setView('user')}
-                className="flex flex-col items-center justify-center w-48 h-48 p-6 bg-slate-800 rounded-2xl shadow-lg hover:shadow-sky-500/20 hover:-translate-y-1 transition-all duration-300 border border-slate-700"
-              >
-                <User className="h-16 w-16 text-sky-400 mb-4" />
-                <span className="text-lg font-semibold text-white">Iniciar</span>
-              </button>
-            </div>
-          </div>
-        );
+        // If a training was loaded via QR code, show the portal
+        if (userPortalTrainings.length > 0) {
+            return <UserPortal 
+                        trainings={userPortalTrainings} 
+                        setTrainingsStateForUser={setUserPortalTrainings} 
+                    />;
+        }
+        // Otherwise, show the "Scan QR" instruction screen
+        return <QrRequiredScreen onAdminLoginClick={() => setView('login')} />;
     }
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 text-gray-200 flex items-center justify-center p-4 relative">
+    <div className="min-h-screen bg-slate-900 text-gray-200 flex items-center justify-center p-4">
       {isLoading ? <LoadingSpinner /> : renderView()}
-      {view === 'selector' && !isLoading && (
-        <div className="absolute bottom-6 right-6">
-            <button
-                onClick={() => setView('login')}
-                className="text-sm font-medium text-slate-500 hover:text-slate-300 transition-colors"
-            >
-                Acceso Administrador
-            </button>
-        </div>
-      )}
     </div>
   );
 };
