@@ -1205,6 +1205,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleShare = async (trainingToShare: Training) => {
+    if (!trainingToShare.companies || trainingToShare.companies.length === 0) {
+        alert("No se puede compartir esta capacitación porque no tiene ninguna empresa asignada. Por favor, edite la capacitación y asigne al menos una empresa para poder compartirla.");
+        return;
+    }
+
     const pristineTraining = {
       ...trainingToShare,
       links: trainingToShare.links.map(link => ({ ...link, viewed: false }))
@@ -2084,13 +2089,22 @@ const App: React.FC = () => {
         setCompanies(adminCompanies.sort((a,b) => a.localeCompare(b)));
 
         if (shareKey) {
-          const sharedTraining = await apiService.getSharedTraining(shareKey);
+          const sharedTrainingRef = await apiService.getSharedTraining(shareKey);
           
-          const trainingExists = sharedTraining && adminTrainings.some(t => t.id === sharedTraining.id);
+          // Find the LATEST version of the training from the main list using the ID from the shared reference
+          const latestTraining = sharedTrainingRef 
+            ? adminTrainings.find(t => t.id === sharedTrainingRef.id) 
+            : null;
 
-          if (trainingExists) {
-            localStorage.removeItem(`training-progress-${sharedTraining.id}`);
-            setUserPortalTrainings([sharedTraining]);
+          if (latestTraining) {
+            // Create a pristine version for the user session, ensuring links are marked as not viewed
+            const pristineUserSessionTraining = {
+              ...latestTraining,
+              links: latestTraining.links.map(link => ({ ...link, viewed: false }))
+            };
+
+            localStorage.removeItem(`training-progress-${latestTraining.id}`);
+            setUserPortalTrainings([pristineUserSessionTraining]);
             setView('user');
           } else {
             alert("Esta capacitación ya no está disponible o ha sido eliminada por el administrador.");
