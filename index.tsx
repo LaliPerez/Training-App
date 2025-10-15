@@ -5,7 +5,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import SignatureCanvas from 'react-signature-canvas';
 import QRCode from 'qrcode';
-import { ShieldCheck, User, PlusCircle, Users, FileDown, LogOut, Trash2, Edit, X, Share2, Copy, Eye, FileText, CheckCircle, ArrowLeft, Send, LogIn, RefreshCw, Award, ClipboardList, GraduationCap, Building } from 'lucide-react';
+import { ShieldCheck, User, PlusCircle, Users, FileDown, LogOut, Trash2, Edit, X, Share2, Copy, Eye, FileText, CheckCircle, ArrowLeft, Send, LogIn, RefreshCw, Award, ClipboardList, GraduationCap, Building, ArrowRight } from 'lucide-react';
 
 const normalizeString = (str: string): string => {
     if (!str) return '';
@@ -486,6 +486,8 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, companies, setTraini
   
   const [adminConfig, setAdminConfig] = useState<AdminConfig | null>(null);
   const [isLoadingAdminConfig, setIsLoadingAdminConfig] = useState(true);
+  const [viewingLinkIndex, setViewingLinkIndex] = useState<number | null>(null);
+
 
   useEffect(() => {
     // If the portal is loaded with a single, specific training (from a share link)
@@ -587,6 +589,29 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, companies, setTraini
       return updatedTrainings;
     });
   };
+  
+  const handleViewLink = (index: number) => {
+    if (selectedTraining) {
+      handleLinkClick(selectedTraining.id, selectedTraining.links[index].id);
+      setViewingLinkIndex(index);
+    }
+  };
+
+  const handleCloseViewer = () => {
+      setViewingLinkIndex(null);
+  };
+
+  const handleNextLink = () => {
+      if (viewingLinkIndex !== null && selectedTraining && viewingLinkIndex < selectedTraining.links.length - 1) {
+          handleViewLink(viewingLinkIndex + 1);
+      }
+  };
+
+  const handlePrevLink = () => {
+       if (viewingLinkIndex !== null && viewingLinkIndex > 0) {
+          handleViewLink(viewingLinkIndex - 1);
+      }
+  };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
@@ -687,6 +712,8 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, companies, setTraini
     );
   }
 
+  const viewingLink = viewingLinkIndex !== null && selectedTraining ? selectedTraining.links[viewingLinkIndex] : null;
+
   if (selectedTraining) {
     const progress = (selectedTraining.links.filter(l => l.viewed).length / selectedTraining.links.length) * 100;
     const authorizedCompanies = selectedTraining?.companies || [];
@@ -715,14 +742,11 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, companies, setTraini
 
             <div className="space-y-3 mb-8">
                 {selectedTraining.links.map((link, index) => (
-                    <a
+                    <button
                         key={link.id}
-                        href={link.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={() => handleLinkClick(selectedTraining.id, link.id)}
+                        onClick={() => handleViewLink(index)}
                         title={link.url}
-                        className={`flex items-center justify-between p-4 rounded-lg border transition-all ${link.viewed ? 'bg-green-900/30 border-green-500/50' : 'bg-slate-900/50 border-slate-700 hover:bg-slate-700'}`}
+                        className={`flex items-center justify-between p-4 rounded-lg border transition-all w-full text-left ${link.viewed ? 'bg-green-900/30 border-green-500/50' : 'bg-slate-900/50 border-slate-700 hover:bg-slate-700'}`}
                     >
                         <div className="flex items-center min-w-0">
                             <FileText className="h-5 w-5 mr-3 text-indigo-400 flex-shrink-0"/>
@@ -732,7 +756,7 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, companies, setTraini
                             </div>
                         </div>
                         {link.viewed && <CheckCircle className="h-6 w-6 text-green-500 flex-shrink-0 ml-4" />}
-                    </a>
+                    </button>
                 ))}
             </div>
 
@@ -795,6 +819,57 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, companies, setTraini
                         {isSubmitting ? 'Enviando...' : 'Enviar Registro'}
                     </button>
                 </form>
+            )}
+
+            {/* Link Viewer Modal */}
+            {viewingLink && (
+                <div className="fixed inset-0 bg-black bg-opacity-80 flex flex-col p-2 sm:p-4 z-50 animate-fade-in">
+                    {/* Header */}
+                    <div className="flex justify-between items-center p-2 bg-slate-800 rounded-t-lg border-b border-slate-700 flex-shrink-0">
+                        <h2 className="text-lg font-semibold text-white truncate pr-4">
+                            {viewingLink.name?.trim() ? viewingLink.name : `Material ${viewingLinkIndex! + 1}`}
+                        </h2>
+                        <div className="flex items-center gap-2">
+                            <a href={viewingLink.url} target="_blank" rel="noopener noreferrer" className="p-2 text-gray-400 hover:text-white" title="Abrir en nueva pestaña">
+                                <Share2 className="h-5 w-5" />
+                            </a>
+                            <button onClick={handleCloseViewer} className="p-2 text-gray-400 hover:text-white" title="Cerrar visor">
+                                <X className="h-6 w-6" />
+                            </button>
+                        </div>
+                    </div>
+                    {/* Content (Iframe) */}
+                    <div className="flex-grow bg-slate-900">
+                        <iframe
+                            src={viewingLink.url}
+                            title={viewingLink.name || 'Material de capacitación'}
+                            className="w-full h-full border-0"
+                            sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+                        ></iframe>
+                    </div>
+                    {/* Footer (Navigation) */}
+                    <div className="flex justify-between items-center p-2 bg-slate-800 rounded-b-lg border-t border-slate-700 flex-shrink-0">
+                        <button
+                            onClick={handlePrevLink}
+                            disabled={viewingLinkIndex === 0}
+                            className="px-4 py-2 text-sm font-medium rounded-md flex items-center gap-2 text-white bg-slate-600 hover:bg-slate-500 disabled:bg-slate-700 disabled:text-gray-500 disabled:cursor-not-allowed"
+                        >
+                            <ArrowLeft className="h-4 w-4" />
+                            Anterior
+                        </button>
+                        <span className="text-sm text-gray-400">
+                            {viewingLinkIndex! + 1} / {selectedTraining.links.length}
+                        </span>
+                        <button
+                            onClick={handleNextLink}
+                            disabled={viewingLinkIndex === selectedTraining.links.length - 1}
+                            className="px-4 py-2 text-sm font-medium rounded-md flex items-center gap-2 text-white bg-slate-600 hover:bg-slate-500 disabled:bg-slate-700 disabled:text-gray-500 disabled:cursor-not-allowed"
+                        >
+                            Siguiente
+                            <ArrowRight className="h-4 w-4" />
+                        </button>
+                    </div>
+                </div>
             )}
         </div>
     );
@@ -2066,6 +2141,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
 };
 
 
+// A simple spinner component for the initial app load
+const LoadingSpinner: React.FC = () => (
+    <div className="flex flex-col items-center justify-center gap-4" role="status" aria-label="Cargando">
+        <div className="w-16 h-16 border-4 border-slate-600 border-t-sky-400 rounded-full animate-spin"></div>
+        <p className="text-slate-400">Cargando capacitación...</p>
+    </div>
+);
+
+
 // --- APP ---
 type View = 'selector' | 'login' | 'admin' | 'user';
 
@@ -2074,6 +2158,7 @@ const App: React.FC = () => {
   const [trainings, setTrainings] = useState<Training[]>([]);
   const [companies, setCompanies] = useState<string[]>([]);
   const [userPortalTrainings, setUserPortalTrainings] = useState<Training[]>([]);
+  const [isLoading, setIsLoading] = useState(true); // Start in loading state
   
   useEffect(() => {
     const loadInitialData = async () => {
@@ -2118,6 +2203,8 @@ const App: React.FC = () => {
       } catch (error) {
          console.error("Failed to load data from URL or remote store", error);
          alert("Ocurrió un error al cargar la capacitación.");
+      } finally {
+        setIsLoading(false); // Set loading to false when all is done
       }
     };
 
@@ -2256,8 +2343,8 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-900 text-gray-200 flex items-center justify-center p-4 relative">
-      {renderView()}
-      {view === 'selector' && (
+      {isLoading ? <LoadingSpinner /> : renderView()}
+      {view === 'selector' && !isLoading && (
         <div className="absolute bottom-6 right-6">
             <button
                 onClick={() => setView('login')}
