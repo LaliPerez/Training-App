@@ -216,12 +216,13 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
     const doc = new jsPDF();
     const pageHeight = doc.internal.pageSize.getHeight();
     const pageWidth = doc.internal.pageSize.getWidth();
+    const headerHeight = 28;
     
-    const tableColumns = ['#', 'Nombre', 'Apellido', 'DNI', 'Fecha', 'Firma'];
+    const tableColumns = ['#', 'Apellido', 'Nombre', 'DNI', 'Fecha', 'Firma'];
     const tableRows = submissions.map((sub, index) => [
       (index + 1).toString(),
-      sub.firstName,
       sub.lastName,
+      sub.firstName,
       sub.dni,
       sub.timestamp,
       '', // Placeholder for the signature image
@@ -230,55 +231,53 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
     autoTable(doc, {
       head: [tableColumns],
       body: tableRows,
-      startY: 35, // Start table below the header
-      margin: { top: 35, bottom: 25 },
+      startY: headerHeight + 5,
+      margin: { top: headerHeight + 5, bottom: 25 },
       theme: 'grid',
-      headStyles: { fillColor: [22, 78, 99], textColor: 255 }, // Dark Cyan, White text
-      alternateRowStyles: { fillColor: [241, 245, 249] }, // Light Blue-Gray
-      styles: { fontSize: 8, cellPadding: 2, valign: 'middle' },
+      headStyles: { fillColor: [30, 41, 59], textColor: 255, fontSize: 10 },
+      alternateRowStyles: { fillColor: [248, 250, 252] },
+      styles: { fontSize: 9, cellPadding: 2.5, valign: 'middle', textColor: [40, 40, 40] },
       columnStyles: {
         0: { cellWidth: 8, halign: 'center' },
         5: { cellWidth: 35, minCellHeight: 18 }, // Signature column
       },
       didDrawPage: (data) => {
           // HEADER
-          doc.setFontSize(18);
+          doc.setFillColor(30, 41, 59); // slate-800
+          doc.rect(0, 0, pageWidth, headerHeight, 'F');
+          
           doc.setFont('helvetica', 'bold');
-          doc.setTextColor(40);
+          doc.setFontSize(16);
+          doc.setTextColor(255, 255, 255);
           doc.text('Registro de Asistencia', 14, 15);
           
-          doc.setFontSize(12);
           doc.setFont('helvetica', 'normal');
-          doc.setTextColor(100);
+          doc.setFontSize(10);
           
           let subTitleParts: string[] = [];
-          if (trainingName) {
-              subTitleParts.push(`Capacitación: ${trainingName}`);
-          }
-          if (companyName) {
-              subTitleParts.push(`Empresa: ${companyName}`);
-          }
-          let subTitle = subTitleParts.join(' | ');
-          if (!subTitle) {
-              subTitle = 'Registros Generales';
-          }
+          if (trainingName) subTitleParts.push(`Capacitación: ${trainingName}`);
+          if (companyName) subTitleParts.push(`Empresa: ${companyName}`);
+          let subTitle = subTitleParts.join('  |  ');
+          if (!subTitle) subTitle = 'Registros Generales';
 
           doc.text(subTitle, 14, 22);
-          doc.setDrawColor(200);
-          doc.setLineWidth(0.2);
-          doc.line(14, 25, pageWidth - 14, 25);
 
           // FOOTER
+          const footerY = pageHeight - 18;
+          doc.setDrawColor(200, 200, 200);
+          doc.setLineWidth(0.2);
+          doc.line(14, footerY, pageWidth - 14, footerY);
+
           const pageNum = doc.internal.getCurrentPageInfo().pageNumber;
           const pageStr = "Página " + pageNum;
           const dateStr = `Generado el: ${new Date().toLocaleDateString('es-ES')}`;
           
-          doc.setFontSize(9);
+          doc.setFontSize(8);
           doc.setTextColor(150);
           
-          doc.text(dateStr, 14, pageHeight - 15);
+          doc.text(dateStr, 14, footerY + 5);
           const pageTextWidth = doc.getStringUnitWidth(pageStr) * doc.getFontSize() / doc.internal.scaleFactor;
-          doc.text(pageStr, pageWidth - 14 - pageTextWidth, pageHeight - 15);
+          doc.text(pageStr, pageWidth - 14 - pageTextWidth, footerY + 5);
       },
       didDrawCell: (data) => {
         if (data.column.index === 5 && data.cell.section === 'body') {
@@ -993,10 +992,25 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const filteredSubmissions = useMemo(() => {
     let results = [...userSubmissions]; // Create a shallow copy to sort
     
+    // TRAINING FILTER
     if (selectedTrainingFilterId !== 'all') {
-        results = results.filter(sub => sub.trainingId === selectedTrainingFilterId);
+        const selectedTraining = trainings.find(t => t.id === selectedTrainingFilterId);
+        if (selectedTraining) {
+            const normalizedTrainingName = normalizeString(selectedTraining.name);
+            // Special logic to group all trainings containing 'aguila'
+            if (normalizedTrainingName.includes('aguila')) {
+                results = results.filter(sub => normalizeString(sub.trainingName).includes('aguila'));
+            } else {
+                // Standard filtering by ID for other trainings
+                results = results.filter(sub => sub.trainingId === selectedTrainingFilterId);
+            }
+        } else {
+             // Fallback for deleted trainings, filter by ID
+             results = results.filter(sub => sub.trainingId === selectedTrainingFilterId);
+        }
     }
 
+    // COMPANY FILTER
     if (companyFilter !== 'all') {
         const normalizedCompanyFilter = normalizeString(companyFilter);
         // Special logic to group all variations of 'Aguila' under one filter
@@ -1016,7 +1030,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     });
 
     return results;
-  }, [userSubmissions, selectedTrainingFilterId, companyFilter]);
+  }, [userSubmissions, selectedTrainingFilterId, companyFilter, trainings]);
 
   // Effect to clear selections when filters change
   useEffect(() => {
@@ -1261,7 +1275,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
 
       const submissionsToPrint = selectedSubmissionIds.size > 0
-        ? userSubmissions.filter(sub => selectedSubmissionIds.has(sub.id))
+        ? userSubmissions
+            .filter(sub => selectedSubmissionIds.has(sub.id))
+            .sort((a, b) => {
+                const lastNameComp = normalizeString(a.lastName).localeCompare(normalizeString(b.lastName));
+                if (lastNameComp !== 0) return lastNameComp;
+                return normalizeString(a.firstName).localeCompare(normalizeString(b.firstName));
+            })
         : filteredSubmissions;
 
       if (submissionsToPrint.length === 0) {
@@ -1271,7 +1291,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       
       let pdfTrainingName: string | undefined = undefined;
 
-      // Determine a title for the PDF
+      // Determine the training name for the PDF title
       if (selectedSubmissionIds.size > 0) {
           // If printing a selection, check if they are all from the same training
           const firstTrainingId = submissionsToPrint[0]?.trainingId;
@@ -1280,8 +1300,17 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
               pdfTrainingName = submissionsToPrint[0]?.trainingName;
           }
       } else if (selectedTrainingFilterId !== 'all') {
-          // If printing filtered results, and a specific training is filtered
-          pdfTrainingName = trainings.find(t => t.id === selectedTrainingFilterId)?.name;
+          // If printing filtered results
+          const selectedTraining = trainings.find(t => t.id === selectedTrainingFilterId);
+          if (selectedTraining) {
+              // Use the name of the training selected in the filter as the title.
+              // The filtering logic handles the "grouping" of results separately.
+              pdfTrainingName = selectedTraining.name;
+          } else if (submissionsToPrint.length > 0) {
+              // Fallback if the training was deleted but submissions still exist.
+              // We can get the name from the first record.
+              pdfTrainingName = submissionsToPrint[0].trainingName;
+          }
       }
       
       let pdfCompanyName: string | undefined = undefined;
