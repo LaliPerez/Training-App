@@ -218,11 +218,11 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
     const pageWidth = doc.internal.pageSize.getWidth();
     const headerHeight = 28;
     
-    const tableColumns = ['#', 'Nombre', 'Apellido', 'DNI', 'Fecha', 'Firma'];
+    const tableColumns = ['#', 'Apellido', 'Nombre', 'DNI', 'Fecha', 'Firma'];
     const tableRows = submissions.map((sub, index) => [
       (index + 1).toString(),
-      sub.firstName,
       sub.lastName,
+      sub.firstName,
       sub.dni,
       sub.timestamp,
       '', // Placeholder for the signature image
@@ -719,12 +719,12 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, companies, setTraini
                 <form onSubmit={handleSubmit} className="space-y-6 animate-fade-in">
                      <h3 className="text-xl font-semibold text-white border-t border-slate-700 pt-6">Completa tus datos</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <input type="text" name="firstName" placeholder="Nombre" onChange={handleInputChange} required className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
-                        <input type="text" name="lastName" placeholder="Apellido" onChange={handleInputChange} required className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
-                        <input type="text" name="dni" placeholder="DNI" onChange={handleInputChange} required className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
+                        <input type="text" name="firstName" value={formData.firstName} placeholder="Nombre" onChange={handleInputChange} required className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
+                        <input type="text" name="lastName" value={formData.lastName} placeholder="Apellido" onChange={handleInputChange} required className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
+                        <input type="text" name="dni" value={formData.dni} placeholder="DNI" onChange={handleInputChange} required className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
                         <input type="text" name="company" value={formData.company} readOnly disabled className="p-3 bg-slate-900 border border-slate-700 rounded-md text-gray-400 cursor-not-allowed"/>
-                        <input type="email" name="email" placeholder="Email (Opcional)" onChange={handleInputChange} className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
-                        <input type="tel" name="phone" placeholder="Teléfono (Opcional)" onChange={handleInputChange} className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
+                        <input type="email" name="email" value={formData.email} placeholder="Email (Opcional)" onChange={handleInputChange} className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
+                        <input type="tel" name="phone" value={formData.phone} placeholder="Teléfono (Opcional)" onChange={handleInputChange} className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
                     </div>
                      <div>
                         <label className="block text-sm font-medium text-gray-300 mb-2">Firma Digital (Obligatorio)</label>
