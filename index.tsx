@@ -488,6 +488,14 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, companies, setTraini
   const [isLoadingAdminConfig, setIsLoadingAdminConfig] = useState(true);
 
   useEffect(() => {
+    // If the portal is loaded with a single, specific training (from a share link)
+    // and no training has been selected yet, automatically select it to bypass the company selection screen.
+    if (trainings.length === 1 && !selectedTrainingId) {
+        setSelectedTrainingId(trainings[0].id);
+    }
+  }, [trainings, selectedTrainingId]);
+
+  useEffect(() => {
     const fetchAdminConfig = async () => {
       try {
         const config = await apiService.getAdminConfig();
@@ -501,12 +509,27 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, companies, setTraini
     fetchAdminConfig();
   }, []); // Run only once on mount
 
+  const selectedTraining = useMemo(() => {
+    return trainings.find(t => t.id === selectedTrainingId) || null;
+  }, [selectedTrainingId, trainings]);
+
   useEffect(() => {
-    // Pre-fill company in form data when a company is selected
-    if (selectedCompany) {
+    if (selectedTraining) {
+      const authorizedCompanies = selectedTraining.companies || [];
+      if (selectedCompany) {
+        // Standard flow: user selected a company before the training. This is the source of truth.
         setFormData(prev => ({ ...prev, company: selectedCompany }));
+      } else if (authorizedCompanies.length === 1) {
+        // Direct link flow with only one company assigned: auto-select it.
+        setFormData(prev => ({ ...prev, company: authorizedCompanies[0] }));
+      } else {
+        // Direct link flow with multiple (or zero) companies: force user to choose.
+        // Clear any stale value.
+        setFormData(prev => ({ ...prev, company: '' }));
+      }
     }
-  }, [selectedCompany]);
+  }, [selectedTraining, selectedCompany]);
+
 
   useEffect(() => {
     if (trainings.length > 0) {
@@ -532,10 +555,6 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, companies, setTraini
         }
     }
   }, [trainings, setTrainings]);
-
-  const selectedTraining = useMemo(() => {
-    return trainings.find(t => t.id === selectedTrainingId) || null;
-  }, [selectedTrainingId, trainings]);
 
   const allLinksViewed = useMemo(() => {
     if (!selectedTraining) return false;
@@ -670,7 +689,9 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, companies, setTraini
 
   if (selectedTraining) {
     const progress = (selectedTraining.links.filter(l => l.viewed).length / selectedTraining.links.length) * 100;
-    
+    const authorizedCompanies = selectedTraining?.companies || [];
+    const isCompanyDetermined = !!selectedCompany || authorizedCompanies.length === 1;
+
     return (
         <div className="w-full max-w-4xl mx-auto bg-slate-800 p-8 rounded-xl shadow-lg">
             <div className="flex justify-between items-center mb-4">
@@ -722,7 +743,42 @@ const UserPortal: React.FC<UserPortalProps> = ({ trainings, companies, setTraini
                         <input type="text" name="firstName" value={formData.firstName} placeholder="Nombre" onChange={handleInputChange} required className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
                         <input type="text" name="lastName" value={formData.lastName} placeholder="Apellido" onChange={handleInputChange} required className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
                         <input type="text" name="dni" value={formData.dni} placeholder="DNI" onChange={handleInputChange} required className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
-                        <input type="text" name="company" value={formData.company} readOnly disabled className="p-3 bg-slate-900 border border-slate-700 rounded-md text-gray-400 cursor-not-allowed"/>
+                        <div>
+                          {isCompanyDetermined ? (
+                            <input 
+                              type="text" 
+                              name="company" 
+                              value={formData.company} 
+                              readOnly 
+                              disabled 
+                              className="w-full p-3 bg-slate-900 border border-slate-700 rounded-md text-gray-400 cursor-not-allowed"
+                            />
+                          ) : authorizedCompanies.length > 1 ? (
+                            <select 
+                              name="company" 
+                              value={formData.company} 
+                              onChange={handleInputChange} 
+                              required 
+                              className="w-full p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"
+                            >
+                              <option value="" disabled>-- Selecciona tu empresa --</option>
+                              {authorizedCompanies.map(c => (
+                                <option key={c} value={c}>{c}</option>
+                              ))}
+                            </select>
+                          ) : (
+                            <>
+                              <input 
+                                type="text" 
+                                value="No asignada" 
+                                readOnly 
+                                disabled 
+                                className="w-full p-3 bg-slate-900 border border-slate-700 rounded-md text-gray-400 cursor-not-allowed"
+                              />
+                              <p className="mt-1 text-xs text-yellow-400">Advertencia: Esta capacitación no tiene empresas asignadas. Contacta al administrador.</p>
+                            </>
+                          )}
+                        </div>
                         <input type="email" name="email" value={formData.email} placeholder="Email (Opcional)" onChange={handleInputChange} className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
                         <input type="tel" name="phone" value={formData.phone} placeholder="Teléfono (Opcional)" onChange={handleInputChange} className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
                     </div>
