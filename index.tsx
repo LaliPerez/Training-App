@@ -480,6 +480,13 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ onSignatureEnd, signatureRe
         canvas.width = width * ratio;
         canvas.height = height * ratio;
         
+        // Scale the drawing context to match the device pixel ratio.
+        // This is crucial for correcting the cursor offset on high-DPI screens.
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+            ctx.scale(ratio, ratio);
+        }
+        
         // When resizing, we restore the initial data if provided.
         // Any drawing in progress will be lost, which is an acceptable trade-off for responsive correctness.
         if (initialData) {
