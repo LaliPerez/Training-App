@@ -5,7 +5,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import SignatureCanvas from 'react-signature-canvas';
 import QRCode from 'qrcode';
-import { ShieldCheck, User, PlusCircle, Users, FileDown, LogOut, Trash2, Edit, X, Share2, Copy, Eye, FileText, CheckCircle, ArrowLeft, Send, LogIn, RefreshCw, Award, ClipboardList, GraduationCap, Building, ArrowRight, QrCode } from 'lucide-react';
+import { ShieldCheck, User, PlusCircle, Users, FileDown, LogOut, Trash2, Edit, X, Share2, Copy, Eye, EyeOff, FileText, CheckCircle, ArrowLeft, Send, LogIn, RefreshCw, Award, ClipboardList, GraduationCap, Building, ArrowRight, QrCode } from 'lucide-react';
 
 const normalizeString = (str: string): string => {
     if (!str) return '';
@@ -957,6 +957,7 @@ const ADMIN_PASSWORD = 'nuevaAdmin';
 const AdminLogin: React.FC<AdminLoginProps> = ({ onLoginSuccess, onBack }) => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [isPasswordVisible, setIsPasswordVisible] = useState(false);
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -978,21 +979,35 @@ const AdminLogin: React.FC<AdminLoginProps> = ({ onLoginSuccess, onBack }) => {
             <h2 className="text-2xl font-bold text-center text-white mb-6">Acceso Administrador</h2>
             <form onSubmit={handleLogin} className="space-y-6">
                 <div>
-                <label htmlFor="password" className="sr-only">Password</label>
-                <input
-                    id="password"
-                    name="password"
-                    type="password"
-                    autoComplete="current-password"
-                    required
-                    value={password}
-                    onChange={(e) => {
-                    setPassword(e.target.value);
-                    setError('');
-                    }}
-                    className="appearance-none rounded-md relative block w-full px-3 py-2 bg-slate-700 border border-slate-600 placeholder-gray-400 text-white focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
-                    placeholder="Contraseña"
-                />
+                  <label htmlFor="password" className="sr-only">Password</label>
+                  <div className="relative">
+                    <input
+                      id="password"
+                      name="password"
+                      type={isPasswordVisible ? 'text' : 'password'}
+                      autoComplete="current-password"
+                      required
+                      value={password}
+                      onChange={(e) => {
+                        setPassword(e.target.value);
+                        setError('');
+                      }}
+                      className="appearance-none rounded-md relative block w-full px-3 py-2 pr-10 bg-slate-700 border border-slate-600 placeholder-gray-400 text-white focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
+                      placeholder="Contraseña"
+                    />
+                    <button
+                        type="button"
+                        onClick={() => setIsPasswordVisible(!isPasswordVisible)}
+                        className="absolute inset-y-0 right-0 flex items-center px-3 text-gray-400 hover:text-gray-200"
+                        aria-label={isPasswordVisible ? "Ocultar contraseña" : "Mostrar contraseña"}
+                    >
+                      {isPasswordVisible ? (
+                          <EyeOff className="h-5 w-5" />
+                      ) : (
+                          <Eye className="h-5 w-5" />
+                      )}
+                    </button>
+                  </div>
                 </div>
                 {error && <p className="text-red-500 text-sm text-center">{error}</p>}
                 <div>
