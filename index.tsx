@@ -431,6 +431,29 @@ const generateSingleSubmissionPdf = (submission: UserSubmission, adminSignature:
   }
 };
 
+// A custom hook to debounce a function call.
+const useDebounce = (callback: () => void, delay: number) => {
+    const timeoutRef = useRef<number | null>(null);
+    useEffect(() => {
+        // Cleanup timeout on unmount
+        return () => {
+            if (timeoutRef.current) {
+                clearTimeout(timeoutRef.current);
+            }
+        };
+    }, []);
+
+    const debouncedCallback = () => {
+        if (timeoutRef.current) {
+            clearTimeout(timeoutRef.current);
+        }
+        timeoutRef.current = window.setTimeout(() => {
+            callback();
+        }, delay);
+    };
+
+    return debouncedCallback;
+};
 
 // --- COMPONENTS ---
 
@@ -438,17 +461,63 @@ const generateSingleSubmissionPdf = (submission: UserSubmission, adminSignature:
 interface SignaturePadProps {
   onSignatureEnd: (signature: string) => void;
   signatureRef: React.RefObject<SignatureCanvas>;
+  initialData?: string | null;
 }
 
-const SignaturePad: React.FC<SignaturePadProps> = ({ onSignatureEnd, signatureRef }) => {
+const SignaturePad: React.FC<SignaturePadProps> = ({ onSignatureEnd, signatureRef, initialData }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
   const AnySignatureCanvas = SignatureCanvas as any;
+  
+  const resizeCanvas = () => {
+    if (containerRef.current && signatureRef.current) {
+        const canvas: HTMLCanvasElement = (signatureRef.current as any).getCanvas();
+        // Use device pixel ratio for sharp rendering on high-DPI screens
+        const ratio = Math.max(window.devicePixelRatio || 1, 1);
+        const width = containerRef.current.offsetWidth;
+        const height = containerRef.current.offsetHeight;
+
+        // Set the canvas buffer size
+        canvas.width = width * ratio;
+        canvas.height = height * ratio;
+        // Scale the drawing context to match
+        canvas.getContext("2d")!.scale(ratio, ratio);
+        
+        // When resizing, we restore the initial data if provided.
+        // Any drawing in progress will be lost, which is an acceptable trade-off for responsive correctness.
+        if (initialData) {
+          try {
+            signatureRef.current.fromDataURL(initialData);
+          } catch(e) {
+            console.error("Failed to load initial signature data.", e);
+            signatureRef.current.clear();
+          }
+        } else {
+            signatureRef.current.clear();
+        }
+    }
+  };
+  
+  // Use a debounced resize handler for performance, preventing rapid-fire resizes.
+  const debouncedResize = useDebounce(resizeCanvas, 250);
+
+  // useLayoutEffect runs synchronously after DOM mutations, which is ideal for measurements.
+  React.useLayoutEffect(() => {
+    resizeCanvas(); // Initial resize to fit the container
+    window.addEventListener('resize', debouncedResize);
+    return () => window.removeEventListener('resize', debouncedResize);
+  }, [initialData]); // Re-run if initialData changes (e.g. admin signature loads after fetch)
 
   return (
-    <div className="border border-slate-700 rounded-lg bg-white">
+    // The `touch-none` class is critical for a good mobile experience, preventing the page from scrolling while drawing.
+    <div ref={containerRef} className="border border-slate-700 rounded-lg bg-white w-full h-40 touch-none">
       <AnySignatureCanvas
         ref={signatureRef}
         penColor='black'
-        canvasProps={{ className: 'w-full h-40 rounded-lg' }}
+        canvasProps={{
+            // The canvas is styled via CSS to fill the container, while its internal drawing buffer size is managed by our resize logic.
+            style: { width: '100%', height: '100%' },
+            className: 'rounded-lg' 
+        }}
         onEnd={() => {
           if (signatureRef.current) {
             onSignatureEnd(signatureRef.current.toDataURL());
@@ -2002,7 +2071,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <div className="space-y-4">
                     <div>
                         <p className="text-sm text-gray-400 mb-2">Dibuja tu firma en el recuadro.</p>
-                        <SignaturePad signatureRef={adminSignatureRef} onSignatureEnd={() => {}} />
+                        <SignaturePad signatureRef={adminSignatureRef} onSignatureEnd={() => {}} initialData={adminSignature} />
                     </div>
                     <div>
                         <label htmlFor="clarification" className="block text-sm font-medium text-gray-300">Aclaración de Firma (Nombre y Apellido)</label>
