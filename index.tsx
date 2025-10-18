@@ -49,7 +49,7 @@ interface AdminConfig {
 
 // --- SIMULATED BACKEND API SERVICE ---
 // Using a live, centralized JSON store to allow multi-device synchronization.
-const JSON_BLOB_URL = 'https://jsonblob.com/api/jsonBlob/1251394142642536448';
+const JSON_BLOB_URL = 'https://jsonblob.com/api/jsonBlob/1262973950664982528';
 
 interface AppData {
   submissions: UserSubmission[];
