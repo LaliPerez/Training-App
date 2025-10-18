@@ -346,6 +346,10 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
 };
 
 const generateSingleSubmissionPdf = (submission: UserSubmission, adminSignature: string | null, adminSignatureClarification: string, adminJobTitle: string): void => {
+  if (!adminSignature) {
+    alert("Error: La firma del administrador no está configurada.");
+    return;
+  }
   try {
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.getWidth();
@@ -402,10 +406,11 @@ const generateSingleSubmissionPdf = (submission: UserSubmission, adminSignature:
     const signatureX = (pageWidth / 2) - 40;
     
     // SIGNATURE
-    if (adminSignature) {
-      try {
-        doc.addImage(adminSignature, 'PNG', signatureX, signatureAreaY, 80, 40);
-      } catch (e) { console.error("Could not add admin signature image to PDF", e); }
+    try {
+      doc.addImage(adminSignature, 'PNG', signatureX, signatureAreaY, 80, 40);
+    } catch (e) { 
+        console.error("Could not add admin signature image to PDF", e); 
+        doc.text("[Firma no disponible]", signatureX + 40, signatureAreaY + 20, { align: 'center' });
     }
     
     doc.setDrawColor(0); // Black line
@@ -507,9 +512,17 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ onSignatureEnd, signatureRe
 
   // useLayoutEffect runs synchronously after DOM mutations, which is ideal for measurements.
   React.useLayoutEffect(() => {
-    resizeCanvas(); // Initial resize to fit the container
+    // A small delay is added before the initial resize. This is a pragmatic fix to ensure
+    // that containers with CSS transitions (like modals) have stabilized their dimensions
+    // before the canvas is sized, preventing cursor offset issues on HiDPI screens.
+    const timerId = setTimeout(resizeCanvas, 50);
+
     window.addEventListener('resize', debouncedResize);
-    return () => window.removeEventListener('resize', debouncedResize);
+    
+    return () => {
+        clearTimeout(timerId);
+        window.removeEventListener('resize', debouncedResize);
+    };
   }, [initialData]); // Re-run if initialData changes (e.g. admin signature loads after fetch)
 
   return (
