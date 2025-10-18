@@ -1454,40 +1454,56 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
       
       let pdfTrainingName: string | undefined = undefined;
-
       // Determine the training name for the PDF title
       if (selectedSubmissionIds.size > 0) {
-          // If printing a selection, check if they are all from the same training
-          const firstTrainingId = submissionsToPrint[0]?.trainingId;
-          const allSameTraining = submissionsToPrint.every(s => s.trainingId === firstTrainingId);
-          if (allSameTraining) {
-              pdfTrainingName = submissionsToPrint[0]?.trainingName;
+          // If printing a manual selection
+          if (submissionsToPrint.length > 0) {
+              const firstTrainingId = submissionsToPrint[0].trainingId;
+              if (submissionsToPrint.every(s => s.trainingId === firstTrainingId)) {
+                  pdfTrainingName = submissionsToPrint[0].trainingName;
+              }
           }
       } else if (selectedTrainingFilterId !== 'all') {
-          // If printing filtered results
+          // If printing filtered results by training
           const selectedTraining = trainings.find(t => t.id === selectedTrainingFilterId);
           if (selectedTraining) {
-              // Use the name of the training selected in the filter as the title.
-              // The filtering logic handles the "grouping" of results separately.
               pdfTrainingName = selectedTraining.name;
           } else if (submissionsToPrint.length > 0) {
-              // Fallback if the training was deleted but submissions still exist.
-              // We can get the name from the first record.
-              pdfTrainingName = submissionsToPrint[0].trainingName;
+              pdfTrainingName = submissionsToPrint[0].trainingName; // Fallback for deleted trainings
+          }
+      } else {
+          // If printing filtered results without a specific training filter (e.g., only by company)
+          // check if all results happen to be for the same training.
+          if (submissionsToPrint.length > 0) {
+              const firstTrainingId = submissionsToPrint[0].trainingId;
+              if (submissionsToPrint.every(s => s.trainingId === firstTrainingId)) {
+                  pdfTrainingName = submissionsToPrint[0].trainingName;
+              }
           }
       }
-      
-      let pdfCompanyName: string | undefined = undefined;
 
+      let pdfCompanyName: string | undefined = undefined;
       // Determine company name for the PDF
       if (selectedSubmissionIds.size > 0) {
-          const firstCompany = submissionsToPrint[0]?.company;
-          const allSameCompany = submissionsToPrint.every(s => s.company === firstCompany);
-          if (allSameCompany) {
-              pdfCompanyName = firstCompany;
+          // If printing a manual selection
+          if (submissionsToPrint.length > 0) {
+              const firstCompany = submissionsToPrint[0].company;
+              if (submissionsToPrint.every(s => s.company === firstCompany)) {
+                  pdfCompanyName = firstCompany;
+              }
           }
       } else if (companyFilter !== 'all') {
+          // If a specific company filter is active
           pdfCompanyName = companyFilter;
+      } else {
+          // If printing filtered results without a specific company filter,
+          // check if all results happen to be for the same company.
+          if (submissionsToPrint.length > 0) {
+              const firstCompany = submissionsToPrint[0].company;
+              if (submissionsToPrint.every(s => s.company === firstCompany)) {
+                  pdfCompanyName = firstCompany;
+              }
+          }
       }
 
       setIsDownloadingPdf(true);
