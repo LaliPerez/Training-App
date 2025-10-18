@@ -479,8 +479,6 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ onSignatureEnd, signatureRe
         // Set the canvas buffer size
         canvas.width = width * ratio;
         canvas.height = height * ratio;
-        // Scale the drawing context to match
-        canvas.getContext("2d")!.scale(ratio, ratio);
         
         // When resizing, we restore the initial data if provided.
         // Any drawing in progress will be lost, which is an acceptable trade-off for responsive correctness.
@@ -1087,23 +1085,30 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setAdminSignature(config.signature);
       setAdminSignatureClarification(config.clarification);
       setAdminJobTitle(config.jobTitle);
-      setCurrentClarification(config.clarification);
-      setCurrentJobTitle(config.jobTitle);
   };
 
   useEffect(() => {
-    fetchSubmissions();
-    fetchAdminConfig();
-
-    const intervalId = setInterval(() => {
+    const pollData = () => {
+        // User submissions can always be updated in the background.
         fetchSubmissions();
-        fetchAdminConfig();
-    }, 5000); // Poll every 5 seconds
-
-    return () => {
-        clearInterval(intervalId); // Cleanup on unmount
+        // Only refresh the admin config if the signature editing modal is closed.
+        // This prevents overwriting the user's changes while they are editing.
+        if (!showAdminSignatureModal) {
+            fetchAdminConfig();
+        }
     };
-  }, []);
+
+    // Fetch data immediately on component mount.
+    pollData();
+
+    // Set up the interval to poll every 5 seconds.
+    const intervalId = setInterval(pollData, 5000); 
+
+    // Clean up the interval when the component unmounts.
+    return () => {
+        clearInterval(intervalId);
+    };
+  }, [showAdminSignatureModal]); // Rerun effect if modal state changes to get latest check
 
   useEffect(() => {
     if (editingTraining) {
@@ -1314,9 +1319,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     });
   };
 
+  const handleOpenSignatureModal = () => {
+    setCurrentClarification(adminSignatureClarification);
+    setCurrentJobTitle(adminJobTitle);
+    setShowAdminSignatureModal(true);
+  };
+    
   const handleSaveAdminSignature = async () => {
     if (adminSignatureRef.current) {
-      if (adminSignatureRef.current.isEmpty()) {
+      if (adminSignatureRef.current.isEmpty() && !adminSignature) {
           alert("Por favor, dibuja tu firma antes de guardar.");
           return;
       }
@@ -1328,7 +1339,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
           alert("Por favor, ingresa tu cargo.");
           return;
       }
-      const signatureDataUrl = adminSignatureRef.current.toDataURL();
+      
+      const isSignatureUnchanged = adminSignatureRef.current.isEmpty() && adminSignature;
+      const signatureDataUrl = isSignatureUnchanged ? adminSignature : adminSignatureRef.current.toDataURL();
+      
       const newConfig = {
         signature: signatureDataUrl,
         clarification: currentClarification,
@@ -1772,7 +1786,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
                     <div className="flex gap-2 flex-wrap items-center">
                         <button 
-                            onClick={() => setShowAdminSignatureModal(true)}
+                            onClick={handleOpenSignatureModal}
                             className="inline-flex items-center px-4 py-2 border border-slate-600 text-sm font-medium rounded-md shadow-sm text-gray-300 bg-slate-700 hover:bg-slate-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
                         >
                             <Edit className="h-4 w-4 mr-2" />
