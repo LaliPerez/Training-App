@@ -952,7 +952,7 @@ interface AdminLoginProps {
   onBack: () => void;
 }
 
-const ADMIN_PASSWORD = 'admin2025';
+const ADMIN_PASSWORD = 'nuevaAdmin';
 
 const AdminLogin: React.FC<AdminLoginProps> = ({ onLoginSuccess, onBack }) => {
   const [password, setPassword] = useState('');
