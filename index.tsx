@@ -461,7 +461,6 @@ const UserTrainingPortal: React.FC<{ training: Training; onBack: () => void; pre
     const [adminConfig, setAdminConfig] = useState<AdminConfig | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const sigCanvasRef = useRef<SignatureCanvas>(null);
-    const lastOpenedLinkRef = useRef<TrainingLink | null>(null);
 
     useEffect(() => {
       apiService.getAdminConfig().then(config => {
@@ -471,38 +470,16 @@ const UserTrainingPortal: React.FC<{ training: Training; onBack: () => void; pre
       });
     }, []);
 
-    // Effect to track window focus for automatic progress update
-    useEffect(() => {
-        const handleFocus = () => {
-            if (lastOpenedLinkRef.current) {
-                const linkIdToMark = lastOpenedLinkRef.current.id;
-                // Use functional update to ensure we have the latest state
-                setViewedLinks(prevViewedLinks => {
-                    // Avoid unnecessary re-renders if already viewed
-                    if (prevViewedLinks.has(linkIdToMark)) {
-                        return prevViewedLinks;
-                    }
-                    const newSet = new Set(prevViewedLinks);
-                    newSet.add(linkIdToMark);
-                    return newSet;
-                });
-                // Reset the ref to prevent marking the same link again
-                lastOpenedLinkRef.current = null;
-            }
-        };
-
-        window.addEventListener('focus', handleFocus);
-
-        // Cleanup listener on component unmount
-        return () => {
-            window.removeEventListener('focus', handleFocus);
-        };
-    }, []); // Empty dependency array ensures this effect runs only once
-
     const handleOpenLink = (link: TrainingLink) => {
-        // Store the link that the user is about to view
-        lastOpenedLinkRef.current = link;
-        // Open the link in a new tab
+        // Marcado instantáneo: la forma más fiable de registrar el progreso.
+        setViewedLinks(prev => {
+            if (prev.has(link.id)) return prev; // Evita re-render si ya está visto
+            const newSet = new Set(prev);
+            newSet.add(link.id);
+            return newSet;
+        });
+        
+        // Abrir el enlace en una nueva pestaña.
         window.open(link.url, '_blank', 'noopener,noreferrer');
     };
 
@@ -1579,13 +1556,12 @@ const App: React.FC = () => {
         }
     }, []);
     
+    const goToAdminLogin = () => {
+        window.location.href = `${window.location.pathname}?admin=true`;
+    };
+
     const handleAdminLogin = () => {
-        const params = new URLSearchParams(window.location.search);
-        if (!params.has('admin')) {
-             window.location.href = `${window.location.pathname}?admin=true`;
-        } else {
-            setView('adminDashboard');
-        }
+        setView('adminDashboard');
     };
     
     const handleLogout = () => {
@@ -1606,7 +1582,7 @@ const App: React.FC = () => {
         case 'loading':
             return <div className="min-h-screen bg-slate-900 flex items-center justify-center"><Spinner size={12} /></div>;
         case 'home':
-            return <WelcomeScreen onAdminClick={() => setView('adminLogin')} />;
+            return <WelcomeScreen onAdminClick={goToAdminLogin} />;
         case 'adminLogin':
             return <AdminLogin onLogin={handleAdminLogin} />;
         case 'adminDashboard':
@@ -1615,9 +1591,9 @@ const App: React.FC = () => {
              if (currentTraining) {
                  return <UserTrainingPortal training={currentTraining} onBack={handleLogout} prefilledCompany={prefilledCompany} />;
              }
-             return <WelcomeScreen onAdminClick={() => setView('adminLogin')} />; // Fallback
+             return <WelcomeScreen onAdminClick={goToAdminLogin} />; // Fallback
         default:
-            return <WelcomeScreen onAdminClick={() => setView('adminLogin')} />;
+            return <WelcomeScreen onAdminClick={goToAdminLogin} />;
     }
 };
 
