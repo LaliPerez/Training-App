@@ -308,7 +308,7 @@ const generateSingleSubmissionPdf = (submission: UserSubmission, adminSignature:
     doc.setFontSize(12);
     doc.setTextColor(51, 65, 85);
     doc.setFont('helvetica', 'normal');
-    doc.text(`Realizada en la fecha ${submission.timestamp}.`, margin, bodyY + 55);
+    doc.text(`Realizada en la fecha ${new Date(submission.timestamp).toLocaleDateString('es-ES')}.`, margin, bodyY + 55);
 
     // --- Signatures ---
     const signatureBlockY = pageHeight - 80;
@@ -352,7 +352,7 @@ const Modal: React.FC<{ isOpen: boolean; onClose: () => void; title: string; chi
     if (!isOpen) return null;
 
     const sizeClasses = {
-        md: 'max-w-lg',
+        md: 'max-w-2xl',
         xl: 'max-w-6xl h-[90vh]'
     };
 
@@ -374,20 +374,9 @@ const Modal: React.FC<{ isOpen: boolean; onClose: () => void; title: string; chi
 };
 
 
-const SignaturePad: React.FC<{ onSave: (dataUrl: string) => void; onClear: () => void; sigCanvasRef: React.RefObject<SignatureCanvas> }> = ({ onSave, onClear, sigCanvasRef }) => {
-  
-  const handleSave = () => {
-    if (sigCanvasRef.current && !sigCanvasRef.current.isEmpty()) {
-      const dataUrl = sigCanvasRef.current.getTrimmedCanvas().toDataURL('image/png');
-      onSave(dataUrl);
-    } else {
-      alert("Por favor, provea su firma.");
-    }
-  };
-
+const SignaturePad: React.FC<{ sigCanvasRef: React.RefObject<SignatureCanvas> }> = ({ sigCanvasRef }) => {
   const handleClear = () => {
     sigCanvasRef.current?.clear();
-    onClear();
   };
   
   const AnySignatureCanvas = SignatureCanvas as any;
@@ -401,20 +390,13 @@ const SignaturePad: React.FC<{ onSave: (dataUrl: string) => void; onClear: () =>
           canvasProps={{ className: 'w-full h-48' }}
         />
       </div>
-      <div className="flex justify-end space-x-3 mt-4">
+      <div className="flex justify-end mt-4">
         <button
           type="button"
           onClick={handleClear}
           className="px-4 py-2 text-sm font-semibold text-slate-200 bg-slate-600 rounded-md hover:bg-slate-500 transition-colors"
         >
-          Limpiar
-        </button>
-        <button
-          type="button"
-          onClick={handleSave}
-          className="px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition-colors"
-        >
-          Guardar Firma
+          Limpiar Firma
         </button>
       </div>
     </div>
@@ -521,7 +503,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         try {
             await apiService._putData(newData);
             setData(newData);
-            alert("¡Cambios guardados exitosamente!");
+            // Do not show alert on every save, only when there is a message
         } catch (e: any) {
             setError(`Error al guardar los datos: ${e.message}`);
             alert(`Error al guardar los datos: ${e.message}`);
@@ -551,8 +533,10 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         };
 
         const newData = { ...data, adminConfig: newConfig };
-        saveData(newData);
-        setConfigModalOpen(false);
+        saveData(newData).then(() => {
+            alert("Configuración del administrador guardada.");
+            setConfigModalOpen(false);
+        });
     };
 
     const filteredSubmissions = useMemo(() => {
@@ -564,7 +548,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
             const companyMatch = selectedCompany === '' || sub.company === selectedCompany;
             const trainingMatch = selectedTraining === '' || sub.trainingId === selectedTraining;
             return searchMatch && companyMatch && trainingMatch;
-        }).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        }).sort((a, b) => a.lastName.localeCompare(b.lastName));
     }, [data.submissions, filter, selectedCompany, selectedTraining]);
 
     const handleSaveTraining = () => {
@@ -605,9 +589,11 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         }
     
         const newData = { ...data, trainings: updatedTrainings };
-        saveData(newData);
-        setTrainingModalOpen(false);
-        setCurrentTraining(null);
+        saveData(newData).then(() => {
+            alert('Capacitación guardada exitosamente.');
+            setTrainingModalOpen(false);
+            setCurrentTraining(null);
+        });
     };
     
     const openNewTrainingModal = () => {
@@ -643,8 +629,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         }
         const updatedCompanies = [...(data.companies || []), newCompanyName.trim()].sort();
         const newData = { ...data, companies: updatedCompanies };
-        saveData(newData);
-        setNewCompanyName('');
+        saveData(newData).then(() => setNewCompanyName(''));
     };
 
     const handleDeleteCompany = (companyNameToDelete: string) => {
@@ -660,6 +645,17 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
             const updatedSubmissions = data.submissions?.filter(s => s.id !== submissionId);
             const newData = { ...data, submissions: updatedSubmissions };
             saveData(newData);
+        }
+    };
+    
+    const handleDeleteAllSubmissions = () => {
+        if (window.confirm(`¿Está SEGURO de que desea eliminar TODOS los ${data.submissions.length} registros? Esta acción es irreversible.`)) {
+            if (window.confirm("CONFIRMACIÓN FINAL: Esta acción borrará permanentemente todos los registros de asistencia. ¿Desea continuar?")) {
+                const newData = { ...data, submissions: [] };
+                saveData(newData).then(() => {
+                    alert("Todos los registros han sido eliminados.");
+                });
+            }
         }
     };
     
@@ -887,15 +883,24 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                     </div>
                     
                     <section className="xl:col-span-2 bg-slate-800 p-6 rounded-xl shadow-lg border border-slate-700">
-                        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mb-4">
+                        <div className="flex flex-col sm:flex-row items-start justify-between gap-4 mb-4">
                             <h2 className="text-xl font-bold text-slate-100 flex items-center"><Users size={22} className="mr-2 text-blue-400"/>Registros de Asistentes</h2>
-                            <button 
-                                onClick={() => generateSubmissionsPdf(filteredSubmissions, data.adminConfig?.signature || null, data.adminConfig?.clarification || '', data.adminConfig?.jobTitle || '', selectedTraining ? data.trainings?.find(t=>t.id===selectedTraining)?.name : undefined, selectedCompany || undefined)} 
-                                disabled={filteredSubmissions.length === 0 || !data.adminConfig?.signature}
-                                className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-700 transition disabled:bg-slate-600 disabled:cursor-not-allowed"
-                            >
-                                <FileDown size={16}/><span>Descargar PDF ({filteredSubmissions.length})</span>
-                            </button>
+                            <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+                                <button 
+                                    onClick={handleDeleteAllSubmissions} 
+                                    disabled={filteredSubmissions.length === 0}
+                                    className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2 text-sm font-semibold text-red-300 bg-red-900/50 border border-red-800 rounded-md hover:bg-red-800 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    <Trash2 size={16}/><span>Borrar Todos</span>
+                                </button>
+                                <button 
+                                    onClick={() => generateSubmissionsPdf(filteredSubmissions, data.adminConfig?.signature || null, data.adminConfig?.clarification || '', data.adminConfig?.jobTitle || '', selectedTraining ? data.trainings?.find(t=>t.id===selectedTraining)?.name : undefined, selectedCompany || undefined)} 
+                                    disabled={filteredSubmissions.length === 0 || !data.adminConfig?.signature}
+                                    className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-700 transition disabled:bg-slate-600 disabled:cursor-not-allowed"
+                                >
+                                    <FileDown size={16}/><span>Descargar PDF ({filteredSubmissions.length})</span>
+                                </button>
+                            </div>
                         </div>
 
                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
@@ -920,6 +925,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                              <table className="min-w-full divide-y divide-slate-700">
                                 <thead className="bg-slate-900 sticky top-0">
                                     <tr>
+                                        <th className="px-4 py-3 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider w-12">#</th>
                                         <th className="px-4 py-3 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider">Asistente</th>
                                         <th className="px-4 py-3 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider">Capacitación</th>
                                         <th className="px-4 py-3 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider">Empresa</th>
@@ -928,8 +934,9 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                     </tr>
                                 </thead>
                                 <tbody className="bg-slate-800 divide-y divide-slate-700">
-                                    {filteredSubmissions.length > 0 ? filteredSubmissions.map(sub => (
+                                    {filteredSubmissions.length > 0 ? filteredSubmissions.map((sub, index) => (
                                         <tr key={sub.id} className="hover:bg-slate-700/50 transition-colors">
+                                            <td className="px-4 py-3 whitespace-nowrap text-sm text-slate-400 text-center">{index + 1}</td>
                                             <td className="px-4 py-3 whitespace-nowrap">
                                                 <div className="text-sm font-medium text-slate-100">{sub.lastName}, {sub.firstName}</div>
                                                 <div className="text-xs text-slate-400">DNI: {sub.dni}</div>
@@ -946,7 +953,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                         </tr>
                                     )) : (
                                         <tr>
-                                            <td colSpan={5} className="text-center py-12 text-sm text-slate-500">
+                                            <td colSpan={6} className="text-center py-12 text-sm text-slate-500">
                                                 No se encontraron registros con los filtros actuales.
                                             </td>
                                         </tr>
@@ -975,7 +982,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                 <img src={data.adminConfig.signature} alt="Firma guardada" className="h-20"/>
                             </div>
                         )}
-                        <SignaturePad onSave={() => {}} onClear={() => {}} sigCanvasRef={adminSigCanvasRef} />
+                        <SignaturePad sigCanvasRef={adminSigCanvasRef} />
                     </div>
                     <div className="flex justify-end pt-4">
                          <button onClick={handleUpdateConfig} disabled={isSaving} className="flex items-center justify-center w-36 h-10 px-4 py-2 font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition disabled:bg-slate-600">
@@ -986,24 +993,33 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
             </Modal>
             
             <Modal isOpen={isTrainingModalOpen} onClose={() => {setTrainingModalOpen(false); setCurrentTraining(null);}} title={currentTraining?.id ? 'Editar Capacitación' : 'Nueva Capacitación'}>
-                <div className="space-y-4">
+                <div className="space-y-6">
                     <div>
-                        <label htmlFor="trainingName" className="block text-sm font-medium text-slate-300 mb-1">Nombre de la Capacitación</label>
-                        <input type="text" id="trainingName" defaultValue={currentTraining?.name} className="w-full p-2 bg-slate-700 border border-slate-600 rounded-md text-slate-200" required />
+                        <h4 className="text-lg font-bold text-slate-200 mb-2 border-b border-slate-700 pb-2">1. Detalles de la Capacitación</h4>
+                        <label htmlFor="trainingName" className="block text-sm font-medium text-slate-300 mb-1 mt-3">Nombre</label>
+                        <input type="text" id="trainingName" defaultValue={currentTraining?.name} className="w-full p-2 bg-slate-700 border border-slate-600 rounded-md text-slate-200" required placeholder="Ej: Seguridad e Higiene 2024" />
                     </div>
+
+                    <hr className="border-slate-700" />
+
                     <div>
-                        <label className="block text-sm font-medium text-slate-300 mb-1">Enlaces</label>
-                        <div className="space-y-2">
+                        <h4 className="text-lg font-bold text-slate-200 mb-3">2. Material de Estudio (Enlaces)</h4>
+                        <div className="space-y-3">
                         {(currentTraining?.links || []).map((link, index) => (
-                            <div key={link.id || index} className="flex items-center space-x-2 training-link-group">
-                                <input type="text" placeholder="Nombre (Opcional)" defaultValue={link.name} className="flex-grow p-2 bg-slate-700 border border-slate-600 rounded-md text-sm text-slate-200 training-link-name" />
-                                <input type="url" placeholder="https://ejemplo.com" defaultValue={link.url} required className="flex-grow p-2 bg-slate-700 border border-slate-600 rounded-md text-sm text-slate-200 training-link-url" />
-                                <button type="button" onClick={() => {
-                                    if(currentTraining) {
-                                        const newLinks = currentTraining.links.filter((_, i) => i !== index);
-                                        setCurrentTraining({...currentTraining, links: newLinks});
-                                    }
-                                }} className="p-2 text-red-400 hover:bg-red-900/50 rounded-full transition"><Trash2 size={16}/></button>
+                            <div key={link.id || index} className="p-3 bg-slate-700/50 border border-slate-600 rounded-lg space-y-2 training-link-group">
+                                <div className="flex items-center justify-between">
+                                     <span className="text-sm font-semibold text-slate-400">Enlace #{index + 1}</span>
+                                     <button type="button" onClick={() => {
+                                        if(currentTraining) {
+                                            const newLinks = currentTraining.links.filter((_, i) => i !== index);
+                                            setCurrentTraining({...currentTraining, links: newLinks});
+                                        }
+                                    }} className="p-1.5 text-red-400 hover:bg-red-900/50 rounded-full transition"><Trash2 size={16}/></button>
+                                </div>
+                                <div className="flex flex-col md:flex-row items-center space-y-2 md:space-y-0 md:space-x-2">
+                                    <input type="text" placeholder="Nombre del material (Opcional)" defaultValue={link.name} className="flex-grow w-full p-2 bg-slate-700 border border-slate-600 rounded-md text-sm text-slate-200 training-link-name" />
+                                    <input type="url" placeholder="https://ejemplo.com/material" defaultValue={link.url} required className="flex-grow w-full p-2 bg-slate-700 border border-slate-600 rounded-md text-sm text-slate-200 training-link-url" />
+                                </div>
                             </div>
                         ))}
                         </div>
@@ -1014,15 +1030,18 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                     links: [...currentTraining.links, {id: `new-${Date.now()}`, url: '', viewed: false, name: ''}]
                                 });
                             }
-                        }} className="mt-2 flex items-center space-x-2 text-sm font-semibold text-blue-400 hover:text-blue-300">
+                        }} className="mt-3 flex items-center space-x-2 text-sm font-semibold text-blue-400 hover:text-blue-300 bg-blue-900/50 px-3 py-1.5 rounded-md border border-blue-800">
                             <PlusCircle size={16}/><span>Añadir Enlace</span>
                         </button>
                     </div>
+                    
+                    <hr className="border-slate-700" />
+
                     <div>
-                        <label className="block text-sm font-medium text-slate-300 mb-2">Asignar a Empresas (Opcional)</label>
+                        <h4 className="text-lg font-bold text-slate-200 mb-3">3. Asignar a Empresas (Opcional)</h4>
                         <div className="max-h-32 overflow-y-auto space-y-2 p-3 bg-slate-700 rounded-md border border-slate-600">
                             {(data.companies && data.companies.length > 0) ? data.companies.map(company => (
-                                <label key={company} className="flex items-center space-x-3 cursor-pointer">
+                                <label key={company} className="flex items-center space-x-3 cursor-pointer p-1 rounded-md hover:bg-slate-600/50">
                                     <input 
                                         type="checkbox"
                                         checked={selectedCompaniesForTraining.includes(company)}
@@ -1040,7 +1059,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                             )) : <p className="text-sm text-slate-500">No hay empresas. Añádalas desde el panel de Empresas.</p>}
                         </div>
                     </div>
-                    <div className="flex justify-end pt-4">
+                    <div className="flex justify-end pt-4 border-t border-slate-700">
                          <button onClick={handleSaveTraining} disabled={isSaving} className="flex items-center justify-center w-32 h-10 px-4 py-2 font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition disabled:bg-slate-600">
                              {isSaving ? <Spinner size={5}/> : 'Guardar'}
                         </button>
@@ -1064,7 +1083,6 @@ const UserForm: React.FC<{ training: Training; companyName?: string | null; onSu
     const [company, setCompany] = useState(companyName || '');
     const [email, setEmail] = useState('');
     const [phone, setPhone] = useState('');
-    const [signature, setSignature] = useState<string | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
     
     const sigCanvasRef = useRef<SignatureCanvas>(null);
@@ -1075,11 +1093,17 @@ const UserForm: React.FC<{ training: Training; companyName?: string | null; onSu
             alert('Por favor, complete todos los campos obligatorios: Nombre, Apellido, DNI y Empresa.');
             return;
         }
-        if (!signature) {
+        if (sigCanvasRef.current?.isEmpty()) {
             alert('La firma es obligatoria para completar el registro.');
             return;
         }
         
+        const signature = sigCanvasRef.current?.getTrimmedCanvas().toDataURL('image/png');
+        if (!signature) {
+             alert('No se pudo obtener la firma. Por favor, intente de nuevo.');
+             return;
+        }
+
         setIsSubmitting(true);
         try {
             await onSubmit({
@@ -1114,11 +1138,7 @@ const UserForm: React.FC<{ training: Training; companyName?: string | null; onSu
 
             <div>
                  <h3 className="text-lg font-semibold text-slate-100 mb-2">Firma Digital</h3>
-                 <SignaturePad 
-                    sigCanvasRef={sigCanvasRef} 
-                    onSave={setSignature} 
-                    onClear={() => setSignature(null)}
-                />
+                 <SignaturePad sigCanvasRef={sigCanvasRef} />
             </div>
             
             <button type="submit" disabled={isSubmitting} className="w-full flex items-center justify-center space-x-2 bg-blue-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-blue-500 transition disabled:bg-slate-600">
@@ -1129,30 +1149,49 @@ const UserForm: React.FC<{ training: Training; companyName?: string | null; onSu
     );
 };
 
+const ProgressBar: React.FC<{ progress: number }> = ({ progress }) => (
+    <div className="w-full bg-slate-700 rounded-full h-4 mb-4 border border-slate-600">
+        <div 
+            className="bg-blue-600 h-full rounded-full transition-all duration-500 ease-out" 
+            style={{ width: `${progress}%` }}
+        ></div>
+    </div>
+);
+
+
 const UserPortal: React.FC<{ training: Training; companyName: string | null; onBackToHome: () => void }> = ({ training, companyName, onBackToHome }) => {
     const [links, setLinks] = useState<TrainingLink[]>(training.links.map(l => ({ ...l, viewed: false })));
-    const [allLinksViewed, setAllLinksViewed] = useState(false);
     const [submissionComplete, setSubmissionComplete] = useState(false);
-
+    const [completedSubmission, setCompletedSubmission] = useState<UserSubmission | null>(null);
+    const [adminConfig, setAdminConfig] = useState<AdminConfig | null>(null);
+    const lastOpenedLinkId = useRef<string | null>(null);
+    
     const prefilledCompany = useMemo(() => {
-        // Si la URL ya especifica una empresa, esa tiene prioridad.
-        if (companyName) {
-            return companyName;
-        }
-        // Si no, pero la capacitación está asociada a UNA SOLA empresa, usamos esa.
-        if (training.companies && training.companies.length === 1) {
-            return training.companies[0];
-        }
-        // En cualquier otro caso, el campo queda libre.
+        if (companyName) return companyName;
+        if (training.companies && training.companies.length === 1) return training.companies[0];
         return null;
     }, [companyName, training.companies]);
     
     useEffect(() => {
-        setAllLinksViewed(links.every(link => link.viewed));
-    }, [links]);
+        const handleFocus = () => {
+            if (lastOpenedLinkId.current) {
+                setLinks(prevLinks => 
+                    prevLinks.map(link => 
+                        link.id === lastOpenedLinkId.current ? { ...link, viewed: true } : link
+                    )
+                );
+                lastOpenedLinkId.current = null; // Reset after marking
+            }
+        };
 
-    const handleMarkAsViewed = (linkId: string) => {
-        setLinks(prevLinks => prevLinks.map(link => link.id === linkId ? { ...link, viewed: true } : link));
+        window.addEventListener('focus', handleFocus);
+        return () => {
+            window.removeEventListener('focus', handleFocus);
+        };
+    }, []);
+
+    const handleOpenMaterial = (linkId: string) => {
+        lastOpenedLinkId.current = linkId;
     };
 
     const handleUserSubmit = async (submissionData: Omit<UserSubmission, 'id' | 'timestamp'>) => {
@@ -1169,20 +1208,36 @@ const UserPortal: React.FC<{ training: Training; companyName: string | null; onB
             
             await apiService._putData({ ...data, submissions: updatedSubmissions, companies: uniqueCompanies });
             
+            setCompletedSubmission(fullSubmission);
+            setAdminConfig(data.adminConfig || null);
             setSubmissionComplete(true);
         } catch (e) {
             console.error("Failed to submit user data", e);
             throw e; // Re-throw to be caught by the form handler
         }
     };
+
+    const viewedLinksCount = links.filter(link => link.viewed).length;
+    const totalLinksCount = links.length;
+    const progress = totalLinksCount > 0 ? (viewedLinksCount / totalLinksCount) * 100 : 0;
+    const allLinksViewed = progress === 100;
     
-    if (submissionComplete) {
+    if (submissionComplete && completedSubmission) {
         return (
             <div className="text-center py-20 px-4">
                  <CheckCircle size={64} className="mx-auto text-green-400 mb-4" />
                 <h2 className="text-3xl font-bold text-slate-100 mb-2">¡Registro Completado!</h2>
-                <p className="text-slate-400 max-w-md mx-auto">Gracias por completar la capacitación. Sus datos han sido enviados correctamente.</p>
-                <button onClick={onBackToHome} className="mt-8 flex items-center justify-center mx-auto space-x-2 bg-slate-700 text-white font-semibold py-2 px-6 rounded-lg hover:bg-slate-600 transition">
+                <p className="text-slate-400 max-w-md mx-auto mb-8">Gracias por completar la capacitación. Sus datos han sido enviados correctamente.</p>
+
+                {adminConfig?.signature ? (
+                     <button onClick={() => generateSingleSubmissionPdf(completedSubmission, adminConfig.signature, adminConfig.clarification, adminConfig.jobTitle)} className="flex items-center justify-center mx-auto space-x-2 bg-blue-600 text-white font-semibold py-3 px-6 rounded-lg hover:bg-blue-500 transition">
+                        <FileDown size={18}/><span>Descargar Certificado</span>
+                    </button>
+                ) : (
+                    <p className="text-sm text-yellow-400 bg-yellow-900/50 p-3 rounded-md max-w-md mx-auto">La descarga del certificado no está disponible porque el administrador no ha configurado su firma.</p>
+                )}
+
+                <button onClick={onBackToHome} className="mt-8 flex items-center justify-center mx-auto space-x-2 text-slate-400 hover:text-slate-200 transition">
                     <ArrowLeft size={18}/><span>Volver al Inicio</span>
                 </button>
             </div>
@@ -1200,10 +1255,15 @@ const UserPortal: React.FC<{ training: Training; companyName: string | null; onB
             <section className="bg-slate-800 border border-slate-700 p-6 rounded-xl shadow-md mb-8">
                 <h2 className="text-2xl font-bold text-slate-100 mb-4 flex items-center"><ClipboardList size={24} className="mr-2 text-blue-400"/>Paso 1: Ver el material</h2>
                 <p className="text-slate-400 mb-4">
-                    1. Abra cada material en una nueva pestaña.
-                    <br/>
-                    2. Cuando termine de verlo, regrese aquí y marque el material como 'visto'.
+                    Abra cada material en una nueva pestaña. Su progreso se guardará automáticamente al volver a esta ventana.
                 </p>
+                <div className="mb-4">
+                    <div className="flex justify-between items-center text-sm mb-1">
+                        <span className="font-semibold text-slate-300">Progreso</span>
+                        <span className="text-slate-400">{viewedLinksCount} de {totalLinksCount} completados</span>
+                    </div>
+                    <ProgressBar progress={progress} />
+                </div>
                 <div className="space-y-3">
                     {links.map((link, index) => (
                         <div 
@@ -1216,18 +1276,16 @@ const UserPortal: React.FC<{ training: Training; companyName: string | null; onB
                                     href={link.url}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="flex items-center space-x-2 px-3 py-1.5 text-sm font-semibold text-slate-200 bg-slate-700 rounded-md hover:bg-slate-600 transition"
+                                    onClick={() => handleOpenMaterial(link.id)}
+                                    className={`flex items-center space-x-2 px-3 py-1.5 text-sm font-semibold rounded-md transition ${
+                                        link.viewed
+                                        ? 'bg-green-800 text-green-200 cursor-default'
+                                        : 'text-slate-200 bg-slate-700 hover:bg-slate-600'
+                                    }`}
                                 >
-                                    <Eye size={16}/>
-                                    <span>Abrir Material</span>
+                                    {link.viewed ? <CheckCircle size={16}/> : <Eye size={16}/>}
+                                    <span>{link.viewed ? 'Visto' : 'Abrir Material'}</span>
                                 </a>
-                                <button 
-                                    onClick={() => handleMarkAsViewed(link.id)} 
-                                    disabled={link.viewed}
-                                    className="flex items-center space-x-2 px-3 py-1.5 text-sm font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition disabled:bg-slate-600 disabled:opacity-70 disabled:cursor-not-allowed"
-                                >
-                                    {link.viewed ? <><CheckCircle size={16}/><span>Visto</span></> : <span>Marcar como Visto</span>}
-                                </button>
                             </div>
                         </div>
                     ))}
