@@ -47,6 +47,26 @@ interface AdminConfig {
   jobTitle: string;
 }
 
+// --- NETWORK RESILIENCY ---
+// FIX: Disambiguated generic type parameter for the TSX parser by adding a trailing comma inside the angle brackets (<T,>). 
+// This prevents the parser from mistaking `<T>` for a JSX tag, which was causing a cascade of errors throughout the file.
+const retry = async <T,>(fn: () => Promise<T>, attempts: number, delay: number): Promise<T> => {
+    let lastError: Error | undefined;
+    for (let i = 0; i < attempts; i++) {
+        try {
+            return await fn();
+        } catch (error) {
+            lastError = error as Error;
+            if (i < attempts - 1) { // Don't log or delay on the last attempt
+                console.warn(`Attempt ${i + 1} of ${attempts} failed. Retrying in ${delay}ms...`);
+                await new Promise(res => setTimeout(res, delay));
+            }
+        }
+    }
+    console.error("All network attempts failed.", lastError);
+    throw lastError;
+};
+
 // --- SIMULATED BACKEND API SERVICE ---
 // Using a live, centralized JSON store to allow multi-device synchronization.
 // A new URL is used to provide a fresh data store and prevent conflicts with old instances.
@@ -62,19 +82,23 @@ interface AppData {
 
 
 const apiService = {
-  // Fetches the entire data blob from the cloud store.
+  // Fetches the entire data blob from the cloud store with retry logic.
   // Returns null on failure to prevent write operations from overwriting data with an empty state.
   _getData: async (): Promise<AppData | null> => {
+     const fetchData = async () => {
+        const response = await fetch(JSON_BLOB_URL, {
+            method: 'GET',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            cache: 'no-store',
+        });
+        if (!response.ok) {
+            throw new Error(`Network response was not ok: ${response.statusText}`);
+        }
+        return response;
+    };
+    
     try {
-      const response = await fetch(JSON_BLOB_URL, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        cache: 'no-store', // Prevent browser caching to ensure data is always fresh
-      });
-      if (!response.ok) {
-        console.error(`Network response was not ok: ${response.statusText}`);
-        return null; // Indicate failure
-      }
+      const response = await retry(fetchData, 3, 1000); // 3 attempts, 1s delay
       const text = await response.text();
       // Handle empty blob case
       const data = text ? JSON.parse(text) : {};
@@ -86,9 +110,28 @@ const apiService = {
         companies: data.companies || [],
       };
     } catch (error) {
-      console.error("Failed to fetch data from remote store:", error);
+      console.error("Failed to fetch data from remote store after multiple attempts:", error);
       return null; // Indicate failure
     }
+  },
+
+  // Writes the entire data blob to the cloud store with retry logic.
+  _putData: async (data: AppData): Promise<void> => {
+    const putData = async () => {
+      const response = await fetch(JSON_BLOB_URL, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (!response.ok) {
+        throw new Error(`Network response was not ok during PUT: ${response.statusText}`);
+      }
+    };
+    // Re-throw error so the UI layer can handle it (e.g., show an alert)
+    await retry(putData, 3, 1000).catch(err => {
+        console.error("Failed to write data to remote store after multiple attempts:", err);
+        throw err;
+    });
   },
 
   shareTraining: async (training: Training): Promise<string> => {
@@ -105,11 +148,7 @@ const apiService = {
       
       const updatedData = { ...data, sharedTrainings };
 
-      await fetch(JSON_BLOB_URL, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(updatedData),
-      });
+      await apiService._putData(updatedData);
 
       return key;
   },
@@ -131,12 +170,7 @@ const apiService = {
       throw new Error("Failed to get data before updating trainings.");
     }
     const updatedData = { ...data, trainings };
-    
-    await fetch(JSON_BLOB_URL, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedData),
-    });
+    await apiService._putData(updatedData);
   },
   
   getCompanies: async (): Promise<string[]> => {
@@ -151,12 +185,7 @@ const apiService = {
       throw new Error("Failed to get data before updating companies.");
     }
     const updatedData = { ...data, companies };
-    
-    await fetch(JSON_BLOB_URL, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedData),
-    });
+    await apiService._putData(updatedData);
   },
 
   getSubmissions: async (): Promise<UserSubmission[]> => {
@@ -176,12 +205,7 @@ const apiService = {
       throw new Error("Failed to get data before updating admin config.");
     }
     const updatedData = { ...data, adminConfig: config };
-    
-    await fetch(JSON_BLOB_URL, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedData),
-    });
+    await apiService._putData(updatedData);
   },
 
   addSubmission: async (submission: UserSubmission): Promise<UserSubmission> => {
@@ -193,11 +217,7 @@ const apiService = {
     const newSubmissions = [...(data.submissions || []), submission];
     const updatedData = { ...data, submissions: newSubmissions };
     
-    await fetch(JSON_BLOB_URL, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedData),
-    });
+    await apiService._putData(updatedData);
     return submission;
   },
 
@@ -209,12 +229,7 @@ const apiService = {
     }
     let submissions = (data.submissions || []).filter(sub => sub.id !== id);
     const updatedData = { ...data, submissions };
-    
-    await fetch(JSON_BLOB_URL, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedData),
-    });
+    await apiService._putData(updatedData);
   },
 
   deleteAllSubmissions: async (): Promise<void> => {
@@ -224,11 +239,7 @@ const apiService = {
       throw new Error("Failed to get data before deleting all submissions.");
     }
     const updatedData = { ...data, submissions: [] };
-    await fetch(JSON_BLOB_URL, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedData),
-    });
+    await apiService._putData(updatedData);
   }
 };
 
@@ -1101,7 +1112,7 @@ interface AdminDashboardProps {
   onLogout: () => void;
 }
 
-const TabButton = ({ id, label, icon: Icon, activeTab, setActiveTab }) => (
+const TabButton: React.FC<{id: string, label: string, icon: React.ElementType, activeTab: string, setActiveTab: (id: string) => void}> = ({ id, label, icon: Icon, activeTab, setActiveTab }) => (
     <button
       onClick={() => setActiveTab(id)}
       className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
@@ -1115,7 +1126,7 @@ const TabButton = ({ id, label, icon: Icon, activeTab, setActiveTab }) => (
     </button>
 );
   
-const CompanyManager = ({
+const CompanyManager: React.FC<{selectedCompanies: string[], setSelectedCompanies: (companies: string[]) => void, allAvailableCompanies: string[]}> = ({
     selectedCompanies,
     setSelectedCompanies,
     allAvailableCompanies
