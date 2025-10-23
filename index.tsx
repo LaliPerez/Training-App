@@ -49,7 +49,8 @@ interface AdminConfig {
 
 // --- SIMULATED BACKEND API SERVICE ---
 // Using a live, centralized JSON store to allow multi-device synchronization.
-const JSON_BLOB_URL = 'https://jsonblob.com/api/jsonBlob/1262973950664982528';
+// A new URL is used to provide a fresh data store and prevent conflicts with old instances.
+const JSON_BLOB_URL = 'https://jsonblob.com/api/jsonBlob/1264353488118005760';
 
 interface AppData {
   submissions: UserSubmission[];
@@ -62,7 +63,8 @@ interface AppData {
 
 const apiService = {
   // Fetches the entire data blob from the cloud store.
-  _getData: async (): Promise<AppData> => {
+  // Returns null on failure to prevent write operations from overwriting data with an empty state.
+  _getData: async (): Promise<AppData | null> => {
     try {
       const response = await fetch(JSON_BLOB_URL, {
         method: 'GET',
@@ -71,7 +73,7 @@ const apiService = {
       });
       if (!response.ok) {
         console.error(`Network response was not ok: ${response.statusText}`);
-        return { submissions: [], adminConfig: { signature: null, clarification: '', jobTitle: '' }, sharedTrainings: {}, trainings: [], companies: [] };
+        return null; // Indicate failure
       }
       const text = await response.text();
       // Handle empty blob case
@@ -85,13 +87,19 @@ const apiService = {
       };
     } catch (error) {
       console.error("Failed to fetch data from remote store:", error);
-      return { submissions: [], adminConfig: { signature: null, clarification: '', jobTitle: '' }, sharedTrainings: {}, trainings: [], companies: [] }; // Return default structure on error
+      return null; // Indicate failure
     }
   },
 
   shareTraining: async (training: Training): Promise<string> => {
       const key = `st-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
       const data = await apiService._getData();
+      
+      if (!data) {
+        alert("Error de Conexión: No se pudo compartir la capacitación. Por favor, revisa tu conexión e inténtalo de nuevo.");
+        throw new Error("Failed to get data before sharing training.");
+      }
+
       const sharedTrainings = data.sharedTrainings || {};
       sharedTrainings[key] = training;
       
@@ -108,16 +116,20 @@ const apiService = {
 
   getSharedTraining: async (key: string): Promise<Training | null> => {
       const data = await apiService._getData();
-      return data.sharedTrainings?.[key] || null;
+      return data?.sharedTrainings?.[key] || null;
   },
 
   getTrainings: async (): Promise<Training[]> => {
     const data = await apiService._getData();
-    return data.trainings || [];
+    return data?.trainings || [];
   },
 
   updateTrainings: async (trainings: Training[]): Promise<void> => {
     const data = await apiService._getData();
+    if (!data) {
+      alert("Error de Conexión: No se pudieron guardar los cambios en las capacitaciones. Por favor, revisa tu conexión e inténtalo de nuevo.");
+      throw new Error("Failed to get data before updating trainings.");
+    }
     const updatedData = { ...data, trainings };
     
     await fetch(JSON_BLOB_URL, {
@@ -129,11 +141,15 @@ const apiService = {
   
   getCompanies: async (): Promise<string[]> => {
     const data = await apiService._getData();
-    return data.companies || [];
+    return data?.companies || [];
   },
 
   updateCompanies: async (companies: string[]): Promise<void> => {
     const data = await apiService._getData();
+    if (!data) {
+      alert("Error de Conexión: No se pudieron guardar los cambios en las empresas. Por favor, revisa tu conexión e inténtalo de nuevo.");
+      throw new Error("Failed to get data before updating companies.");
+    }
     const updatedData = { ...data, companies };
     
     await fetch(JSON_BLOB_URL, {
@@ -145,16 +161,20 @@ const apiService = {
 
   getSubmissions: async (): Promise<UserSubmission[]> => {
     const data = await apiService._getData();
-    return data.submissions || [];
+    return data?.submissions || [];
   },
 
   getAdminConfig: async (): Promise<AdminConfig> => {
     const data = await apiService._getData();
-    return data.adminConfig || { signature: null, clarification: '', jobTitle: '' };
+    return data?.adminConfig || { signature: null, clarification: '', jobTitle: '' };
   },
 
   updateAdminConfig: async (config: AdminConfig): Promise<void> => {
     const data = await apiService._getData();
+    if (!data) {
+      alert("Error de Conexión: No se pudo guardar la configuración de administrador. Por favor, revisa tu conexión e inténtalo de nuevo.");
+      throw new Error("Failed to get data before updating admin config.");
+    }
     const updatedData = { ...data, adminConfig: config };
     
     await fetch(JSON_BLOB_URL, {
@@ -166,6 +186,10 @@ const apiService = {
 
   addSubmission: async (submission: UserSubmission): Promise<UserSubmission> => {
     const data = await apiService._getData();
+    if (!data) {
+      alert("Error de Conexión: No se pudo enviar tu registro. Por favor, revisa tu conexión e inténtalo de nuevo.");
+      throw new Error("Failed to get data before adding submission.");
+    }
     const newSubmissions = [...(data.submissions || []), submission];
     const updatedData = { ...data, submissions: newSubmissions };
     
@@ -179,6 +203,10 @@ const apiService = {
 
   deleteSubmission: async (id: string): Promise<void> => {
     const data = await apiService._getData();
+    if (!data) {
+      alert("Error de Conexión: No se pudo eliminar el registro. Por favor, revisa tu conexión e inténtalo de nuevo.");
+      throw new Error("Failed to get data before deleting submission.");
+    }
     let submissions = (data.submissions || []).filter(sub => sub.id !== id);
     const updatedData = { ...data, submissions };
     
@@ -191,6 +219,10 @@ const apiService = {
 
   deleteAllSubmissions: async (): Promise<void> => {
     const data = await apiService._getData();
+    if (!data) {
+      alert("Error de Conexión: No se pudieron eliminar todos los registros. Por favor, revisa tu conexión e inténtalo de nuevo.");
+      throw new Error("Failed to get data before deleting all submissions.");
+    }
     const updatedData = { ...data, submissions: [] };
     await fetch(JSON_BLOB_URL, {
         method: 'PUT',
@@ -473,27 +505,31 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ onSignatureEnd, signatureRe
   const containerRef = useRef<HTMLDivElement>(null);
   const AnySignatureCanvas = SignatureCanvas as any;
   
+  // This function corrects the canvas resolution for high-DPI screens and ensures
+  // the drawing coordinates match the cursor/touch position.
   const resizeCanvas = () => {
     if (containerRef.current && signatureRef.current) {
         const canvas: HTMLCanvasElement = (signatureRef.current as any).getCanvas();
-        // Use device pixel ratio for sharp rendering on high-DPI screens
+        // Get the device pixel ratio, falling back to 1.
         const ratio = Math.max(window.devicePixelRatio || 1, 1);
+        
+        // Get the display size of the canvas from its container.
         const width = containerRef.current.offsetWidth;
         const height = containerRef.current.offsetHeight;
 
-        // Set the canvas buffer size to match the display size multiplied by the pixel ratio
+        // Set the canvas's internal drawing buffer size. This needs to be larger
+        // on high-DPI screens to prevent blurriness.
         canvas.width = width * ratio;
         canvas.height = height * ratio;
         
-        // Scale the drawing context to match the device pixel ratio.
-        // This is the crucial step to correct the cursor offset on high-DPI screens.
-        const ctx = canvas.getContext("2d");
-        if (ctx) {
-            ctx.scale(ratio, ratio);
-        }
-        
+        // The react-signature-canvas library internally handles scaling the drawing context
+        // to match the device pixel ratio. We must NOT do it manually here, as that would
+        // cause the context to be scaled twice, leading to a coordinate mismatch.
+        // By setting the dimensions and then calling clear() or fromDataURL(), we let
+        // the library reset its internal state and apply the correct scaling itself.
+
         // When resizing, we restore the initial data if provided.
-        // Any drawing in progress will be lost, which is an acceptable trade-off for responsive correctness.
+        // `fromDataURL` and `clear` both trigger the library's internal reset logic.
         if (initialData) {
           try {
             signatureRef.current.fromDataURL(initialData);
@@ -1060,12 +1096,99 @@ interface AdminDashboardProps {
   addTraining: (name: string, links: { name: string, url: string }[], companies: string[]) => Promise<void>;
   updateTraining: (id: string, name: string, links: { name: string, url: string }[], companies: string[]) => Promise<void>;
   deleteTraining: (id: string) => Promise<void>;
-  updateCompanies: (companies: string[]) => Promise<void>;
+  addGlobalCompany: (companyName: string) => Promise<boolean>;
+  deleteGlobalCompany: (companyName: string) => Promise<void>;
   onLogout: () => void;
 }
 
+const TabButton = ({ id, label, icon: Icon, activeTab, setActiveTab }) => (
+    <button
+      onClick={() => setActiveTab(id)}
+      className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+        activeTab === id
+          ? 'bg-slate-700 text-white'
+          : 'text-gray-400 hover:bg-slate-800 hover:text-white'
+      }`}
+    >
+      <Icon className="h-4 w-4" />
+      {label}
+    </button>
+);
+  
+const CompanyManager = ({
+    selectedCompanies,
+    setSelectedCompanies,
+    allAvailableCompanies
+}) => {
+    const [companyToAdd, setCompanyToAdd] = useState('');
+
+    const availableForSelection = useMemo(() => 
+        allAvailableCompanies.filter(c => !selectedCompanies.includes(c)),
+        [allAvailableCompanies, selectedCompanies]
+    );
+
+    useEffect(() => {
+        // If the currently selected option `companyToAdd` is no longer valid because it was
+        // just assigned to the training (i.e., it's not in the available list anymore),
+        // reset the dropdown to the first available option. This provides a smooth UX
+        // for adding multiple companies sequentially.
+        const isSelectedCompanyStillAvailable = availableForSelection.some(c => c === companyToAdd);
+
+        if (!isSelectedCompanyStillAvailable) {
+            setCompanyToAdd(availableForSelection[0] || '');
+        }
+    }, [availableForSelection]);
+
+    const handleAddCompany = () => {
+        if (companyToAdd && !selectedCompanies.includes(companyToAdd)) {
+            setSelectedCompanies([...selectedCompanies, companyToAdd]);
+        }
+    };
+    
+    const handleRemoveCompany = (companyToRemove: string) => {
+        setSelectedCompanies(selectedCompanies.filter(c => c !== companyToRemove));
+    };
+
+    return (
+        <div>
+            <div className="flex flex-wrap gap-2 mb-2 min-h-[28px]">
+                {selectedCompanies.map(company => (
+                    <span key={company} className="flex items-center gap-1.5 bg-indigo-500/20 text-indigo-300 text-xs font-medium px-2.5 py-1 rounded-full">
+                        {company}
+                        <button type="button" onClick={() => handleRemoveCompany(company)} className="text-indigo-400 hover:text-white">
+                            <X size={14} />
+                        </button>
+                    </span>
+                ))}
+            </div>
+            <div className="flex items-center gap-2">
+                <select
+                    value={companyToAdd}
+                    onChange={(e) => setCompanyToAdd(e.target.value)}
+                    disabled={availableForSelection.length === 0}
+                    className="flex-grow px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm disabled:bg-slate-800 disabled:cursor-not-allowed"
+                >
+                    {availableForSelection.length > 0 ? (
+                        availableForSelection.map(c => <option key={c} value={c}>{c}</option>)
+                    ) : (
+                        <option value="">No hay más empresas para añadir</option>
+                    )}
+                </select>
+                <button
+                    type="button"
+                    onClick={handleAddCompany}
+                    disabled={!companyToAdd}
+                    className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:bg-slate-600 disabled:opacity-50"
+                >
+                    Añadir
+                </button>
+            </div>
+        </div>
+    );
+};
+
 const AdminDashboard: React.FC<AdminDashboardProps> = ({ 
-    trainings, companies, addTraining, updateTraining, deleteTraining, updateCompanies, onLogout
+    trainings, companies, addTraining, updateTraining, deleteTraining, addGlobalCompany, deleteGlobalCompany, onLogout
 }) => {
   const [activeTab, setActiveTab] = useState('submissions');
   const [trainingName, setTrainingName] = useState('');
@@ -1104,6 +1227,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const adminSignatureRef = useRef<SignatureCanvas>(null);
   const selectAllCheckboxRef = useRef<HTMLInputElement>(null);
+  const isSignatureModalOpenRef = useRef(showAdminSignatureModal);
   
   const fetchSubmissions = async () => {
     const subs = await apiService.getSubmissions();
@@ -1122,19 +1246,27 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setAdminJobTitle(config.jobTitle);
   };
 
+  // Keep a ref in sync with the modal's state. This allows the polling interval
+  // to check the current modal state without being re-triggered by it.
+  useEffect(() => {
+    isSignatureModalOpenRef.current = showAdminSignatureModal;
+  }, [showAdminSignatureModal]);
+
+  // Decoupled polling effect. It runs only once on mount.
   useEffect(() => {
     const pollData = () => {
         // User submissions can always be updated in the background.
         fetchSubmissions();
         // Only refresh the admin config if the signature editing modal is closed.
         // This prevents overwriting the user's changes while they are editing.
-        if (!showAdminSignatureModal) {
+        if (!isSignatureModalOpenRef.current) {
             fetchAdminConfig();
         }
     };
 
     // Fetch data immediately on component mount.
-    pollData();
+    fetchSubmissions();
+    fetchAdminConfig();
 
     // Set up the interval to poll every 5 seconds.
     const intervalId = setInterval(pollData, 5000); 
@@ -1143,7 +1275,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return () => {
         clearInterval(intervalId);
     };
-  }, [showAdminSignatureModal]); // Rerun effect if modal state changes to get latest check
+  }, []); // Empty dependency array ensures this effect runs only once.
 
   useEffect(() => {
     if (editingTraining) {
@@ -1301,20 +1433,16 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       e.preventDefault();
       const trimmed = newGlobalCompany.trim();
       if (trimmed) {
-          const normalizedNew = normalizeString(trimmed);
-          const alreadyExists = companies.some(c => normalizeString(c) === normalizedNew);
-          if (alreadyExists) {
-              alert(`Error: Una empresa con un nombre similar a "${trimmed}" ya existe. Por favor, revise la lista.`);
-              return;
+          const wasAdded = await addGlobalCompany(trimmed);
+          if (wasAdded) {
+            setNewGlobalCompany('');
           }
-          await updateCompanies([...companies, trimmed].sort((a, b) => a.localeCompare(b)));
-          setNewGlobalCompany('');
       }
   };
 
   const handleDeleteGlobalCompany = async (companyToDelete: string) => {
       if (window.confirm(`¿Seguro que quieres eliminar la empresa "${companyToDelete}" de la lista maestra?`)) {
-          await updateCompanies(companies.filter(c => c !== companyToDelete));
+          await deleteGlobalCompany(companyToDelete);
       }
   };
 
@@ -1561,85 +1689,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const noFiltersApplied = selectedTrainingFilterId === 'all' && companyFilter === 'all';
 
-  const TabButton = ({ id, label, icon: Icon }) => (
-    <button
-      onClick={() => setActiveTab(id)}
-      className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
-        activeTab === id
-          ? 'bg-slate-700 text-white'
-          : 'text-gray-400 hover:bg-slate-800 hover:text-white'
-      }`}
-    >
-      <Icon className="h-4 w-4" />
-      {label}
-    </button>
-  );
-  
-  const CompanyManager = ({
-    selectedCompanies,
-    setSelectedCompanies,
-    allAvailableCompanies
-  }) => {
-      const [companyToAdd, setCompanyToAdd] = useState('');
-
-      const availableForSelection = useMemo(() => 
-          allAvailableCompanies.filter(c => !selectedCompanies.includes(c)),
-          [allAvailableCompanies, selectedCompanies]
-      );
-
-      useEffect(() => {
-          setCompanyToAdd(availableForSelection[0] || '');
-      }, [availableForSelection]);
-
-      const handleAddCompany = () => {
-          if (companyToAdd && !selectedCompanies.includes(companyToAdd)) {
-              setSelectedCompanies([...selectedCompanies, companyToAdd]);
-          }
-      };
-      
-      const handleRemoveCompany = (companyToRemove: string) => {
-          setSelectedCompanies(selectedCompanies.filter(c => c !== companyToRemove));
-      };
-
-      return (
-          <div>
-              <div className="flex flex-wrap gap-2 mb-2 min-h-[28px]">
-                  {selectedCompanies.map(company => (
-                      <span key={company} className="flex items-center gap-1.5 bg-indigo-500/20 text-indigo-300 text-xs font-medium px-2.5 py-1 rounded-full">
-                          {company}
-                          <button type="button" onClick={() => handleRemoveCompany(company)} className="text-indigo-400 hover:text-white">
-                              <X size={14} />
-                          </button>
-                      </span>
-                  ))}
-              </div>
-              <div className="flex items-center gap-2">
-                  <select
-                      value={companyToAdd}
-                      onChange={(e) => setCompanyToAdd(e.target.value)}
-                      disabled={availableForSelection.length === 0}
-                      className="flex-grow px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm disabled:bg-slate-800 disabled:cursor-not-allowed"
-                  >
-                      {availableForSelection.length > 0 ? (
-                          availableForSelection.map(c => <option key={c} value={c}>{c}</option>)
-                      ) : (
-                          <option value="">No hay más empresas para añadir</option>
-                      )}
-                  </select>
-                  <button
-                      type="button"
-                      onClick={handleAddCompany}
-                      disabled={!companyToAdd}
-                      className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:bg-slate-600 disabled:opacity-50"
-                  >
-                      Añadir
-                  </button>
-              </div>
-          </div>
-      );
-  };
-
-
   return (
     <div className="w-full max-w-7xl mx-auto p-4 md:p-8 space-y-6">
       <div className="flex flex-wrap gap-4 justify-between items-center">
@@ -1651,10 +1700,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       </div>
 
        <div className="flex flex-wrap justify-center sm:justify-start items-center gap-2 p-1 bg-slate-800/50 border border-slate-700 rounded-lg">
-        <TabButton id="submissions" label="Usuarios Registrados" icon={Users} />
-        <TabButton id="manage" label="Gestionar Capacitaciones" icon={ClipboardList} />
-        <TabButton id="companies" label="Gestionar Empresas" icon={Award} />
-        <TabButton id="create" label="Crear Nueva Capacitación" icon={PlusCircle} />
+        <TabButton id="submissions" label="Usuarios Registrados" icon={Users} activeTab={activeTab} setActiveTab={setActiveTab} />
+        <TabButton id="manage" label="Gestionar Capacitaciones" icon={ClipboardList} activeTab={activeTab} setActiveTab={setActiveTab} />
+        <TabButton id="companies" label="Gestionar Empresas" icon={Award} activeTab={activeTab} setActiveTab={setActiveTab} />
+        <TabButton id="create" label="Crear Nueva Capacitación" icon={PlusCircle} activeTab={activeTab} setActiveTab={setActiveTab} />
       </div>
 
       <div className="bg-slate-800 p-4 sm:p-6 rounded-xl shadow-lg border border-slate-700">
@@ -2369,10 +2418,38 @@ const App: React.FC = () => {
     await apiService.updateTrainings(updatedTrainings);
     setTrainings(updatedTrainings);
   };
+  
+  const addGlobalCompany = async (companyName: string): Promise<boolean> => {
+    let wasAdded = false;
+    setCompanies(currentCompanies => {
+        const trimmed = companyName.trim();
+        if (!trimmed) return currentCompanies;
 
-  const updateCompanies = async (updatedCompanies: string[]) => {
-      await apiService.updateCompanies(updatedCompanies);
-      setCompanies(updatedCompanies.sort((a,b) => a.localeCompare(b)));
+        const normalizedNew = normalizeString(trimmed);
+        const alreadyExists = currentCompanies.some(c => normalizeString(c) === normalizedNew);
+        if (alreadyExists) {
+            alert(`Error: Una empresa con un nombre similar a "${trimmed}" ya existe. Por favor, revise la lista.`);
+            return currentCompanies;
+        }
+        
+        const updatedCompanies = [...currentCompanies, trimmed].sort((a, b) => a.localeCompare(b));
+        apiService.updateCompanies(updatedCompanies).catch(error => {
+            console.error("Failed to persist new company:", error);
+        });
+        wasAdded = true;
+        return updatedCompanies;
+    });
+    return wasAdded;
+  };
+
+  const deleteGlobalCompany = async (companyToDelete: string) => {
+    setCompanies(currentCompanies => {
+        const updatedCompanies = currentCompanies.filter(c => c !== companyToDelete);
+        apiService.updateCompanies(updatedCompanies).catch(error => {
+            console.error("Failed to persist company deletion:", error);
+        });
+        return updatedCompanies;
+    });
   };
 
 
@@ -2387,7 +2464,8 @@ const App: React.FC = () => {
                     addTraining={addTraining}
                     updateTraining={updateTraining}
                     deleteTraining={deleteTraining}
-                    updateCompanies={updateCompanies}
+                    addGlobalCompany={addGlobalCompany}
+                    deleteGlobalCompany={deleteGlobalCompany}
                     onLogout={() => {
                         setUserPortalTrainings([]); // Clear any loaded training
                         setView('user');
