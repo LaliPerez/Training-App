@@ -85,7 +85,7 @@ const apiService = {
       };
     } catch (error) {
       console.error("Failed to fetch data from remote store:", error);
-      return { submissions: [], adminConfig: { signature: null, clarification: '', jobTitle: '' }, sharedTrainings: {}, trainings: [], companies: [] }; // Return default structure on error
+      throw error; // Re-throw the error so callers can handle it
     }
   },
 
@@ -93,7 +93,7 @@ const apiService = {
   _putData: async (data: AppData): Promise<void> => {
     const response = await fetch(JSON_BLOB_URL, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
         body: JSON.stringify(data),
     });
     if (!response.ok) {
@@ -115,65 +115,6 @@ const apiService = {
   getSharedTraining: async (key: string): Promise<Training | null> => {
       const data = await apiService._getData();
       return data.sharedTrainings?.[key] || null;
-  },
-
-  getTrainings: async (): Promise<Training[]> => {
-    const data = await apiService._getData();
-    return data.trainings || [];
-  },
-
-  updateTrainings: async (trainings: Training[]): Promise<void> => {
-    const data = await apiService._getData();
-    const updatedData = { ...data, trainings };
-    await apiService._putData(updatedData);
-  },
-  
-  getCompanies: async (): Promise<string[]> => {
-    const data = await apiService._getData();
-    return data.companies || [];
-  },
-
-  updateCompanies: async (companies: string[]): Promise<void> => {
-    const data = await apiService._getData();
-    const updatedData = { ...data, companies };
-    await apiService._putData(updatedData);
-  },
-
-  getSubmissions: async (): Promise<UserSubmission[]> => {
-    const data = await apiService._getData();
-    return data.submissions || [];
-  },
-
-  getAdminConfig: async (): Promise<AdminConfig> => {
-    const data = await apiService._getData();
-    return data.adminConfig || { signature: null, clarification: '', jobTitle: '' };
-  },
-
-  updateAdminConfig: async (config: AdminConfig): Promise<void> => {
-    const data = await apiService._getData();
-    const updatedData = { ...data, adminConfig: config };
-    await apiService._putData(updatedData);
-  },
-
-  addSubmission: async (submission: UserSubmission): Promise<UserSubmission> => {
-    const data = await apiService._getData();
-    const newSubmissions = [...(data.submissions || []), submission];
-    const updatedData = { ...data, submissions: newSubmissions };
-    await apiService._putData(updatedData);
-    return submission;
-  },
-
-  deleteSubmission: async (id: string): Promise<void> => {
-    const data = await apiService._getData();
-    let submissions = (data.submissions || []).filter(sub => sub.id !== id);
-    const updatedData = { ...data, submissions };
-    await apiService._putData(updatedData);
-  },
-
-  deleteAllSubmissions: async (): Promise<void> => {
-    const data = await apiService._getData();
-    const updatedData = { ...data, submissions: [] };
-    await apiService._putData(updatedData);
   }
 };
 
@@ -245,7 +186,8 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
           doc.setLineWidth(0.2);
           doc.line(14, footerY, pageWidth - 14, footerY);
 
-          const pageNum = doc.internal.getCurrentPageInfo().pageNumber;
+          // FIX: The page number is available on the `data` object provided by the autoTable hook.
+          const pageNum = data.pageNumber;
           const pageStr = "Página " + pageNum;
           const dateStr = `Generado el: ${new Date().toLocaleDateString('es-ES')}`;
           
@@ -524,1960 +466,1197 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ onSignatureEnd, signatureRe
 };
 
 // UserPortal.tsx
-interface UserPortalProps {
-  trainings: Training[]; // Will always contain a single training
-  setTrainingsStateForUser: React.Dispatch<React.SetStateAction<Training[]>>;
+const UserPortal: React.FC<{
+    userTrainings: Training[];
+    adminConfig: AdminConfig | null;
+    onSubmit: (submission: UserSubmission) => Promise<void>;
+}> = ({ userTrainings, adminConfig, onSubmit }) => {
+    const [training, setTraining] = useState<Training | null>(userTrainings[0] || null);
+    const [formCompleted, setFormCompleted] = useState(false);
+    const [lastSubmission, setLastSubmission] = useState<UserSubmission | null>(null);
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const signatureRef = useRef<SignatureCanvas>(null);
+    const [formData, setFormData] = useState({
+        firstName: '',
+        lastName: '',
+        dni: '',
+        company: '',
+        email: '',
+        phone: '',
+        signature: '',
+    });
+
+    const [viewingLinkIndex, setViewingLinkIndex] = useState<number | null>(null);
+
+    const isKnownIncompatibleLink = (url: string): boolean => {
+        try {
+            const domain = new URL(url).hostname.toLowerCase();
+            if (domain.endsWith('google.com')) return true;
+            if (['forms.gle', 'youtu.be', 'youtube.com'].includes(domain)) return true;
+            return false;
+        } catch (e) {
+            console.warn("Could not parse URL to check compatibility, opening externally:", url);
+            return true;
+        }
+    };
+
+    useEffect(() => {
+        if (training) {
+            const authorizedCompanies = training.companies || [];
+            if (authorizedCompanies.length === 1) {
+                setFormData(prev => ({ ...prev, company: authorizedCompanies[0] }));
+            } else {
+                setFormData(prev => ({ ...prev, company: '' }));
+            }
+        }
+    }, [training]);
+
+    useEffect(() => {
+        if (training) {
+            const progress = localStorage.getItem(`training-progress-${training.id}`);
+            if (progress) {
+                try {
+                    const viewedLinkIds: string[] = JSON.parse(progress);
+                    const updatedLinks = training.links.map(l =>
+                        viewedLinkIds.includes(l.id) ? { ...l, viewed: true } : l
+                    );
+                    setTraining(prev => prev ? { ...prev, links: updatedLinks } : null);
+                } catch (e) {
+                    console.error("Failed to parse training progress from localStorage", e);
+                }
+            }
+        }
+    }, [training?.id]);
+
+
+    const allLinksViewed = useMemo(() => {
+        if (!training) return false;
+        return training.links.every(link => link.viewed);
+    }, [training]);
+
+    const handleLinkClick = (linkId: string) => {
+        if (!training) return;
+
+        const updatedLinks = training.links.map(l => l.id === linkId ? { ...l, viewed: true } : l);
+        const viewedLinkIds = updatedLinks.filter(l => l.viewed).map(l => l.id);
+        localStorage.setItem(`training-progress-${training.id}`, JSON.stringify(viewedLinkIds));
+        setTraining({ ...training, links: updatedLinks });
+    };
+
+    const handleOpenLink = (index: number) => {
+        if (!training) return;
+        const linkToOpen = training.links[index];
+        handleLinkClick(linkToOpen.id);
+        if (isKnownIncompatibleLink(linkToOpen.url)) {
+            window.open(linkToOpen.url, '_blank', 'noopener,noreferrer');
+        } else {
+            setViewingLinkIndex(index);
+        }
+    };
+
+    const handleCloseViewer = () => setViewingLinkIndex(null);
+
+    const navigateLink = (direction: 'next' | 'prev') => {
+        if (viewingLinkIndex === null || !training) return;
+        const newIndex = direction === 'next' ? viewingLinkIndex + 1 : viewingLinkIndex - 1;
+        if (newIndex >= 0 && newIndex < training.links.length) {
+            const linkToOpen = training.links[newIndex];
+            handleLinkClick(linkToOpen.id);
+            if (isKnownIncompatibleLink(linkToOpen.url)) {
+                window.open(linkToOpen.url, '_blank', 'noopener,noreferrer');
+                handleCloseViewer();
+            } else {
+                setViewingLinkIndex(newIndex);
+            }
+        }
+    };
+    
+    const handleNextLink = () => navigateLink('next');
+    const handlePrevLink = () => navigateLink('prev');
+
+    const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+        const { name, value } = e.target;
+        setFormData(prev => ({ ...prev, [name]: value }));
+    };
+
+    const handleSignatureEnd = (signature: string) => {
+        setFormData(prev => ({ ...prev, signature }));
+    };
+
+    const clearSignature = () => {
+        signatureRef.current?.clear();
+        setFormData(prev => ({ ...prev, signature: '' }));
+    };
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!training || !formData.signature || !formData.company) {
+            alert("Por favor, proporciona toda la información requerida, incluyendo tu empresa y firma.");
+            return;
+        }
+
+        setIsSubmitting(true);
+        const now = new Date();
+        const formattedTimestamp = now.toLocaleDateString('es-ES', {
+            day: '2-digit', month: '2-digit', year: 'numeric',
+        }) + ' ' + now.toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', hour12: true,
+        });
+
+        const newSubmission: UserSubmission = {
+            id: `sub-${training.id}-${formData.dni}-${Date.now()}`,
+            timestamp: formattedTimestamp,
+            trainingId: training.id,
+            trainingName: training.name,
+            ...formData
+        };
+
+        try {
+            await onSubmit(newSubmission);
+            setLastSubmission(newSubmission);
+            setFormCompleted(true);
+        } catch (error) {
+            console.error("Failed to submit training data:", error);
+            alert("Hubo un error al enviar tu registro. Por favor, inténtalo de nuevo.");
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+    
+    if (formCompleted && lastSubmission) {
+        const downloadDisabled = !adminConfig?.signature || !adminConfig?.clarification || !adminConfig?.jobTitle;
+        const downloadTitle = downloadDisabled
+            ? "El administrador aún no ha configurado firma, aclaración y cargo para las constancias."
+            : "Descargar mi constancia en PDF";
+        
+        return (
+            <div className="text-center p-8 bg-slate-800 rounded-lg shadow-xl max-w-2xl mx-auto">
+                <CheckCircle className="mx-auto h-16 w-16 text-green-500" />
+                <h2 className="mt-4 text-2xl font-bold text-white">¡Registro Enviado con Éxito!</h2>
+                <p className="mt-2 text-gray-400">Tu registro ha sido enviado al administrador.</p>
+                <div className="mt-6 border-t border-slate-700 pt-6 space-y-4 text-left">
+                    <div className="flex items-start gap-4">
+                        <div className="flex-shrink-0 h-8 w-8 rounded-full bg-slate-600 flex items-center justify-center font-bold text-white">1</div>
+                        <div>
+                            <h3 className="font-semibold text-white">Descarga tu constancia personal (Opcional)</h3>
+                            <p className="text-sm text-gray-400 mb-2">Guarda este PDF como comprobante personal de que has completado la capacitación.</p>
+                            <button
+                                onClick={() => {
+                                    if (adminConfig?.signature) {
+                                        generateSingleSubmissionPdf(lastSubmission, adminConfig.signature, adminConfig.clarification, adminConfig.jobTitle);
+                                    }
+                                }}
+                                disabled={downloadDisabled}
+                                title={downloadTitle}
+                                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-slate-500 hover:bg-slate-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-400 disabled:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                <FileDown className="h-4 w-4 mr-2" />
+                                Descargar Mi Constancia
+                            </button>
+                        </div>
+                    </div>
+                     <div className="text-center mt-6">
+                        <button onClick={() => window.location.reload()} className="text-indigo-400 hover:text-indigo-300">Realizar otra capacitación</button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    const viewingLink = viewingLinkIndex !== null && training ? training.links[viewingLinkIndex] : null;
+
+    if (!training) {
+        return <div className="text-center p-8 bg-slate-800 rounded-lg"><h2 className="text-xl text-white">Error</h2><p className="text-gray-400">No se pudo cargar la capacitación. Por favor, intente escanear el código QR de nuevo.</p></div>;
+    }
+
+    const progress = (training.links.filter(l => l.viewed).length / (training.links.length || 1)) * 100;
+    const authorizedCompanies = training.companies || [];
+    const isCompanyDetermined = authorizedCompanies.length === 1;
+
+    return (
+        <div className="w-full max-w-4xl mx-auto bg-slate-800 p-8 rounded-xl shadow-lg">
+            <h2 className="text-2xl font-bold text-white mb-2">{training.name}</h2>
+            <p className="text-gray-400 mb-4">Revisa los siguientes enlaces para completar la capacitación. Una vez revisados todos, podrás registrar tu asistencia.</p>
+
+            <div className="mb-4">
+                <div className="w-full bg-slate-700 rounded-full h-2.5">
+                    <div className="bg-indigo-500 h-2.5 rounded-full" style={{ width: `${progress}%` }}></div>
+                </div>
+                <p className="text-sm text-right text-gray-400 mt-1">{Math.round(progress)}% completado</p>
+            </div>
+
+            <div className="space-y-3 mb-8">
+                {training.links.map((link, index) => (
+                    <button key={link.id} onClick={() => handleOpenLink(index)} title={link.url} className={`flex items-center justify-between p-4 rounded-lg border transition-all w-full text-left ${link.viewed ? 'bg-green-900/30 border-green-500/50' : 'bg-slate-900/50 border-slate-700 hover:bg-slate-700'}`}>
+                        <div className="flex items-center min-w-0">
+                            <FileText className="h-5 w-5 mr-3 text-indigo-400 flex-shrink-0"/>
+                            <div className="min-w-0">
+                                <span className="font-medium text-white">{link.name?.trim() ? link.name : `Material de Estudio ${index + 1}`}</span>
+                                <p className="text-sm text-gray-400 truncate">{link.url}</p>
+                            </div>
+                        </div>
+                        {link.viewed && <CheckCircle className="h-6 w-6 text-green-500 flex-shrink-0 ml-4" />}
+                    </button>
+                ))}
+            </div>
+
+            {allLinksViewed && (
+                <form onSubmit={handleSubmit} className="space-y-6 animate-fade-in">
+                    <h3 className="text-xl font-semibold text-white border-t border-slate-700 pt-6">Completa tus datos</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <input type="text" name="firstName" value={formData.firstName} placeholder="Nombre" onChange={handleInputChange} required className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
+                        <input type="text" name="lastName" value={formData.lastName} placeholder="Apellido" onChange={handleInputChange} required className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
+                        <input type="text" name="dni" value={formData.dni} placeholder="DNI" onChange={handleInputChange} required className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
+                        <div>
+                            {isCompanyDetermined ? (
+                                <input type="text" name="company" value={formData.company} readOnly disabled className="w-full p-3 bg-slate-900 border border-slate-700 rounded-md text-gray-400 cursor-not-allowed"/>
+                            ) : authorizedCompanies.length > 1 ? (
+                                <select name="company" value={formData.company} onChange={handleInputChange} required className="w-full p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500">
+                                    <option value="" disabled>-- Selecciona tu empresa --</option>
+                                    {authorizedCompanies.map(c => <option key={c} value={c}>{c}</option>)}
+                                </select>
+                            ) : (
+                                <><input type="text" value="No asignada" readOnly disabled className="w-full p-3 bg-slate-900 border border-slate-700 rounded-md text-gray-400 cursor-not-allowed"/><p className="mt-1 text-xs text-yellow-400">Advertencia: Esta capacitación no tiene empresas asignadas. Contacta al administrador.</p></>
+                            )}
+                        </div>
+                        <input type="email" name="email" value={formData.email} placeholder="Email (Opcional)" onChange={handleInputChange} className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
+                        <input type="tel" name="phone" value={formData.phone} placeholder="Teléfono (Opcional)" onChange={handleInputChange} className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-2">Firma Digital (Obligatorio)</label>
+                        <SignaturePad onSignatureEnd={handleSignatureEnd} signatureRef={signatureRef} />
+                        <button type="button" onClick={clearSignature} className="text-sm text-indigo-400 hover:underline mt-2">Limpiar firma</button>
+                    </div>
+                    <button type="submit" disabled={!formData.signature || isSubmitting} className="w-full flex justify-center items-center py-3 px-4 border border-transparent rounded-md shadow-sm text-base font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed">
+                        <Send className="h-5 w-5 mr-2" />
+                        {isSubmitting ? 'Enviando...' : 'Enviar Registro'}
+                    </button>
+                </form>
+            )}
+
+            {viewingLink && (
+                <div className="fixed inset-0 bg-black bg-opacity-80 flex flex-col p-2 sm:p-4 z-50 animate-fade-in">
+                    <div className="flex justify-between items-center p-2 bg-slate-800 rounded-t-lg border-b border-slate-700 flex-shrink-0">
+                        <h2 className="text-lg font-semibold text-white truncate pr-4">{viewingLink.name?.trim() ? viewingLink.name : `Material ${viewingLinkIndex! + 1}`}</h2>
+                        <div className="flex items-center gap-2">
+                            <a href={viewingLink.url} target="_blank" rel="noopener noreferrer" className="p-2 text-gray-400 hover:text-white" title="Abrir en nueva pestaña"><Share2 className="h-5 w-5" /></a>
+                            <button onClick={handleCloseViewer} className="p-2 text-gray-400 hover:text-white" title="Cerrar visor"><X className="h-6 w-6" /></button>
+                        </div>
+                    </div>
+                    <div className="flex-grow bg-slate-900">
+                        <iframe src={viewingLink.url} title={viewingLink.name || 'Material de capacitación'} className="w-full h-full border-0" sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe>
+                    </div>
+                    <div className="flex justify-between items-center p-2 bg-slate-800 rounded-b-lg border-t border-slate-700 flex-shrink-0">
+                        <button onClick={handlePrevLink} disabled={viewingLinkIndex === 0} className="p-2 text-gray-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"><ArrowLeft className="h-6 w-6" /></button>
+                        <span className="text-sm text-gray-400">{viewingLinkIndex! + 1} / {training.links.length}</span>
+                        <button onClick={handleNextLink} disabled={viewingLinkIndex === training.links.length - 1} className="p-2 text-gray-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"><ArrowRight className="h-6 w-6" /></button>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// --- ADMIN DASHBOARD COMPONENT ---
+interface AdminDashboardProps {
+  // Data from App
+  trainings: Training[];
+  submissions: UserSubmission[];
+  companies: string[];
+  adminConfig: AdminConfig;
+  error: string | null;
+  isSaving: boolean;
+  // Modal state setters
+  setIsTrainingModalOpen: (open: boolean) => void;
+  setCurrentTraining: (t: Training | null) => void;
+  setIsSignatureModalOpen: (open: boolean) => void;
+  setIsCompaniesModalOpen: (open: boolean) => void;
+  // Action Handlers
+  onLogout: () => void;
+  onDeleteSubmission: (id: string) => Promise<void>;
+  onDeleteTraining: (id: string) => Promise<void>;
+  onOpenShareModal: (t: Training) => Promise<void>;
+  onAddCompany: (name: string) => Promise<void>;
+  onDeleteCompany: (name: string) => Promise<void>;
 }
 
-const UserPortal: React.FC<UserPortalProps> = ({ trainings, setTrainingsStateForUser: setTrainings }) => {
-  const [formCompleted, setFormCompleted] = useState(false);
-  const [lastSubmission, setLastSubmission] = useState<UserSubmission | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const signatureRef = useRef<SignatureCanvas>(null);
-  const [formData, setFormData] = useState({
-    firstName: '',
-    lastName: '',
-    dni: '',
-    company: '',
-    email: '',
-    phone: '',
-    signature: '',
+const AdminDashboard = React.memo<AdminDashboardProps>(({
+  trainings, submissions, companies, adminConfig, error, isSaving,
+  setIsTrainingModalOpen, setCurrentTraining, setIsSignatureModalOpen, setIsCompaniesModalOpen,
+  onLogout, onDeleteSubmission, onDeleteTraining, onOpenShareModal, onAddCompany, onDeleteCompany
+}) => {
+  // UI state is now local to the dashboard, preventing App-level re-renders on input change.
+  const [searchTerm, setSearchTerm] = useState('');
+  const [newCompanyName, setNewCompanyName] = useState('');
+  const [filterTraining, setFilterTraining] = useState('all');
+  const [filterCompany, setFilterCompany] = useState('all');
+  const [currentPage, setCurrentPage] = useState(1);
+
+  const sortedSubmissions = [...submissions].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+  const filteredSubmissions = sortedSubmissions.filter(sub => {
+    const matchesSearch = searchTerm === '' ||
+      normalizeString(sub.firstName).includes(normalizeString(searchTerm)) ||
+      normalizeString(sub.lastName).includes(normalizeString(searchTerm)) ||
+      normalizeString(sub.dni).includes(normalizeString(searchTerm)) ||
+      normalizeString(sub.company).includes(normalizeString(searchTerm));
+    const matchesTraining = filterTraining === 'all' || sub.trainingId === filterTraining;
+    const matchesCompany = filterCompany === 'all' || sub.company === filterCompany;
+    return matchesSearch && matchesTraining && matchesCompany;
   });
   
-  const [adminConfig, setAdminConfig] = useState<AdminConfig | null>(null);
-  const [isLoadingAdminConfig, setIsLoadingAdminConfig] = useState(true);
-  const [viewingLinkIndex, setViewingLinkIndex] = useState<number | null>(null);
+  const PageButton = ({ children, onClick, disabled = false }: { children: React.ReactNode, onClick: () => void, disabled?: boolean}) => (
+    <button onClick={onClick} disabled={disabled} className="px-3 py-1 text-sm rounded-md bg-slate-700 text-white hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed">
+        {children}
+    </button>
+  );
+  const submissionsPerPage = 10;
+  const totalPages = Math.ceil(filteredSubmissions.length / submissionsPerPage);
+  const paginatedSubmissions = filteredSubmissions.slice((currentPage - 1) * submissionsPerPage, currentPage * submissionsPerPage);
 
-  const selectedTraining = trainings[0] || null;
+  return (
+    <div className="bg-slate-900 min-h-screen text-white p-4 sm:p-6 lg:p-8">
+      <div className="max-w-7xl mx-auto">
+        {error && <div className="bg-red-800/50 border border-red-700 text-red-200 p-3 rounded-md mb-4">{error}</div>}
+        <header className="flex flex-wrap justify-between items-center mb-6 gap-4">
+          <div className="flex items-center">
+            <ShieldCheck className="h-8 w-8 text-indigo-400 mr-3"/>
+            <h1 className="text-2xl sm:text-3xl font-bold">Panel de Administrador</h1>
+          </div>
+          <div className="flex items-center gap-4">
+              {isSaving && <span className="text-sm text-yellow-400 flex items-center"><RefreshCw className="animate-spin h-4 w-4 mr-2"/>Guardando...</span>}
+              <button onClick={onLogout} className="flex items-center px-4 py-2 text-sm font-medium rounded-md text-white bg-slate-600 hover:bg-slate-500">
+                  <LogOut className="h-4 w-4 mr-2"/>
+                  Cerrar Sesión
+              </button>
+          </div>
+        </header>
 
-  const isKnownIncompatibleLink = (url: string): boolean => {
+        {/* Admin Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+            <div className="bg-slate-800 p-5 rounded-lg flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-400">Total Capacitaciones</p>
+                <p className="text-3xl font-bold">{trainings.length}</p>
+              </div>
+              <GraduationCap className="h-10 w-10 text-indigo-500 opacity-50"/>
+            </div>
+            <div className="bg-slate-800 p-5 rounded-lg flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-400">Total Registros</p>
+                <p className="text-3xl font-bold">{submissions.length}</p>
+              </div>
+              <ClipboardList className="h-10 w-10 text-green-500 opacity-50"/>
+            </div>
+            <div className="bg-slate-800 p-5 rounded-lg flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-400">Total Empresas</p>
+                <p className="text-3xl font-bold">{companies.length}</p>
+              </div>
+              <Building className="h-10 w-10 text-sky-500 opacity-50"/>
+            </div>
+             <div className="bg-slate-800 p-5 rounded-lg flex flex-col justify-center">
+                <p className="text-sm text-gray-400 mb-2">Firma del Administrador</p>
+                {adminConfig.signature ?
+                  <div className="flex items-center gap-4">
+                      <img src={adminConfig.signature} alt="Firma" className="h-10 bg-white p-1 rounded-md" />
+                      <button onClick={() => setIsSignatureModalOpen(true)} className="text-sm text-indigo-400 hover:underline">Editar</button>
+                  </div>
+                  :
+                  <button onClick={() => setIsSignatureModalOpen(true)} className="text-sm text-indigo-400 hover:underline">Configurar Firma</button>
+                }
+            </div>
+        </div>
+        
+        {/* Trainings Management Section */}
+        <div className="bg-slate-800 p-6 rounded-lg mb-8">
+          <div className="flex flex-wrap justify-between items-center mb-4 gap-3">
+            <h2 className="text-xl font-semibold">Gestionar Capacitaciones</h2>
+            <button
+              onClick={() => { setCurrentTraining(null); setIsTrainingModalOpen(true); }}
+              disabled={isSaving}
+              className="inline-flex items-center px-4 py-2 text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-500"
+            >
+              <PlusCircle className="h-5 w-5 mr-2"/>
+              Nueva Capacitación
+            </button>
+          </div>
+          <div className="space-y-3">
+            {trainings.length > 0 ? trainings.map(t => (
+              <div key={t.id} className="bg-slate-700/50 p-3 rounded-md flex flex-wrap justify-between items-center gap-3">
+                <div className="font-medium">{t.name}</div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button onClick={() => onOpenShareModal(t)} disabled={isSaving} className="px-3 py-1 text-xs rounded bg-sky-600 hover:bg-sky-700 disabled:bg-slate-500"><Share2 size={14} className="inline mr-1"/>Compartir</button>
+                  <button onClick={() => { setCurrentTraining(t); setIsTrainingModalOpen(true); }} disabled={isSaving} className="px-3 py-1 text-xs rounded bg-slate-600 hover:bg-slate-500 disabled:bg-slate-500"><Edit size={14} className="inline mr-1"/>Editar</button>
+                  <button onClick={() => onDeleteTraining(t.id)} disabled={isSaving} className="px-3 py-1 text-xs rounded bg-red-600 hover:bg-red-700 disabled:bg-slate-500"><Trash2 size={14} className="inline mr-1"/>Eliminar</button>
+                </div>
+              </div>
+            )) : <p className="text-center text-gray-400 py-4">No hay capacitaciones creadas.</p>}
+          </div>
+        </div>
+
+        {/* Submissions Table Section */}
+        <div className="bg-slate-800 p-6 rounded-lg">
+          <div className="flex flex-wrap justify-between items-start mb-4 gap-4">
+            <h2 className="text-xl font-semibold">Registros de Usuarios</h2>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => setIsCompaniesModalOpen(true)}
+                disabled={isSaving}
+                className="inline-flex items-center px-4 py-2 text-sm font-medium rounded-md text-white bg-slate-600 hover:bg-slate-500 disabled:bg-slate-500"
+              >
+                <Building className="h-4 w-4 mr-2"/>Gestionar Empresas
+              </button>
+              <button 
+                onClick={() => generateSubmissionsPdf(filteredSubmissions, adminConfig.signature, adminConfig.clarification, adminConfig.jobTitle, 
+                  filterTraining !== 'all' ? trainings.find(t=>t.id === filterTraining)?.name : undefined,
+                  filterCompany !== 'all' ? filterCompany : undefined
+                )}
+                disabled={filteredSubmissions.length === 0}
+                className="inline-flex items-center px-4 py-2 text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 disabled:bg-slate-500 disabled:opacity-60"
+              >
+                <FileDown className="h-4 w-4 mr-2"/>Descargar Filtrados
+              </button>
+            </div>
+          </div>
+
+          {/* Filters */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+            <input type="text" placeholder="Buscar por nombre, DNI, empresa..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="p-2 bg-slate-700 border border-slate-600 rounded-md text-white"/>
+            <select value={filterTraining} onChange={e => {setFilterTraining(e.target.value); setCurrentPage(1);}} className="p-2 bg-slate-700 border border-slate-600 rounded-md text-white">
+              <option value="all">Todas las Capacitaciones</option>
+              {trainings.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+            <select value={filterCompany} onChange={e => {setFilterCompany(e.target.value); setCurrentPage(1);}} className="p-2 bg-slate-700 border border-slate-600 rounded-md text-white">
+              <option value="all">Todas las Empresas</option>
+              {companies.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+
+          {/* Table */}
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm text-left text-gray-300">
+              <thead className="text-xs text-gray-400 uppercase bg-slate-700/50">
+                <tr>
+                  <th scope="col" className="px-4 py-3">Capacitación</th>
+                  <th scope="col" className="px-4 py-3">Participante</th>
+                  <th scope="col" className="px-4 py-3">DNI</th>
+                  <th scope="col" className="px-4 py-3">Empresa</th>
+                  <th scope="col" className="px-4 py-3">Fecha</th>
+                  <th scope="col" className="px-4 py-3">Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {paginatedSubmissions.length > 0 ? paginatedSubmissions.map(sub => (
+                  <tr key={sub.id} className="border-b border-slate-700 hover:bg-slate-700/50">
+                    <td className="px-4 py-3 font-medium">{sub.trainingName}</td>
+                    <td className="px-4 py-3">{sub.lastName}, {sub.firstName}</td>
+                    <td className="px-4 py-3">{sub.dni}</td>
+                    <td className="px-4 py-3">{sub.company}</td>
+                    <td className="px-4 py-3">{sub.timestamp}</td>
+                    <td className="px-4 py-3 flex items-center gap-2">
+                      <button onClick={() => generateSingleSubmissionPdf(sub, adminConfig.signature, adminConfig.clarification, adminConfig.jobTitle)} className="p-1.5 text-sky-400 hover:text-sky-300" title="Descargar Constancia"><FileDown size={16}/></button>
+                      <button onClick={() => onDeleteSubmission(sub.id)} disabled={isSaving} className="p-1.5 text-red-400 hover:text-red-300 disabled:text-gray-500" title="Eliminar Registro"><Trash2 size={16}/></button>
+                    </td>
+                  </tr>
+                )) : (
+                  <tr><td colSpan={6} className="text-center py-8 text-gray-400">No se encontraron registros.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Pagination */}
+          {totalPages > 1 &&
+            <div className="flex justify-between items-center mt-4">
+                <span className="text-sm text-gray-400">Página {currentPage} de {totalPages}</span>
+                <div className="flex gap-2">
+                    <PageButton onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1}>Anterior</PageButton>
+                    <PageButton onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}>Siguiente</PageButton>
+                </div>
+            </div>
+          }
+        </div>
+      </div>
+    </div>
+  );
+  });
+
+// --- MAIN APP COMPONENT ---
+
+const App = () => {
+  type AppMode = 'user' | 'admin' | 'login';
+  const [mode, setMode] = useState<AppMode>('user');
+  const [userTrainings, setUserTrainings] = useState<Training[]>([]);
+  
+  const [trainings, setTrainings] = useState<Training[]>([]);
+  const [submissions, setSubmissions] = useState<UserSubmission[]>([]);
+  const [companies, setCompanies] = useState<string[]>([]);
+  const [adminConfig, setAdminConfig] = useState<AdminConfig>({ signature: null, clarification: '', jobTitle: '' });
+
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const pollingRef = useRef<number | null>(null);
+
+  // State for Admin Modals
+  const [isTrainingModalOpen, setIsTrainingModalOpen] = useState(false);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [isSignatureModalOpen, setIsSignatureModalOpen] = useState(false);
+  const [isCompaniesModalOpen, setIsCompaniesModalOpen] = useState(false);
+  const [isSubmissionsModalOpen, setIsSubmissionsModalOpen] = useState(false);
+  const [currentTraining, setCurrentTraining] = useState<Training | null>(null);
+  const [shareUrl, setShareUrl] = useState('');
+  const [qrCodeUrl, setQrCodeUrl] = useState('');
+
+  // Login State
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [loginError, setLoginError] = useState('');
+  const ADMIN_PASSWORD = 'admin2025';
+
+  // Admin signature modal state
+  const [modalAdminName, setModalAdminName] = useState('');
+  const [modalAdminJob, setModalAdminJob] = useState('');
+  const adminSignatureRef = useRef<SignatureCanvas>(null);
+  
+  // Admin companies modal state
+  const [newCompanyName, setNewCompanyName] = useState('');
+
+  const fetchData = async (isInitialLoad = false) => {
+    if (isInitialLoad) setIsLoading(true);
+    setError(null);
     try {
-        const domain = new URL(url).hostname.toLowerCase();
-        if (domain.endsWith('google.com')) return true;
-        if (['forms.gle', 'youtu.be', 'youtube.com'].includes(domain)) return true;
-        return false;
+      const data = await apiService._getData();
+      setTrainings(data.trainings || []);
+      setSubmissions(data.submissions || []);
+      setCompanies(data.companies || []);
+      setAdminConfig(data.adminConfig || { signature: null, clarification: '', jobTitle: '' });
     } catch (e) {
-        console.warn("Could not parse URL to check compatibility, opening externally:", url);
-        return true; 
+      const errorMessage = e instanceof Error ? e.message : "An unknown error occurred";
+      setError(`Failed to fetch data, will retry automatically: ${errorMessage}`);
+      console.error("Fetch data error:", e);
+    } finally {
+      if (isInitialLoad) setIsLoading(false);
     }
   };
 
+  const stopPolling = () => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+  };
+
+  const startPolling = () => {
+    stopPolling(); // Ensure no multiple pollers are running
+    if (!document.hidden) {
+      fetchData(); // Fetch immediately
+      pollingRef.current = window.setInterval(fetchData, 15000); // Increased interval
+    }
+  };
+  
   useEffect(() => {
-    const fetchAdminConfig = async () => {
-      try {
-        const config = await apiService.getAdminConfig();
-        setAdminConfig(config);
-      } catch (error) {
-        console.error("Failed to fetch admin config:", error);
-      } finally {
-        setIsLoadingAdminConfig(false);
-      }
-    };
-    fetchAdminConfig();
+    const urlParams = new URLSearchParams(window.location.search);
+    const trainingKey = urlParams.get('training');
+    const adminParam = urlParams.get('admin');
+    
+    if (adminParam !== null) {
+      setMode('login');
+      setIsLoading(false);
+    } else if (trainingKey) {
+      setIsLoading(true);
+      apiService.getSharedTraining(trainingKey)
+        .then(training => {
+          if (training) {
+              setUserTrainings([training]);
+              setMode('user');
+          } else {
+              setError("Capacitación no encontrada. Por favor, consulte con el administrador.");
+          }
+        })
+        .catch(err => {
+            console.error(err);
+            setError("Error al cargar la capacitación.");
+        })
+        .finally(() => setIsLoading(false));
+    } else {
+      setMode('user');
+      setIsLoading(false);
+      // This will show the "scan QR code" message if no trainings are loaded
+    }
   }, []);
 
   useEffect(() => {
-    if (selectedTraining) {
-      const authorizedCompanies = selectedTraining.companies || [];
-      if (authorizedCompanies.length === 1) {
-        setFormData(prev => ({ ...prev, company: authorizedCompanies[0] }));
-      } else {
-        setFormData(prev => ({ ...prev, company: '' }));
+    // Smart polling: only poll when the tab is visible and in admin mode.
+    const handleVisibilityChange = () => {
+      if (mode === 'admin') {
+        if (document.hidden) {
+          stopPolling();
+        } else {
+          startPolling();
+        }
       }
-    }
-  }, [selectedTraining]);
+    };
 
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // Cleanup on unmount
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      stopPolling();
+    };
+  }, [mode]);
 
   useEffect(() => {
-    if (selectedTraining) {
-        const progress = localStorage.getItem(`training-progress-${selectedTraining.id}`);
-        if (progress) {
-            try {
-                const viewedLinkIds: string[] = JSON.parse(progress);
-                const updatedLinks = selectedTraining.links.map(l => 
-                    viewedLinkIds.includes(l.id) ? { ...l, viewed: true } : l
-                );
-                const updatedTraining = { ...selectedTraining, links: updatedLinks };
-                if (JSON.stringify(updatedTraining) !== JSON.stringify(selectedTraining)) {
-                    setTrainings([updatedTraining]);
-                }
-            } catch (e) {
-                console.error("Failed to parse training progress from localStorage", e);
-            }
-        }
+    if (isSignatureModalOpen) {
+        setModalAdminName(adminConfig.clarification || '');
+        setModalAdminJob(adminConfig.jobTitle || '');
     }
-  }, [selectedTraining, setTrainings]);
-
-  const allLinksViewed = useMemo(() => {
-    if (!selectedTraining) return false;
-    return selectedTraining.links.every(link => link.viewed);
-  }, [selectedTraining]);
-  
-  const handleLinkClick = (trainingId: string, linkId: string) => {
-    setTrainings(currentTrainings => {
-      const updatedTrainings = currentTrainings.map(t =>
-        t.id === trainingId
-          ? { ...t, links: t.links.map(l => l.id === linkId ? { ...l, viewed: true } : l) }
-          : t
-      );
-      
-      const targetTraining = updatedTrainings.find(t => t.id === trainingId);
-      if (targetTraining) {
-          const viewedLinkIds = targetTraining.links
-              .filter(l => l.viewed)
-              .map(l => l.id);
-          localStorage.setItem(`training-progress-${trainingId}`, JSON.stringify(viewedLinkIds));
-      }
-      
-      return updatedTrainings;
-    });
-  };
-  
-  const handleOpenLink = (index: number) => {
-    if (!selectedTraining) return;
-
-    const linkToOpen = selectedTraining.links[index];
-    handleLinkClick(selectedTraining.id, linkToOpen.id);
-
-    if (isKnownIncompatibleLink(linkToOpen.url)) {
-      window.open(linkToOpen.url, '_blank', 'noopener,noreferrer');
-    } else {
-      setViewingLinkIndex(index);
-    }
-  };
+  }, [isSignatureModalOpen, adminConfig]);
 
 
-  const handleCloseViewer = () => {
-      setViewingLinkIndex(null);
-  };
-
-  const handleNextLink = () => {
-      if (viewingLinkIndex !== null && selectedTraining && viewingLinkIndex < selectedTraining.links.length - 1) {
-          const nextIndex = viewingLinkIndex + 1;
-          const nextLink = selectedTraining.links[nextIndex];
-          handleLinkClick(selectedTraining.id, nextLink.id);
-
-          if (isKnownIncompatibleLink(nextLink.url)) {
-              window.open(nextLink.url, '_blank', 'noopener,noreferrer');
-              handleCloseViewer();
-          } else {
-              setViewingLinkIndex(nextIndex);
-          }
-      }
-  };
-
-  const handlePrevLink = () => {
-       if (viewingLinkIndex !== null && selectedTraining && viewingLinkIndex > 0) {
-          const prevIndex = viewingLinkIndex - 1;
-          const prevLink = selectedTraining.links[prevIndex];
-          handleLinkClick(selectedTraining.id, prevLink.id);
-          
-          if (isKnownIncompatibleLink(prevLink.url)) {
-               window.open(prevLink.url, '_blank', 'noopener,noreferrer');
-               handleCloseViewer();
-          } else {
-              setViewingLinkIndex(prevIndex);
-          }
-      }
-  };
-
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-    const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
-  };
-
-  const handleSignatureEnd = (signature: string) => {
-    setFormData(prev => ({ ...prev, signature }));
-  };
-  
-  const clearSignature = () => {
-    signatureRef.current?.clear();
-    setFormData(prev => ({ ...prev, signature: '' }));
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedTraining || !formData.signature || !formData.company) {
-        alert("Por favor, proporciona toda la información requerida, incluyendo tu empresa y firma.");
+    if (password === ADMIN_PASSWORD) {
+        setLoginError('');
+        setPassword('');
+        setMode('admin');
+        startPolling();
+    } else {
+        setLoginError('Contraseña incorrecta. Inténtalo de nuevo.');
+    }
+  };
+  
+  const handleLogout = () => {
+      stopPolling();
+      // Remove admin parameter from URL
+      const url = new URL(window.location.href);
+      url.searchParams.delete('admin');
+      window.history.pushState({}, '', url.toString());
+      setMode('user'); // Or redirect to a logged-out page
+  };
+  
+  const handleUserSubmit = async (submission: UserSubmission) => {
+    setIsSaving(true);
+    try {
+        const currentData = await apiService._getData();
+        const updatedSubmissions = [...currentData.submissions, submission];
+        await apiService._putData({ ...currentData, submissions: updatedSubmissions });
+        setSubmissions(updatedSubmissions); // Optimistic update
+    } catch(e) {
+        console.error("Failed to save submission", e);
+        alert("Hubo un error al guardar tu registro. Por favor, inténtalo de nuevo.");
+        throw e; // Re-throw to inform the caller
+    } finally {
+        setIsSaving(false);
+    }
+  };
+
+
+  const handleDeleteSubmission = async (submissionId: string) => {
+    if (!window.confirm("¿Estás seguro de que quieres eliminar este registro? Esta acción no se puede deshacer.")) return;
+    setIsSaving(true);
+    stopPolling();
+    try {
+      const currentData = await apiService._getData();
+      const updatedSubmissions = currentData.submissions.filter(s => s.id !== submissionId);
+      await apiService._putData({ ...currentData, submissions: updatedSubmissions });
+      setSubmissions(updatedSubmissions);
+      alert('Registro eliminado con éxito.');
+    } catch (e) {
+      console.error("Error al eliminar el registro:", e);
+      alert(`Error al eliminar el registro: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setIsSaving(false);
+      startPolling();
+    }
+  };
+
+  const handleUpdateAdminConfig = async (newConfig: AdminConfig) => {
+    setIsSaving(true);
+    stopPolling();
+    try {
+        const currentData = await apiService._getData();
+        const updatedData = { ...currentData, adminConfig: newConfig };
+        await apiService._putData(updatedData);
+        setAdminConfig(newConfig);
+        alert('Firma y datos del administrador actualizados con éxito.');
+    } catch (e) {
+        console.error("Error al actualizar la configuración del administrador:", e);
+        alert(`Error al actualizar la configuración: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+        setIsSaving(false);
+        startPolling();
+    }
+  };
+
+  const handleDeleteTraining = async (trainingId: string) => {
+      if (!window.confirm("¿Estás seguro de que quieres eliminar esta capacitación? Se eliminarán todos los registros asociados.")) return;
+      setIsSaving(true);
+      stopPolling();
+      try {
+          const currentData = await apiService._getData();
+          const updatedTrainings = currentData.trainings.filter(t => t.id !== trainingId);
+          const updatedSubmissions = currentData.submissions.filter(s => s.trainingId !== trainingId);
+          await apiService._putData({ ...currentData, trainings: updatedTrainings, submissions: updatedSubmissions });
+          setTrainings(updatedTrainings);
+          setSubmissions(updatedSubmissions);
+          alert('Capacitación eliminada con éxito.');
+      } catch (e) {
+          console.error("Error al eliminar la capacitación:", e);
+          alert(`Error al eliminar la capacitación: ${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+          setIsSaving(false);
+          startPolling();
+      }
+  };
+
+  const handleSaveTraining = async (trainingToSave: Training) => {
+      setIsSaving(true);
+      stopPolling();
+      try {
+          const currentData = await apiService._getData();
+          const existingIndex = currentData.trainings.findIndex(t => t.id === trainingToSave.id);
+          let updatedTrainings;
+          if (existingIndex > -1) {
+              updatedTrainings = [...currentData.trainings];
+              updatedTrainings[existingIndex] = trainingToSave;
+          } else {
+              updatedTrainings = [...currentData.trainings, trainingToSave];
+          }
+          await apiService._putData({ ...currentData, trainings: updatedTrainings });
+          setTrainings(updatedTrainings);
+          alert('Capacitación guardada con éxito.');
+          setIsTrainingModalOpen(false);
+      } catch (e) {
+          console.error("Error al guardar la capacitación:", e);
+          alert(`Error al guardar la capacitación: ${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+          setIsSaving(false);
+          startPolling();
+      }
+  };
+  
+  const handleAddCompany = async (newCompany: string) => {
+    if (!newCompany || companies.map(normalizeString).includes(normalizeString(newCompany))) {
+        alert("El nombre de la empresa no puede estar vacío o ya existe.");
         return;
     }
-    
-    setIsSubmitting(true);
-    
-    const now = new Date();
-    const formattedTimestamp = now.toLocaleDateString('es-ES', {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
-    }) + ' ' + now.toLocaleTimeString('en-US', {
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: true,
-    });
-
-    const newSubmission: UserSubmission = {
-        id: `sub-${selectedTraining.id}-${formData.dni}-${Date.now()}`,
-        timestamp: formattedTimestamp,
-        trainingId: selectedTraining.id,
-        trainingName: selectedTraining.name,
-        ...formData
-    };
-    
+    setIsSaving(true);
+    stopPolling();
     try {
-      await apiService.addSubmission(newSubmission);
-      setLastSubmission(newSubmission);
-      setFormCompleted(true);
-    } catch (error) {
-      console.error("Failed to submit training data:", error);
-      alert("Hubo un error al enviar tu registro. Por favor, inténtalo de nuevo.");
+        const currentData = await apiService._getData();
+        const updatedCompanies = [...(currentData.companies || []), newCompany];
+        await apiService._putData({ ...currentData, companies: updatedCompanies });
+        setCompanies(updatedCompanies);
+        alert('Empresa agregada con éxito.');
+    } catch(e) {
+        console.error("Error al agregar la empresa:", e);
+        alert(`Error al agregar la empresa: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
-      setIsSubmitting(false);
+        setIsSaving(false);
+        startPolling();
     }
   };
 
-  if (formCompleted && lastSubmission) {
-    const downloadDisabled = isLoadingAdminConfig || !adminConfig?.signature || !adminConfig?.clarification || !adminConfig?.jobTitle;
-    const downloadTitle = isLoadingAdminConfig 
-        ? "Cargando configuración..."
-        : (!adminConfig?.signature || !adminConfig?.clarification || !adminConfig?.jobTitle) 
-        ? "El administrador aún no ha configurado firma, aclaración y cargo para las constancias." 
-        : "Descargar mi constancia en PDF";
+  const handleDeleteCompany = async (companyToDelete: string) => {
+      if (!window.confirm(`¿Estás seguro de que quieres eliminar la empresa "${companyToDelete}"? También se desasignará de todas las capacitaciones.`)) return;
+      setIsSaving(true);
+      stopPolling();
+      try {
+          const currentData = await apiService._getData();
+          const updatedCompanies = (currentData.companies || []).filter(c => c !== companyToDelete);
+          const updatedTrainings = (currentData.trainings || []).map(t => ({
+              ...t,
+              companies: (t.companies || []).filter(c => c !== companyToDelete)
+          }));
+          await apiService._putData({ ...currentData, companies: updatedCompanies, trainings: updatedTrainings });
+          setCompanies(updatedCompanies);
+          setTrainings(updatedTrainings);
+          alert('Empresa eliminada con éxito.');
+      } catch(e) {
+          console.error("Error al eliminar la empresa:", e);
+          alert(`Error al eliminar la empresa: ${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+          setIsSaving(false);
+          startPolling();
+      }
+  };
+  
+  const handleOpenShareModal = async (training: Training) => {
+      setIsSaving(true);
+      try {
+          const key = await apiService.shareTraining(training);
+          const url = `${window.location.origin}${window.location.pathname}?training=${key}`;
+          setShareUrl(url);
+          const qr = await QRCode.toDataURL(url, { errorCorrectionLevel: 'H', width: 256 });
+          setQrCodeUrl(qr);
+          setIsShareModalOpen(true);
+      } catch (e) {
+          console.error("Error al compartir la capacitación:", e);
+          alert("Error al generar el enlace para compartir.");
+      } finally {
+          setIsSaving(false);
+      }
+  };
 
-    return (
-        <div className="text-center p-8 bg-slate-800 rounded-lg shadow-xl max-w-2xl mx-auto">
-            <CheckCircle className="mx-auto h-16 w-16 text-green-500" />
-            <h2 className="mt-4 text-2xl font-bold text-white">¡Registro Enviado con Éxito!</h2>
-            <p className="mt-2 text-gray-400">Tu registro ha sido enviado al administrador.</p>
-            <div className="mt-6 border-t border-slate-700 pt-6 space-y-4 text-left">
-                <div className="flex items-start gap-4">
-                    <div className="flex-shrink-0 h-8 w-8 rounded-full bg-slate-600 flex items-center justify-center font-bold text-white">1</div>
-                    <div>
-                        <h3 className="font-semibold text-white">Descarga tu constancia personal (Opcional)</h3>
-                        <p className="text-sm text-gray-400 mb-2">Guarda este PDF como comprobante personal de que has completado la capacitación.</p>
-                        <button
-                            onClick={() => {
-                                if (!adminConfig || !adminConfig.signature || !adminConfig.clarification || !adminConfig.jobTitle) {
-                                    console.error("Download button clicked in an invalid state. AdminConfig:", adminConfig);
-                                    alert("No se puede generar la constancia porque faltan datos del administrador. Contacte al administrador.");
-                                    return;
-                                }
-                                generateSingleSubmissionPdf(lastSubmission, adminConfig.signature, adminConfig.clarification, adminConfig.jobTitle);
-                            }}
-                            disabled={downloadDisabled}
-                            title={downloadTitle}
-                            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-slate-500 hover:bg-slate-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-400 disabled:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                            <FileDown className="h-4 w-4 mr-2" />
-                            {isLoadingAdminConfig ? 'Cargando...' : 'Descargar Mi Constancia'}
-                        </button>
+  const handleSaveAdminSignature = () => {
+      const signatureToSave = !adminSignatureRef.current?.isEmpty()
+          ? adminSignatureRef.current?.toDataURL()
+          : adminConfig.signature;
+
+      if (!signatureToSave) {
+          alert("Por favor, dibuje una firma antes de guardar.");
+          return;
+      }
+
+      const newAdminConfig: AdminConfig = {
+          signature: signatureToSave,
+          clarification: modalAdminName.trim(),
+          jobTitle: modalAdminJob.trim(),
+      };
+      handleUpdateAdminConfig(newAdminConfig);
+      setIsSignatureModalOpen(false);
+  };
+  
+  // A simple modal component
+  const Modal: React.FC<{ title: string; onClose: () => void; children: React.ReactNode }> = ({ title, onClose, children }) => (
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex justify-center items-center z-50 p-4 animate-fade-in">
+            <div className="bg-slate-800 rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+                <div className="flex justify-between items-center p-4 border-b border-slate-700">
+                    <h3 className="text-xl font-semibold text-white">{title}</h3>
+                    <button onClick={onClose} className="text-gray-400 hover:text-white"><X /></button>
+                </div>
+                <div className="p-6 overflow-y-auto">
+                    {children}
+                </div>
+            </div>
+        </div>
+    );
+
+  const TrainingForm: React.FC<{ training: Training | null; onSave: (training: Training) => void; onCancel: () => void; companies: string[]; isSaving: boolean; }> = 
+    ({ training: initialTraining, onSave, onCancel, companies, isSaving }) => {
+        const [training, setTraining] = useState<Training>(
+            initialTraining || { id: `t-${Date.now()}`, name: '', links: [], companies: [] }
+        );
+        
+        const handleTrainingChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+            setTraining({ ...training, name: e.target.value });
+        };
+        
+        const handleLinkChange = (index: number, field: 'name' | 'url', value: string) => {
+            const newLinks = [...training.links];
+            newLinks[index] = { ...newLinks[index], [field]: value };
+            setTraining({ ...training, links: newLinks });
+        };
+
+        const handleAddLink = () => {
+            const newLink: TrainingLink = { id: `l-${Date.now()}-${training.links.length}`, url: '', viewed: false };
+            setTraining({ ...training, links: [...training.links, newLink] });
+        };
+
+        const handleRemoveLink = (index: number) => {
+            const newLinks = training.links.filter((_, i) => i !== index);
+            setTraining({ ...training, links: newLinks });
+        };
+      
+        const handleCompanyToggle = (company: string) => {
+            const currentCompanies = training.companies || [];
+            const newCompanies = currentCompanies.includes(company)
+                ? currentCompanies.filter(c => c !== company)
+                : [...currentCompanies, company];
+            setTraining({ ...training, companies: newCompanies });
+        };
+
+        const handleSubmit = (e: React.FormEvent) => {
+            e.preventDefault();
+            if (!training.name.trim()) {
+                alert("El nombre de la capacitación no puede estar vacío.");
+                return;
+            }
+            if (training.links.some(l => !l.url.trim())) {
+                alert("Todas las URLs de los enlaces deben estar completas.");
+                return;
+            }
+            onSave(training);
+        };
+
+        return (
+            <form onSubmit={handleSubmit} className="space-y-6">
+                <div>
+                    <label htmlFor="trainingName" className="block text-sm font-medium text-gray-300">Nombre de la Capacitación</label>
+                    <input id="trainingName" type="text" value={training.name} onChange={handleTrainingChange} required className="mt-1 block w-full p-2 bg-slate-700 border border-slate-600 rounded-md text-white"/>
+                </div>
+
+                <div>
+                    <h4 className="text-lg font-medium text-white mb-2">Material de Estudio (Enlaces)</h4>
+                    <div className="space-y-3 max-h-60 overflow-y-auto pr-2">
+                        {training.links.map((link, index) => (
+                            <div key={link.id || index} className="p-3 bg-slate-900/50 rounded-lg space-y-2">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-gray-400 text-sm">Enlace {index + 1}</span>
+                                  <button type="button" onClick={() => handleRemoveLink(index)} className="text-red-400 hover:text-red-300"><Trash2 size={16}/></button>
+                                </div>
+                                <input type="text" placeholder="Nombre del material (ej. Video de Seguridad)" value={link.name || ''} onChange={e => handleLinkChange(index, 'name', e.target.value)} className="w-full p-2 bg-slate-700 border border-slate-600 rounded-md text-white text-sm" />
+                                <input type="url" placeholder="https://ejemplo.com/material" value={link.url} onChange={e => handleLinkChange(index, 'url', e.target.value)} required className="w-full p-2 bg-slate-700 border border-slate-600 rounded-md text-white text-sm" />
+                            </div>
+                        ))}
+                    </div>
+                    <button type="button" onClick={handleAddLink} className="mt-3 inline-flex items-center px-3 py-1.5 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700">
+                        <PlusCircle size={16} className="mr-2"/>Añadir Enlace
+                    </button>
+                </div>
+              
+                <div>
+                    <h4 className="text-lg font-medium text-white mb-2">Empresas Autorizadas</h4>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-40 overflow-y-auto pr-2">
+                        {companies.map(company => (
+                            <label key={company} className="flex items-center space-x-2 p-2 bg-slate-700 rounded-md text-sm">
+                                <input
+                                    type="checkbox"
+                                    checked={(training.companies || []).includes(company)}
+                                    onChange={() => handleCompanyToggle(company)}
+                                    className="h-4 w-4 rounded text-indigo-600 bg-slate-800 border-slate-600 focus:ring-indigo-500"
+                                />
+                                <span className="text-white">{company}</span>
+                            </label>
+                        ))}
                     </div>
                 </div>
-                 <div className="text-center mt-6">
-                    <button onClick={() => window.location.reload()} className="text-indigo-400 hover:text-indigo-300">Realizar otra capacitación</button>
+
+                <div className="flex justify-end gap-4 pt-4">
+                    <button type="button" onClick={onCancel} className="px-4 py-2 text-sm font-medium text-gray-300 bg-slate-600 rounded-md hover:bg-slate-500">Cancelar</button>
+                    <button type="submit" disabled={isSaving} className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:bg-slate-500">{isSaving ? 'Guardando...' : 'Guardar Capacitación'}</button>
                 </div>
+            </form>
+        );
+    };
+
+
+  if (isLoading) {
+    return <div className="bg-slate-900 text-white min-h-screen flex items-center justify-center"><RefreshCw className="animate-spin h-8 w-8 mr-3"/>Cargando...</div>;
+  }
+  
+  if (mode === 'login') {
+      return (
+          <div className="bg-slate-900 min-h-screen flex items-center justify-center p-4">
+              <div className="w-full max-w-sm mx-auto bg-slate-800 p-8 rounded-xl shadow-lg text-white">
+                  <div className="text-center">
+                      <ShieldCheck className="mx-auto h-12 w-12 text-indigo-500" />
+                      <h2 className="mt-6 text-2xl font-bold">Portal de Administrador</h2>
+                      <p className="mt-2 text-gray-400">Inicia sesión para continuar</p>
+                  </div>
+                  <form className="mt-8 space-y-6" onSubmit={handleLogin}>
+                      <div>
+                          <label htmlFor="password-input" className="sr-only">Contraseña</label>
+                          <div className="relative">
+                              <input
+                                  id="password-input"
+                                  name="password"
+                                  type={showPassword ? 'text' : 'password'}
+                                  autoComplete="current-password"
+                                  required
+                                  value={password}
+                                  onChange={(e) => {
+                                      setPassword(e.target.value);
+                                      setLoginError('');
+                                  }}
+                                  className="appearance-none rounded-md relative block w-full px-3 py-3 border border-slate-600 bg-slate-700 placeholder-gray-400 text-white focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                                  placeholder="Contraseña"
+                              />
+                              <button
+                                  type="button"
+                                  onClick={() => setShowPassword(!showPassword)}
+                                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-white"
+                                  aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
+                              >
+                                  {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                              </button>
+                          </div>
+                          {loginError && <p className="mt-2 text-sm text-red-400">{loginError}</p>}
+                      </div>
+                      <button type="submit" className="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-base font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                          <LogIn className="h-5 w-5 mr-2" />
+                          Ingresar
+                      </button>
+                  </form>
+                  <button onClick={() => setMode('user')} className="w-full text-center mt-6 text-sm text-indigo-400 hover:text-indigo-300 flex items-center justify-center">
+                      <ArrowLeft className="inline h-4 w-4 mr-1" />
+                      Volver al portal de usuario
+                  </button>
+              </div>
+          </div>
+      );
+  }
+
+  if (mode === 'user') {
+    if (userTrainings.length > 0) {
+        return <div className="bg-slate-900 min-h-screen flex items-center justify-center p-4">
+            <UserPortal userTrainings={userTrainings} adminConfig={adminConfig} onSubmit={handleUserSubmit}/>
+        </div>;
+    }
+    return (
+        <div className="bg-slate-900 min-h-screen flex items-center justify-center text-center text-white p-4 relative">
+            <div>
+                <QrCode className="mx-auto h-24 w-24 text-indigo-400 mb-6" />
+                <h1 className="text-3xl font-bold">Portal de Capacitaciones</h1>
+                <p className="mt-4 text-lg text-gray-400 max-w-md mx-auto">Para comenzar, por favor escanea el código QR proporcionado para la capacitación específica.</p>
+            </div>
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2">
+                <button onClick={() => setMode('login')} className="text-sm text-gray-500 hover:text-gray-300 transition-colors">
+                    Acceso Administrador
+                </button>
             </div>
         </div>
     );
   }
 
-  const viewingLink = viewingLinkIndex !== null && selectedTraining ? selectedTraining.links[viewingLinkIndex] : null;
+  // Admin Dashboard
+  if (mode === 'admin') {
+    // The AdminDashboard component is now rendered here.
+    // It manages its own UI state, making the inputs responsive.
+    return (
+      <>
+        <AdminDashboard
+          trainings={trainings}
+          submissions={submissions}
+          companies={companies}
+          adminConfig={adminConfig}
+          error={error}
+          isSaving={isSaving}
+          setIsTrainingModalOpen={setIsTrainingModalOpen}
+          setCurrentTraining={setCurrentTraining}
+          setIsSignatureModalOpen={setIsSignatureModalOpen}
+          setIsCompaniesModalOpen={setIsCompaniesModalOpen}
+          onLogout={handleLogout}
+          onDeleteSubmission={handleDeleteSubmission}
+          onDeleteTraining={handleDeleteTraining}
+          onOpenShareModal={handleOpenShareModal}
+          onAddCompany={handleAddCompany}
+          onDeleteCompany={handleDeleteCompany}
+        />
+        
+        {/* Modals are still rendered here, controlled by state in App */}
+        {isTrainingModalOpen && (
+            <Modal title={currentTraining ? "Editar Capacitación" : "Nueva Capacitación"} onClose={() => setIsTrainingModalOpen(false)}>
+                <TrainingForm training={currentTraining} onSave={handleSaveTraining} onCancel={() => setIsTrainingModalOpen(false)} companies={companies} isSaving={isSaving}/>
+            </Modal>
+        )}
 
-  if (!selectedTraining) {
-      // This state should ideally not be reached if accessed via QR, but it's a good fallback.
-      return <div className="text-center p-8 bg-slate-800 rounded-lg">
-          <h2 className="text-xl text-white">Error</h2>
-          <p className="text-gray-400">No se pudo cargar la capacitación. Por favor, intente escanear el código QR de nuevo.</p>
-      </div>;
-  }
-    
-  const progress = (selectedTraining.links.filter(l => l.viewed).length / selectedTraining.links.length) * 100;
-  const authorizedCompanies = selectedTraining?.companies || [];
-  const isCompanyDetermined = authorizedCompanies.length === 1;
-
-  return (
-      <div className="w-full max-w-4xl mx-auto bg-slate-800 p-8 rounded-xl shadow-lg">
-          
-          <h2 className="text-2xl font-bold text-white mb-2">{selectedTraining.name}</h2>
-          <p className="text-gray-400 mb-4">Revisa los siguientes enlaces para completar la capacitación. Una vez revisados todos, podrás registrar tu asistencia.</p>
-          
-          <div className="mb-4">
-              <div className="w-full bg-slate-700 rounded-full h-2.5">
-                  <div className="bg-indigo-500 h-2.5 rounded-full" style={{ width: `${progress}%` }}></div>
-              </div>
-              <p className="text-sm text-right text-gray-400 mt-1">{Math.round(progress)}% completado</p>
-          </div>
-
-          <div className="space-y-3 mb-8">
-              {selectedTraining.links.map((link, index) => (
-                  <button
-                      key={link.id}
-                      onClick={() => handleOpenLink(index)}
-                      title={link.url}
-                      className={`flex items-center justify-between p-4 rounded-lg border transition-all w-full text-left ${link.viewed ? 'bg-green-900/30 border-green-500/50' : 'bg-slate-900/50 border-slate-700 hover:bg-slate-700'}`}
-                  >
-                      <div className="flex items-center min-w-0">
-                          <FileText className="h-5 w-5 mr-3 text-indigo-400 flex-shrink-0"/>
-                          <div className="min-w-0">
-                              <span className="font-medium text-white">{link.name?.trim() ? link.name : `Material de Estudio ${index + 1}`}</span>
-                              <p className="text-sm text-gray-400 truncate">{link.url}</p>
-                          </div>
-                      </div>
-                      {link.viewed && <CheckCircle className="h-6 w-6 text-green-500 flex-shrink-0 ml-4" />}
-                  </button>
-              ))}
-          </div>
-
-          {allLinksViewed && (
-              <form onSubmit={handleSubmit} className="space-y-6 animate-fade-in">
-                   <h3 className="text-xl font-semibold text-white border-t border-slate-700 pt-6">Completa tus datos</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <input type="text" name="firstName" value={formData.firstName} placeholder="Nombre" onChange={handleInputChange} required className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
-                      <input type="text" name="lastName" value={formData.lastName} placeholder="Apellido" onChange={handleInputChange} required className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
-                      <input type="text" name="dni" value={formData.dni} placeholder="DNI" onChange={handleInputChange} required className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
-                      <div>
-                        {isCompanyDetermined ? (
-                          <input 
-                            type="text" 
-                            name="company" 
-                            value={formData.company} 
-                            readOnly 
-                            disabled 
-                            className="w-full p-3 bg-slate-900 border border-slate-700 rounded-md text-gray-400 cursor-not-allowed"
-                          />
-                        ) : authorizedCompanies.length > 1 ? (
-                          <select 
-                            name="company" 
-                            value={formData.company} 
-                            onChange={handleInputChange} 
-                            required 
-                            className="w-full p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"
-                          >
-                            <option value="" disabled>-- Selecciona tu empresa --</option>
-                            {authorizedCompanies.map(c => (
-                              <option key={c} value={c}>{c}</option>
-                            ))}
-                          </select>
-                        ) : (
-                          <>
-                            <input 
-                              type="text" 
-                              value="No asignada" 
-                              readOnly 
-                              disabled 
-                              className="w-full p-3 bg-slate-900 border border-slate-700 rounded-md text-gray-400 cursor-not-allowed"
-                            />
-                            <p className="mt-1 text-xs text-yellow-400">Advertencia: Esta capacitación no tiene empresas asignadas. Contacta al administrador.</p>
-                          </>
-                        )}
-                      </div>
-                      <input type="email" name="email" value={formData.email} placeholder="Email (Opcional)" onChange={handleInputChange} className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
-                      <input type="tel" name="phone" value={formData.phone} placeholder="Teléfono (Opcional)" onChange={handleInputChange} className="p-3 bg-slate-700 border border-slate-600 rounded-md text-white placeholder-gray-400 focus:ring-indigo-500 focus:border-indigo-500"/>
-                  </div>
-                   <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-2">Firma Digital (Obligatorio)</label>
-                       <SignaturePad onSignatureEnd={handleSignatureEnd} signatureRef={signatureRef} />
-                      <button type="button" onClick={clearSignature} className="text-sm text-indigo-400 hover:underline mt-2">Limpiar firma</button>
-                  </div>
-                  <button 
-                      type="submit" 
-                      disabled={!formData.signature || isSubmitting}
-                      className="w-full flex justify-center items-center py-3 px-4 border border-transparent rounded-md shadow-sm text-base font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed">
-                      <Send className="h-5 w-5 mr-2" />
-                      {isSubmitting ? 'Enviando...' : 'Enviar Registro'}
-                  </button>
-              </form>
-          )}
-
-          {/* Link Viewer Modal */}
-          {viewingLink && (
-              <div className="fixed inset-0 bg-black bg-opacity-80 flex flex-col p-2 sm:p-4 z-50 animate-fade-in">
-                  {/* Header */}
-                  <div className="flex justify-between items-center p-2 bg-slate-800 rounded-t-lg border-b border-slate-700 flex-shrink-0">
-                      <h2 className="text-lg font-semibold text-white truncate pr-4">
-                          {viewingLink.name?.trim() ? viewingLink.name : `Material ${viewingLinkIndex! + 1}`}
-                      </h2>
-                      <div className="flex items-center gap-2">
-                          <a href={viewingLink.url} target="_blank" rel="noopener noreferrer" className="p-2 text-gray-400 hover:text-white" title="Abrir en nueva pestaña">
-                              <Share2 className="h-5 w-5" />
-                          </a>
-                          <button onClick={handleCloseViewer} className="p-2 text-gray-400 hover:text-white" title="Cerrar visor">
-                              <X className="h-6 w-6" />
-                          </button>
-                      </div>
-                  </div>
-                  {/* Content (Iframe) */}
-                  <div className="flex-grow bg-slate-900">
-                      <iframe
-                          src={viewingLink.url}
-                          title={viewingLink.name || 'Material de capacitación'}
-                          className="w-full h-full border-0"
-                          sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
-                      ></iframe>
-                  </div>
-                  {/* Footer (Navigation) */}
-                  <div className="flex justify-between items-center p-2 bg-slate-800 rounded-b-lg border-t border-slate-700 flex-shrink-0">
-                      <button
-                          onClick={handlePrevLink}
-                          disabled={viewingLinkIndex === 0}
-                          className="px-4 py-2 text-sm font-medium rounded-md flex items-center gap-2 text-white bg-slate-600 hover:bg-slate-500 disabled:bg-slate-700 disabled:text-gray-500 disabled:cursor-not-allowed"
-                      >
-                          <ArrowLeft className="h-4 w-4" />
-                          Anterior
-                      </button>
-                      <span className="text-sm text-gray-400">
-                          {viewingLinkIndex! + 1} / {selectedTraining.links.length}
-                      </span>
-                      <button
-                          onClick={handleNextLink}
-                          disabled={viewingLinkIndex === selectedTraining.links.length - 1}
-                          className="px-4 py-2 text-sm font-medium rounded-md flex items-center gap-2 text-white bg-slate-600 hover:bg-slate-500 disabled:bg-slate-700 disabled:text-gray-500 disabled:cursor-not-allowed"
-                      >
-                          Siguiente
-                          <ArrowRight className="h-4 w-4" />
-                      </button>
-                  </div>
-              </div>
-          )}
-      </div>
-  );
-};
-
-
-// AdminLogin.tsx
-interface AdminLoginProps {
-  onLoginSuccess: () => void;
-  onBack: () => void;
-}
-
-const ADMIN_PASSWORD = 'nuevaAdmin';
-
-const AdminLogin: React.FC<AdminLoginProps> = ({ onLoginSuccess, onBack }) => {
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const [isPasswordVisible, setIsPasswordVisible] = useState(false);
-
-  const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (password === ADMIN_PASSWORD) {
-      onLoginSuccess();
-    } else {
-      setError('Contraseña incorrecta.');
-      setPassword('');
-    }
-  };
-
-  return (
-    <div className="w-full max-w-sm mx-auto">
-        <button onClick={onBack} className="flex items-center text-sm text-indigo-400 hover:text-indigo-300 mb-4">
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Volver
-        </button>
-        <div className="bg-slate-800 p-8 rounded-xl shadow-lg">
-            <h2 className="text-2xl font-bold text-center text-white mb-6">Acceso Administrador</h2>
-            <form onSubmit={handleLogin} className="space-y-6">
-                <div>
-                  <label htmlFor="password" className="sr-only">Password</label>
-                  <div className="relative">
-                    <input
-                      id="password"
-                      name="password"
-                      type={isPasswordVisible ? 'text' : 'password'}
-                      autoComplete="current-password"
-                      required
-                      value={password}
-                      onChange={(e) => {
-                        setPassword(e.target.value);
-                        setError('');
-                      }}
-                      className="appearance-none rounded-md relative block w-full px-3 py-2 pr-10 bg-slate-700 border border-slate-600 placeholder-gray-400 text-white focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
-                      placeholder="Contraseña"
-                    />
-                    <button
-                        type="button"
-                        onClick={() => setIsPasswordVisible(!isPasswordVisible)}
-                        className="absolute inset-y-0 right-0 flex items-center px-3 text-gray-400 hover:text-gray-200"
-                        aria-label={isPasswordVisible ? "Ocultar contraseña" : "Mostrar contraseña"}
-                    >
-                      {isPasswordVisible ? (
-                          <EyeOff className="h-5 w-5" />
-                      ) : (
-                          <Eye className="h-5 w-5" />
-                      )}
-                    </button>
-                  </div>
-                </div>
-                {error && <p className="text-red-500 text-sm text-center">{error}</p>}
-                <div>
-                <button
-                    type="submit"
-                    className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                >
-                    <span className="absolute left-0 inset-y-0 flex items-center pl-3">
-                    <LogIn className="h-5 w-5 text-indigo-400 group-hover:text-indigo-300" aria-hidden="true" />
-                    </span>
-                    Ingresar
-                </button>
-                </div>
-            </form>
-        </div>
-    </div>
-  );
-};
-
-// AdminDashboard.tsx
-interface LinkInput {
-    tempId: number;
-    name: string;
-    url: string;
-}
-
-interface AdminDashboardProps {
-  trainings: Training[];
-  companies: string[];
-  addTraining: (name: string, links: { name: string, url: string }[], companies: string[]) => Promise<void>;
-  updateTraining: (id: string, name: string, links: { name: string, url: string }[], companies: string[]) => Promise<void>;
-  deleteTraining: (id: string) => Promise<void>;
-  updateCompanies: (companies: string[]) => Promise<void>;
-  onLogout: () => void;
-}
-
-const AdminDashboard: React.FC<AdminDashboardProps> = ({ 
-    trainings, companies, addTraining, updateTraining, deleteTraining, updateCompanies, onLogout
-}) => {
-  const [activeTab, setActiveTab] = useState('submissions');
-  const [trainingName, setTrainingName] = useState('');
-  const [newTrainingLinks, setNewTrainingLinks] = useState<LinkInput[]>([{ tempId: Date.now(), name: '', url: '' }]);
-  const [newTrainingCompanies, setNewTrainingCompanies] = useState<string[]>([]);
-  const [feedback, setFeedback] = useState('');
-  
-  const [editingTraining, setEditingTraining] = useState<Training | null>(null);
-  const [editedName, setEditedName] = useState('');
-  const [editedTrainingLinks, setEditedTrainingLinks] = useState<LinkInput[]>([]);
-  const [editedCompanies, setEditedCompanies] = useState<string[]>([]);
-  
-  const [newGlobalCompany, setNewGlobalCompany] = useState('');
-
-  const [showShareModal, setShowShareModal] = useState(false);
-  const [sharingTrainingName, setSharingTrainingName] = useState('');
-  const [shareableLink, setShareableLink] = useState('');
-  const [qrCodeDataUrl, setQrCodeDataUrl] = useState('');
-  const [copySuccess, setCopySuccess] = useState('');
-  const [selectedSubmission, setSelectedSubmission] = useState<UserSubmission | null>(null);
-  const [showAdminSignatureModal, setShowAdminSignatureModal] = useState(false);
-  
-  const [adminSignature, setAdminSignature] = useState<string | null>(null);
-  const [adminSignatureClarification, setAdminSignatureClarification] = useState('');
-  const [adminJobTitle, setAdminJobTitle] = useState('');
-  
-  const [currentClarification, setCurrentClarification] = useState('');
-  const [currentJobTitle, setCurrentJobTitle] = useState('');
-  
-  const [userSubmissions, setUserSubmissions] = useState<UserSubmission[]>([]);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [selectedTrainingFilterId, setSelectedTrainingFilterId] = useState<string>('all');
-  const [companyFilter, setCompanyFilter] = useState('all');
-  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
-  const [selectedSubmissionIds, setSelectedSubmissionIds] = useState<Set<string>>(new Set());
-
-  const adminSignatureRef = useRef<SignatureCanvas>(null);
-  const selectAllCheckboxRef = useRef<HTMLInputElement>(null);
-  
-  const fetchSubmissions = async () => {
-    const subs = await apiService.getSubmissions();
-    setUserSubmissions(currentSubs => {
-        if(JSON.stringify(currentSubs) !== JSON.stringify(subs)){
-            return subs;
-        }
-        return currentSubs;
-    });
-  };
-  
-  const fetchAdminConfig = async () => {
-      const config = await apiService.getAdminConfig();
-      setAdminSignature(config.signature);
-      setAdminSignatureClarification(config.clarification);
-      setAdminJobTitle(config.jobTitle);
-  };
-
-  useEffect(() => {
-    const pollData = () => {
-        // User submissions can always be updated in the background.
-        fetchSubmissions();
-        // Only refresh the admin config if the signature editing modal is closed.
-        // This prevents overwriting the user's changes while they are editing.
-        if (!showAdminSignatureModal) {
-            fetchAdminConfig();
-        }
-    };
-
-    // Fetch data immediately on component mount.
-    pollData();
-
-    // Set up the interval to poll every 5 seconds.
-    const intervalId = setInterval(pollData, 5000); 
-
-    // Clean up the interval when the component unmounts.
-    return () => {
-        clearInterval(intervalId);
-    };
-  }, [showAdminSignatureModal]); // Rerun effect if modal state changes to get latest check
-
-  useEffect(() => {
-    if (editingTraining) {
-      setEditedName(editingTraining.name);
-      setEditedTrainingLinks(
-        editingTraining.links.map(l => ({
-          tempId: Math.random(),
-          name: l.name || '',
-          url: l.url
-        }))
-      );
-      setEditedCompanies(editingTraining.companies || []);
-    }
-  }, [editingTraining]);
-
-  const filteredSubmissions = useMemo(() => {
-    let results = [...userSubmissions]; // Create a shallow copy to sort
-    
-    // TRAINING FILTER
-    if (selectedTrainingFilterId !== 'all') {
-        const selectedTraining = trainings.find(t => t.id === selectedTrainingFilterId);
-        if (selectedTraining) {
-            const normalizedTrainingName = normalizeString(selectedTraining.name);
-            // Special logic to group all trainings containing 'aguila'
-            if (normalizedTrainingName.includes('aguila')) {
-                results = results.filter(sub => normalizeString(sub.trainingName).includes('aguila'));
-            } else {
-                // Standard filtering by ID for other trainings
-                results = results.filter(sub => sub.trainingId === selectedTrainingFilterId);
-            }
-        } else {
-             // Fallback for deleted trainings, filter by ID
-             results = results.filter(sub => sub.trainingId === selectedTrainingFilterId);
-        }
-    }
-
-    // COMPANY FILTER
-    if (companyFilter !== 'all') {
-        const normalizedCompanyFilter = normalizeString(companyFilter);
-        // Special logic to group all variations of 'Aguila' under one filter
-        if (normalizedCompanyFilter.includes('aguila')) {
-            results = results.filter(sub => normalizeString(sub.company).includes('aguila'));
-        } else {
-            // Standard filtering for other companies
-            results = results.filter(sub => normalizeString(sub.company) === normalizedCompanyFilter);
-        }
-    }
-
-    // Sort results by last name, then first name
-    results.sort((a, b) => {
-        const lastNameComp = normalizeString(a.lastName).localeCompare(normalizeString(b.lastName));
-        if (lastNameComp !== 0) return lastNameComp;
-        return normalizeString(a.firstName).localeCompare(normalizeString(b.firstName));
-    });
-
-    return results;
-  }, [userSubmissions, selectedTrainingFilterId, companyFilter, trainings]);
-
-  // Effect to clear selections when filters change
-  useEffect(() => {
-    setSelectedSubmissionIds(new Set());
-  }, [filteredSubmissions]);
-
-  // Effect to manage the state of the "select all" checkbox (checked, indeterminate)
-  useEffect(() => {
-    if (selectAllCheckboxRef.current) {
-      const numSelected = selectedSubmissionIds.size;
-      const numFiltered = filteredSubmissions.length;
-      selectAllCheckboxRef.current.checked = numFiltered > 0 && numSelected === numFiltered;
-      selectAllCheckboxRef.current.indeterminate = numSelected > 0 && numSelected < numFiltered;
-    }
-  }, [selectedSubmissionIds, filteredSubmissions]);
-
-  // Handlers for creating new training links
-  const handleNewLinkChange = (index: number, field: 'name' | 'url', value: string) => {
-      const updatedLinks = [...newTrainingLinks];
-      updatedLinks[index][field] = value;
-      setNewTrainingLinks(updatedLinks);
-  };
-
-  const addNewLink = () => {
-      setNewTrainingLinks([...newTrainingLinks, { tempId: Date.now(), name: '', url: '' }]);
-  };
-
-  const removeNewLink = (index: number) => {
-      if (newTrainingLinks.length > 1) {
-          setNewTrainingLinks(newTrainingLinks.filter((_, i) => i !== index));
-      }
-  };
-
-  // Handlers for editing existing training links
-  const handleEditedLinkChange = (index: number, field: 'name' | 'url', value: string) => {
-    const updatedLinks = [...editedTrainingLinks];
-    updatedLinks[index][field] = value;
-    setEditedTrainingLinks(updatedLinks);
-  };
-
-  const addEditedLink = () => {
-      setEditedTrainingLinks([...editedTrainingLinks, { tempId: Date.now(), name: '', url: '' }]);
-  };
-
-  const removeEditedLink = (index: number) => {
-      if (editedTrainingLinks.length > 1) {
-          setEditedTrainingLinks(editedTrainingLinks.filter((_, i) => i !== index));
-      }
-  };
-
-  const handleAddTraining = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!trainingName.trim()) {
-      setFeedback('El nombre de la capacitación no puede estar vacío.');
-      return;
-    }
-    const links = newTrainingLinks
-      .map(l => ({ name: l.name.trim(), url: l.url.trim() }))
-      .filter(l => l.url !== '');
-
-    if (links.length === 0) {
-        setFeedback('Debe proporcionar al menos un enlace válido.');
-        return;
-    }
-    const companies = newTrainingCompanies.map(c => c.trim()).filter(Boolean);
-    try {
-        await addTraining(trainingName, links, companies);
-        setTrainingName('');
-        setNewTrainingLinks([{ tempId: Date.now(), name: '', url: '' }]);
-        setNewTrainingCompanies([]);
-        setFeedback('¡Capacitación agregada exitosamente!');
-        setTimeout(() => setFeedback(''), 3000);
-    } catch (error) {
-        console.error("Failed to add training:", error);
-        alert(`Error al agregar la capacitación: ${error.message}`);
-    }
-  };
-
-  const handleUpdateTraining = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingTraining) return;
-
-    const links = editedTrainingLinks
-        .map(l => ({ name: l.name.trim(), url: l.url.trim() }))
-        .filter(l => l.url !== '');
-
-    if (!editedName.trim() || links.length === 0) {
-      alert("El nombre y al menos un enlace válido son requeridos.");
-      return;
-    }
-    const companies = editedCompanies.map(c => c.trim()).filter(Boolean);
-    try {
-        await updateTraining(editingTraining.id, editedName, links, companies);
-        setEditingTraining(null);
-    } catch (error) {
-        console.error("Failed to update training:", error);
-        alert(`Error al actualizar la capacitación: ${error.message}`);
-    }
-  }
-
-  const handleDeleteTraining = async (id: string) => {
-    if(window.confirm('¿Estás seguro de que quieres eliminar esta capacitación? Esta acción no se puede deshacer.')) {
-      try {
-        await deleteTraining(id);
-      } catch (error) {
-        console.error("Failed to delete training:", error);
-        alert(`Error al eliminar la capacitación: ${error.message}`);
-      }
-    }
-  }
-  
-  const handleAddGlobalCompany = async (e: React.FormEvent) => {
-      e.preventDefault();
-      const trimmed = newGlobalCompany.trim();
-      if (trimmed) {
-          const normalizedNew = normalizeString(trimmed);
-          const alreadyExists = companies.some(c => normalizeString(c) === normalizedNew);
-          if (alreadyExists) {
-              alert(`Error: Una empresa con un nombre similar a "${trimmed}" ya existe. Por favor, revise la lista.`);
-              return;
-          }
-          try {
-              await updateCompanies([...companies, trimmed].sort((a, b) => a.localeCompare(b)));
-              setNewGlobalCompany('');
-          } catch (error) {
-              console.error("Failed to add company:", error);
-              alert(`Error al agregar la empresa: ${error.message}`);
-          }
-      }
-  };
-
-  const handleDeleteGlobalCompany = async (companyToDelete: string) => {
-      if (window.confirm(`¿Seguro que quieres eliminar la empresa "${companyToDelete}" de la lista maestra?`)) {
-          try {
-              await updateCompanies(companies.filter(c => c !== companyToDelete));
-          } catch (error) {
-              console.error("Failed to delete company:", error);
-              alert(`Error al eliminar la empresa: ${error.message}`);
-          }
-      }
-  };
-
-  const handleShare = async (trainingToShare: Training) => {
-    if (!trainingToShare.companies || trainingToShare.companies.length === 0) {
-        alert("No se puede compartir esta capacitación porque no tiene ninguna empresa asignada. Por favor, edite la capacitación y asigne al menos una empresa para poder compartirla.");
-        return;
-    }
-
-    const pristineTraining = {
-      ...trainingToShare,
-      links: trainingToShare.links.map(link => ({ ...link, viewed: false }))
-    };
-    
-    try {
-      const shareKey = await apiService.shareTraining(pristineTraining);
-      
-      let fallbackData = '';
-      try {
-        // btoa is a browser function for Base64 encoding
-        fallbackData = btoa(JSON.stringify(pristineTraining));
-      } catch (e) {
-        console.error("Failed to create fallback data for URL", e);
-      }
-      
-      const link = `${window.location.origin}${window.location.pathname}?shareKey=${shareKey}&fallbackData=${fallbackData}`;
-      
-      setShareableLink(link);
-      setSharingTrainingName(trainingToShare.name);
-
-      const dataUrl = await QRCode.toDataURL(link, { width: 256, margin: 2, color: { dark: '#FFFFFF', light: '#1E293B' } });
-      setQrCodeDataUrl(dataUrl);
-    } catch (err) {
-      console.error("Failed to generate share link:", err);
-      alert(`Error al generar el enlace para compartir: ${err.message}`);
-      setQrCodeDataUrl('');
-    }
-    setShowShareModal(true);
-  };
-  
-  const copyToClipboard = () => {
-    navigator.clipboard.writeText(shareableLink).then(() => {
-        setCopySuccess('¡Copiado!');
-        setTimeout(() => setCopySuccess(''), 2000);
-    }, () => {
-        setCopySuccess('Error al copiar');
-    });
-  };
-
-  const handleOpenSignatureModal = () => {
-    setCurrentClarification(adminSignatureClarification);
-    setCurrentJobTitle(adminJobTitle);
-    setShowAdminSignatureModal(true);
-  };
-    
-  const handleSaveAdminSignature = async () => {
-    if (adminSignatureRef.current) {
-      if (adminSignatureRef.current.isEmpty() && !adminSignature) {
-          alert("Por favor, dibuja tu firma antes de guardar.");
-          return;
-      }
-       if (!currentClarification.trim()) {
-          alert("Por favor, ingresa tu aclaración de firma.");
-          return;
-      }
-       if (!currentJobTitle.trim()) {
-          alert("Por favor, ingresa tu cargo.");
-          return;
-      }
-      
-      const isSignatureUnchanged = adminSignatureRef.current.isEmpty() && adminSignature;
-      const signatureDataUrl = isSignatureUnchanged ? adminSignature : adminSignatureRef.current.toDataURL();
-      
-      const newConfig = {
-        signature: signatureDataUrl,
-        clarification: currentClarification,
-        jobTitle: currentJobTitle
-      };
-      try {
-        await apiService.updateAdminConfig(newConfig);
-        setAdminSignature(signatureDataUrl);
-        setAdminSignatureClarification(currentClarification);
-        setAdminJobTitle(currentJobTitle);
-        setShowAdminSignatureModal(false);
-      } catch (error) {
-        console.error("Failed to save admin signature:", error);
-        alert(`Error al guardar la firma: ${error.message}`);
-      }
-    }
-  };
-  
-  const handleClearAdminSignature = async () => {
-      if (window.confirm("¿Estás seguro de que quieres eliminar la firma y los datos guardados? Esta acción no se puede deshacer.")) {
-        const newConfig = { signature: null, clarification: '', jobTitle: '' };
-        try {
-            await apiService.updateAdminConfig(newConfig);
-            setAdminSignature(null);
-            setAdminSignatureClarification('');
-            setAdminJobTitle('');
-            setCurrentClarification('');
-            setCurrentJobTitle('');
-            adminSignatureRef.current?.clear();
-            setShowAdminSignatureModal(false);
-        } catch (error) {
-            console.error("Failed to clear admin signature:", error);
-            alert(`Error al eliminar la firma: ${error.message}`);
-        }
-      }
-  };
-
-  const handleDeleteSubmission = async (submissionId: string) => {
-    if (window.confirm('¿Estás seguro de que quieres eliminar este registro? Esta acción es irreversible.')) {
-      try {
-        await apiService.deleteSubmission(submissionId);
-        await fetchSubmissions();
-      } catch (error) {
-        console.error("Failed to delete submission:", error);
-        alert(`Error al eliminar el registro: ${error.message}`);
-      }
-    }
-  };
-
-  const handleDeleteAllSubmissions = async () => {
-    if (window.confirm('¿Estás seguro de que quieres eliminar TODOS los registros? Esta acción es irreversible.')) {
-        if (window.confirm('Por favor, confirma de nuevo. Esta acción eliminará permanentemente todos los registros de usuarios.')) {
-            try {
-                await apiService.deleteAllSubmissions();
-                await fetchSubmissions();
-            } catch (error) {
-                console.error("Failed to delete all submissions:", error);
-                alert(`Error al eliminar todos los registros: ${error.message}`);
-            }
-        }
-    }
-  };
-  
-  const handleRefresh = async () => {
-    setIsRefreshing(true);
-    await Promise.all([fetchSubmissions(), fetchAdminConfig()]).catch(error => {
-      console.error("Error during refresh:", error);
-      alert("Ocurrió un error al actualizar los datos.");
-    });
-    setIsRefreshing(false);
-  };
-  
-  const handleSelectSubmission = (submissionId: string) => {
-    setSelectedSubmissionIds(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(submissionId)) {
-        newSet.delete(submissionId);
-      } else {
-        newSet.add(submissionId);
-      }
-      return newSet;
-    });
-  };
-
-  const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.checked) {
-      const allFilteredIds = new Set(filteredSubmissions.map(s => s.id));
-      setSelectedSubmissionIds(allFilteredIds);
-    } else {
-      setSelectedSubmissionIds(new Set());
-    }
-  };
-
-  const handleDownloadPdf = () => {
-      if (isDownloadingPdf) return;
-      
-      const isConfigInvalid = !adminSignature || !adminSignatureClarification || !adminJobTitle;
-      if (isConfigInvalid) {
-          alert("Error: La firma y los datos del administrador deben estar configurados para generar el PDF.");
-          return;
-      }
-
-      const submissionsToPrint = selectedSubmissionIds.size > 0
-        ? userSubmissions
-            .filter(sub => selectedSubmissionIds.has(sub.id))
-            .sort((a, b) => {
-                const lastNameComp = normalizeString(a.lastName).localeCompare(normalizeString(b.lastName));
-                if (lastNameComp !== 0) return lastNameComp;
-                return normalizeString(a.firstName).localeCompare(normalizeString(b.firstName));
-            })
-        : filteredSubmissions;
-
-      if (submissionsToPrint.length === 0) {
-          alert('No hay registros para la selección actual.');
-          return;
-      }
-      
-      let pdfTrainingName: string | undefined = undefined;
-      // Determine the training name for the PDF title
-      if (selectedSubmissionIds.size > 0) {
-          // If printing a manual selection
-          if (submissionsToPrint.length > 0) {
-              const firstTrainingId = submissionsToPrint[0].trainingId;
-              if (submissionsToPrint.every(s => s.trainingId === firstTrainingId)) {
-                  pdfTrainingName = submissionsToPrint[0].trainingName;
-              }
-          }
-      } else if (selectedTrainingFilterId !== 'all') {
-          // If printing filtered results by training
-          const selectedTraining = trainings.find(t => t.id === selectedTrainingFilterId);
-          if (selectedTraining) {
-              pdfTrainingName = selectedTraining.name;
-          } else if (submissionsToPrint.length > 0) {
-              pdfTrainingName = submissionsToPrint[0].trainingName; // Fallback for deleted trainings
-          }
-      } else {
-          // If printing filtered results without a specific training filter (e.g., only by company)
-          // check if all results happen to be for the same training.
-          if (submissionsToPrint.length > 0) {
-              const firstTrainingId = submissionsToPrint[0].trainingId;
-              if (submissionsToPrint.every(s => s.trainingId === firstTrainingId)) {
-                  pdfTrainingName = submissionsToPrint[0].trainingName;
-              }
-          }
-      }
-
-      let pdfCompanyName: string | undefined = undefined;
-      // Determine company name for the PDF
-      if (selectedSubmissionIds.size > 0) {
-          // If printing a manual selection
-          if (submissionsToPrint.length > 0) {
-              const firstCompany = submissionsToPrint[0].company;
-              if (submissionsToPrint.every(s => s.company === firstCompany)) {
-                  pdfCompanyName = firstCompany;
-              }
-          }
-      } else if (companyFilter !== 'all') {
-          // If a specific company filter is active
-          pdfCompanyName = companyFilter;
-      } else {
-          // If printing filtered results without a specific company filter,
-          // check if all results happen to be for the same company.
-          if (submissionsToPrint.length > 0) {
-              const firstCompany = submissionsToPrint[0].company;
-              if (submissionsToPrint.every(s => s.company === firstCompany)) {
-                  pdfCompanyName = firstCompany;
-              }
-          }
-      }
-
-      setIsDownloadingPdf(true);
-      setTimeout(() => {
-          try {
-              generateSubmissionsPdf(submissionsToPrint, adminSignature, adminSignatureClarification, adminJobTitle, pdfTrainingName, pdfCompanyName);
-          } catch(e) {
-              console.error("Error al generar PDF:", e);
-              alert("Ocurrió un error al generar el PDF. Por favor, revisa la consola para más detalles.")
-          } finally {
-              setIsDownloadingPdf(false);
-          }
-      }, 50);
-  };
-    
-  const numSelected = selectedSubmissionIds.size;
-  const submissionsToPrintCount = numSelected > 0 ? numSelected : filteredSubmissions.length;
-  const downloadButtonText = isDownloadingPdf ? 'Generando...' : (numSelected > 0 ? `Descargar PDF (${numSelected})` : 'Descargar PDF');
-  const isDownloadDisabled = isDownloadingPdf || submissionsToPrintCount === 0 || !adminSignature || !adminSignatureClarification || !adminJobTitle;
-  
-  const downloadButtonTitle = useMemo(() => {
-    if (isDownloadingPdf) return "Generando PDF...";
-    if (!adminSignature || !adminSignatureClarification || !adminJobTitle) {
-      return "Debe configurar firma, aclaración y cargo para descargar";
-    }
-    if (submissionsToPrintCount === 0) {
-      return "No hay registros seleccionados o filtrados para descargar";
-    }
-    if (numSelected > 0) {
-      return `Descargar constancia para ${numSelected} registro(s) seleccionado(s)`;
-    }
-    return "Descargar constancia para todos los registros filtrados";
-  }, [isDownloadingPdf, adminSignature, adminSignatureClarification, adminJobTitle, submissionsToPrintCount, numSelected]);
-
-
-  const noFiltersApplied = selectedTrainingFilterId === 'all' && companyFilter === 'all';
-
-  const TabButton = ({ id, label, icon: Icon }) => (
-    <button
-      onClick={() => setActiveTab(id)}
-      className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
-        activeTab === id
-          ? 'bg-slate-700 text-white'
-          : 'text-gray-400 hover:bg-slate-800 hover:text-white'
-      }`}
-    >
-      <Icon className="h-4 w-4" />
-      {label}
-    </button>
-  );
-  
-  const CompanyManager = ({
-    selectedCompanies,
-    setSelectedCompanies,
-    allAvailableCompanies
-  }) => {
-      const [companyToAdd, setCompanyToAdd] = useState('');
-
-      const availableForSelection = useMemo(() => 
-          allAvailableCompanies.filter(c => !selectedCompanies.includes(c)),
-          [allAvailableCompanies, selectedCompanies]
-      );
-
-      useEffect(() => {
-          setCompanyToAdd(availableForSelection[0] || '');
-      }, [availableForSelection]);
-
-      const handleAddCompany = () => {
-          if (companyToAdd && !selectedCompanies.includes(companyToAdd)) {
-              setSelectedCompanies([...selectedCompanies, companyToAdd]);
-          }
-      };
-      
-      const handleRemoveCompany = (companyToRemove: string) => {
-          setSelectedCompanies(selectedCompanies.filter(c => c !== companyToRemove));
-      };
-
-      return (
-          <div>
-              <div className="flex flex-wrap gap-2 mb-2 min-h-[28px]">
-                  {selectedCompanies.map(company => (
-                      <span key={company} className="flex items-center gap-1.5 bg-indigo-500/20 text-indigo-300 text-xs font-medium px-2.5 py-1 rounded-full">
-                          {company}
-                          <button type="button" onClick={() => handleRemoveCompany(company)} className="text-indigo-400 hover:text-white">
-                              <X size={14} />
-                          </button>
-                      </span>
-                  ))}
-              </div>
-              <div className="flex items-center gap-2">
-                  <select
-                      value={companyToAdd}
-                      onChange={(e) => setCompanyToAdd(e.target.value)}
-                      disabled={availableForSelection.length === 0}
-                      className="flex-grow px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm disabled:bg-slate-800 disabled:cursor-not-allowed"
-                  >
-                      {availableForSelection.length > 0 ? (
-                          availableForSelection.map(c => <option key={c} value={c}>{c}</option>)
-                      ) : (
-                          <option value="">No hay más empresas para añadir</option>
-                      )}
-                  </select>
-                  <button
-                      type="button"
-                      onClick={handleAddCompany}
-                      disabled={!companyToAdd}
-                      className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:bg-slate-600 disabled:opacity-50"
-                  >
-                      Añadir
-                  </button>
-              </div>
-          </div>
-      );
-  };
-
-
-  return (
-    <div className="w-full max-w-7xl mx-auto p-4 md:p-8 space-y-6">
-      <div className="flex flex-wrap gap-4 justify-between items-center">
-        <h1 className="text-3xl font-bold text-white">Panel de Administrador</h1>
-        <button onClick={onLogout} className="flex items-center px-4 py-2 text-sm font-medium text-white bg-slate-600 rounded-lg hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-500">
-          <ArrowLeft className="h-4 w-4 mr-2"/>
-          Menú Principal
-        </button>
-      </div>
-
-       <div className="flex flex-wrap justify-center sm:justify-start items-center gap-2 p-1 bg-slate-800/50 border border-slate-700 rounded-lg">
-        <TabButton id="submissions" label="Usuarios Registrados" icon={Users} />
-        <TabButton id="manage" label="Gestionar Capacitaciones" icon={ClipboardList} />
-        <TabButton id="companies" label="Gestionar Empresas" icon={Award} />
-        <TabButton id="create" label="Crear Nueva Capacitación" icon={PlusCircle} />
-      </div>
-
-      <div className="bg-slate-800 p-4 sm:p-6 rounded-xl shadow-lg border border-slate-700">
-        {activeTab === 'create' && (
-            <div className="max-w-2xl mx-auto">
-                <h2 className="text-xl font-semibold text-gray-200 mb-4">Crear Nueva Capacitación</h2>
-                <form onSubmit={handleAddTraining} className="space-y-4">
-                <div>
-                    <label htmlFor="trainingName" className="block text-sm font-medium text-gray-300">Nombre de la Capacitación</label>
-                    <input
-                    id="trainingName"
-                    type="text"
-                    value={trainingName}
-                    onChange={(e) => setTrainingName(e.target.value)}
-                    placeholder="Ej: Inducción de Seguridad"
-                    required
-                    className="mt-1 block w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                    />
-                </div>
-                <div>
-                  <label htmlFor="new-company-input" className="block text-sm font-medium text-gray-300 mb-1">Empresas Autorizadas (Opcional)</label>
-                  <CompanyManager 
-                      selectedCompanies={newTrainingCompanies}
-                      setSelectedCompanies={setNewTrainingCompanies}
-                      allAvailableCompanies={companies}
-                  />
-                  <p className="mt-1 text-xs text-gray-500">
-                      Asigne al menos una empresa. Los usuarios solo verán las capacitaciones asignadas a su empresa.
-                  </p>
-                </div>
-                <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-2">Enlaces</label>
-                    <div className="space-y-3">
-                        {newTrainingLinks.map((link, index) => (
-                            <div key={link.tempId} className="flex items-center gap-2 p-2 bg-slate-700/50 rounded-md border border-slate-600">
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 flex-grow">
-                                    <input
-                                        type="text"
-                                        value={link.name}
-                                        onChange={(e) => handleNewLinkChange(index, 'name', e.target.value)}
-                                        placeholder={`Nombre del Enlace ${index + 1} (Opcional)`}
-                                        className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                                    />
-                                    <input
-                                        type="url"
-                                        value={link.url}
-                                        onChange={(e) => handleNewLinkChange(index, 'url', e.target.value)}
-                                        placeholder="https://ejemplo.com/recurso"
-                                        required
-                                        className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                                    />
-                                </div>
-                                <button
-                                    type="button"
-                                    onClick={() => removeNewLink(index)}
-                                    disabled={newTrainingLinks.length <= 1}
-                                    className="p-2 text-red-400 hover:text-red-300 disabled:text-gray-600 disabled:cursor-not-allowed hover:bg-red-900/30 rounded-full transition-colors flex-shrink-0"
-                                    title="Eliminar enlace"
-                                >
-                                    <Trash2 className="h-4 w-4" />
-                                </button>
-                            </div>
-                        ))}
+        {isShareModalOpen && (
+            <Modal title="Compartir Capacitación" onClose={() => setIsShareModalOpen(false)}>
+                <div className="text-center space-y-4">
+                    <p className="text-gray-300">Escanea el código QR o comparte el enlace directo.</p>
+                    <img src={qrCodeUrl} alt="Código QR" className="mx-auto rounded-lg" />
+                    <div className="flex items-center space-x-2">
+                      <input type="text" value={shareUrl} readOnly className="w-full p-2 bg-slate-700 border border-slate-600 rounded-md text-white"/>
+                      <button onClick={() => { navigator.clipboard.writeText(shareUrl); alert('¡Enlace copiado!'); }} className="p-2 bg-indigo-600 rounded-md hover:bg-indigo-700"><Copy size={20}/></button>
                     </div>
-                    <button
-                        type="button"
-                        onClick={addNewLink}
-                        className="mt-3 inline-flex items-center px-3 py-1.5 border border-slate-600 text-xs font-medium rounded-md shadow-sm text-gray-300 bg-slate-700 hover:bg-slate-600 focus:outline-none"
-                    >
-                        <PlusCircle className="h-4 w-4 mr-2" />
-                        Añadir Otro Enlace
-                    </button>
                 </div>
+            </Modal>
+        )}
 
-                <div className="flex items-center justify-between">
-                    <button
-                    type="submit"
-                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                    >
-                    <PlusCircle className="h-5 w-5 mr-2" />
-                    Agregar Capacitación
-                    </button>
-                    {feedback && <p className="text-sm text-green-500">{feedback}</p>}
-                </div>
-                </form>
-            </div>
+        {isCompaniesModalOpen && (
+          <Modal title="Gestionar Empresas" onClose={() => { setIsCompaniesModalOpen(false); setNewCompanyName(''); }}>
+              <div className="space-y-4">
+                  <div>
+                      <label htmlFor="newCompany" className="text-sm font-medium text-gray-300">Añadir nueva empresa</label>
+                      <div className="flex gap-2 mt-1">
+                          <input
+                              id="newCompany"
+                              type="text"
+                              value={newCompanyName}
+                              onChange={(e) => setNewCompanyName(e.target.value)}
+                              className="flex-grow p-2 bg-slate-700 border border-slate-600 rounded-md text-white"
+                              placeholder="Nombre de la empresa"
+                          />
+                          <button
+                              onClick={() => { handleAddCompany(newCompanyName); setNewCompanyName(''); }}
+                              disabled={isSaving || !newCompanyName.trim()}
+                              className="px-4 py-2 text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-500 disabled:opacity-70 disabled:cursor-not-allowed"
+                          >Añadir</button>
+                      </div>
+                  </div>
+                  <div className="border-t border-slate-700 pt-4">
+                      <h4 className="font-semibold text-white mb-2">Empresas Existentes</h4>
+                      <div className="space-y-2 max-h-60 overflow-y-auto">
+                          {companies.length > 0 ? companies.map(c => (
+                              <div key={c} className="flex justify-between items-center p-2 bg-slate-700/50 rounded-md">
+                                  <span>{c}</span>
+                                  <button
+                                      onClick={() => handleDeleteCompany(c)}
+                                      disabled={isSaving}
+                                      className="text-red-400 hover:text-red-300 disabled:text-gray-500"
+                                  ><Trash2 size={16}/></button>
+                              </div>
+                          )) : <p className="text-gray-400 text-center">No hay empresas registradas.</p>}
+                      </div>
+                  </div>
+              </div>
+          </Modal>
         )}
         
-        {activeTab === 'companies' && (
-            <div className="max-w-xl mx-auto">
-                 <h2 className="text-xl font-semibold text-gray-200 mb-4">Gestionar Empresas</h2>
-                 <form onSubmit={handleAddGlobalCompany} className="flex items-center gap-2 mb-4">
-                    <input
-                        type="text"
-                        value={newGlobalCompany}
-                        onChange={(e) => setNewGlobalCompany(e.target.value)}
-                        placeholder="Nombre de la nueva empresa"
-                        className="flex-grow px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                    />
-                    <button
-                        type="submit"
-                        className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700"
-                    >
-                        Añadir
-                    </button>
-                 </form>
-                 <div className="space-y-2 max-h-96 overflow-y-auto">
-                    {companies.length > 0 ? (
-                        companies.map(company => (
-                            <div key={company} className="flex justify-between items-center p-3 bg-slate-700/50 rounded-md border border-slate-600">
-                                <span className="text-white">{company}</span>
-                                <button
-                                    onClick={() => handleDeleteGlobalCompany(company)}
-                                    className="p-1.5 text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded-full transition-colors"
-                                    title={`Eliminar ${company}`}
-                                >
-                                    <Trash2 size={16}/>
-                                </button>
-                            </div>
-                        ))
-                    ) : (
-                        <p className="text-sm text-gray-500 text-center py-4">No hay empresas en la lista maestra.</p>
-                    )}
-                 </div>
-            </div>
-        )}
-
-        {activeTab === 'manage' && (
-            <div>
-                 <h2 className="text-xl font-semibold text-gray-200 mb-4">Gestionar Capacitaciones</h2>
-                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {trainings.length > 0 ? (
-                        trainings.map(training => (
-                        <div key={training.id} className="flex flex-col justify-between p-4 bg-slate-700/50 rounded-lg border border-slate-600">
-                            <div>
-                                <h3 className="font-bold text-lg text-indigo-400 truncate" title={training.name}>{training.name}</h3>
-                                <p className="text-sm text-gray-400">{training.links.length} materiale(s)</p>
-                                {training.companies && training.companies.length > 0 && <p className="text-xs text-gray-500 mt-1">{training.companies.length} empresa(s) asociada(s)</p>}
-                            </div>
-                            <div className="flex items-center gap-2 mt-4 border-t border-slate-600 pt-3">
-                            <button onClick={() => handleShare(training)} className="flex-1 inline-flex items-center justify-center gap-2 px-3 py-1.5 text-xs font-medium rounded-md text-teal-300 bg-teal-900/40 hover:bg-teal-900/60 transition-colors" title="Compartir">
-                                <Share2 className="h-4 w-4" /> Compartir
-                            </button>
-                            <button onClick={() => setEditingTraining(training)} className="p-2 text-blue-400 hover:text-blue-300 hover:bg-blue-900/30 rounded-full transition-colors" title="Editar">
-                                <Edit className="h-4 w-4" />
-                            </button>
-                            <button onClick={() => handleDeleteTraining(training.id)} className="p-2 text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded-full transition-colors" title="Eliminar">
-                                <Trash2 className="h-4 w-4" />
-                            </button>
-                            </div>
-                        </div>
-                        ))
-                    ) : (
-                        <p className="text-sm text-gray-500 text-center py-4 col-span-full">No hay capacitaciones creadas.</p>
-                    )}
-                </div>
-            </div>
-        )}
-
-        {activeTab === 'submissions' && (
-            <div>
-                <div className="flex flex-col md:flex-row justify-between md:items-center mb-4 gap-4">
-                    <div className="flex items-center gap-3">
-                    <h2 className="text-xl font-semibold text-gray-200">
-                        Usuarios Registrados 
-                        <span className="text-base font-normal text-gray-400 ml-2">
-                        ({noFiltersApplied
-                            ? userSubmissions.length 
-                            : `${filteredSubmissions.length} de ${userSubmissions.length}`})
-                        </span>
-                    </h2>
-                    <button 
-                        onClick={handleRefresh} 
-                        disabled={isRefreshing} 
-                        title="Actualizar registros"
-                        className="p-1.5 text-gray-400 hover:text-white rounded-full hover:bg-slate-700 transition-colors disabled:cursor-wait"
-                    >
-                        <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-                    </button>
-                    </div>
-                    <div className="flex gap-2 flex-wrap items-center">
-                        <button 
-                            onClick={handleOpenSignatureModal}
-                            className="inline-flex items-center px-4 py-2 border border-slate-600 text-sm font-medium rounded-md shadow-sm text-gray-300 bg-slate-700 hover:bg-slate-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                        >
-                            <Edit className="h-4 w-4 mr-2" />
-                            {adminSignature ? 'Gestionar Firma' : 'Configurar Firma'}
-                        </button>
-                        {adminSignature && (
-                            <div className="flex items-center gap-2 border border-slate-700 rounded-md bg-slate-700 p-1">
-                            <img src={adminSignature} alt="Admin signature preview" className="h-10 w-20 object-contain bg-white rounded-sm" />
-                            <div className="pr-2">
-                                {adminSignatureClarification && <p className="text-xs text-gray-300">{adminSignatureClarification}</p>}
-                                {adminJobTitle && <p className="text-xs text-gray-400 italic">{adminJobTitle}</p>}
-                            </div>
-                            </div>
-                        )}
-                    </div>
-                </div>
-                
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-t border-slate-700 pt-4">
-                    <div className="flex flex-wrap items-center gap-4 bg-slate-700/50 border border-slate-600 rounded-lg p-2 flex-grow">
-                        {/* Training Filter */}
-                        <div className="flex items-center gap-2 flex-grow min-w-[200px]">
-                            <label htmlFor="trainingFilter" className="text-sm font-medium text-gray-300 pl-1 shrink-0">Capacitación:</label>
-                            <select
-                                id="trainingFilter"
-                                value={selectedTrainingFilterId}
-                                onChange={(e) => setSelectedTrainingFilterId(e.target.value)}
-                                className="bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm px-3 py-2 h-10 w-full"
-                            >
-                                <option value="all">Todas</option>
-                                {trainings.map(t => (
-                                    <option key={t.id} value={t.id}>{t.name}</option>
-                                ))}
-                            </select>
-                        </div>
-                        {/* Company Filter */}
-                        <div className="flex items-center gap-2 flex-grow min-w-[200px]">
-                            <label htmlFor="companyFilter" className="text-sm font-medium text-gray-300 pl-1 shrink-0">Empresa:</label>
-                            <select
-                                id="companyFilter"
-                                value={companyFilter}
-                                onChange={(e) => setCompanyFilter(e.target.value)}
-                                className="bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm px-3 py-2 h-10 w-full"
-                            >
-                                <option value="all">Todas las empresas</option>
-                                {companies.map(company => (
-                                    <option key={company} value={company}>{company}</option>
-                                ))}
-                            </select>
-                        </div>
-                        {/* Download Button */}
-                        <div className="relative w-full sm:w-auto" title={downloadButtonTitle}>
-                                <button
-                                    onClick={handleDownloadPdf}
-                                    disabled={isDownloadDisabled}
-                                    className="w-full sm:w-auto inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 h-10"
-                                >
-                                    {isDownloadingPdf ? <RefreshCw className="h-5 w-5 mr-2 animate-spin" /> : <FileDown className="h-5 w-5 mr-2" />}
-                                    {downloadButtonText}
-                                </button>
-                            </div>
-                    </div>
-
-                    <div className="relative" title={userSubmissions.length === 0 ? "No hay registros para borrar" : "Borrar todos los registros"}>
-                        <button
-                            onClick={handleDeleteAllSubmissions}
-                            disabled={userSubmissions.length === 0}
-                            className="w-full sm:w-auto inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-red-600 hover:bg-red-700 disabled:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 h-10"
-                        >
-                            <Trash2 className="h-5 w-5 mr-2" />
-                            Borrar Todo
-                        </button>
-                    </div>
-                </div>
-
-                <div className="overflow-x-auto mt-4">
-                    {userSubmissions.length > 0 ? (
-                    <>
-                        {filteredSubmissions.length > 0 ? (
-                        <table className="min-w-full divide-y divide-slate-700">
-                            <thead className="bg-slate-900/50">
-                            <tr>
-                                <th scope="col" className="px-6 py-3">
-                                    <input
-                                        type="checkbox"
-                                        ref={selectAllCheckboxRef}
-                                        onChange={handleSelectAll}
-                                        className="h-4 w-4 bg-slate-700 border-slate-600 rounded text-indigo-600 focus:ring-indigo-500"
-                                    />
-                                </th>
-                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Apellido</th>
-                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Nombre</th>
-                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">DNI</th>
-                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Empresa</th>
-                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Capacitación</th>
-                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Fecha</th>
-                                <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">Acciones</th>
-                            </tr>
-                            </thead>
-                            <tbody className="bg-slate-800 divide-y divide-slate-700">
-                            {filteredSubmissions.map((sub) => (
-                                <tr key={sub.id} className={`transition-colors ${selectedSubmissionIds.has(sub.id) ? 'bg-slate-700' : 'hover:bg-slate-700/50'}`}>
-                                <td className="px-6 py-4 whitespace-nowrap">
-                                    <input
-                                        type="checkbox"
-                                        checked={selectedSubmissionIds.has(sub.id)}
-                                        onChange={() => handleSelectSubmission(sub.id)}
-                                        onClick={(e) => e.stopPropagation()}
-                                        className="h-4 w-4 bg-slate-700 border-slate-600 rounded text-indigo-600 focus:ring-indigo-500"
-                                    />
-                                </td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-white cursor-pointer" onClick={() => setSelectedSubmission(sub)}>{sub.lastName}</td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer" onClick={() => setSelectedSubmission(sub)}>{sub.firstName}</td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer" onClick={() => setSelectedSubmission(sub)}>{sub.dni}</td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer" onClick={() => setSelectedSubmission(sub)}>{sub.company}</td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer" onClick={() => setSelectedSubmission(sub)}>{sub.trainingName}</td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer" onClick={() => setSelectedSubmission(sub)}>{sub.timestamp}</td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 text-right">
-                                    <button 
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            handleDeleteSubmission(sub.id);
-                                        }}
-                                        title="Eliminar registro"
-                                        className="p-2 text-red-500 hover:text-red-400 hover:bg-red-900/30 rounded-full transition-colors"
-                                    >
-                                        <Trash2 className="h-4 w-4" />
-                                    </button>
-                                </td>
-                                </tr>
-                            ))}
-                            </tbody>
-                        </table>
-                        ) : (
-                        <div className="text-center py-8">
-                            <Users className="mx-auto h-12 w-12 text-gray-500" />
-                            <p className="mt-2 text-sm text-gray-500">No se encontraron registros que coincidan con los filtros actuales.</p>
-                        </div>
-                        )}
-                    </>
-                    ) : (
-                    <div className="text-center py-8">
-                        <Users className="mx-auto h-12 w-12 text-gray-500" />
-                        <p className="mt-2 text-sm text-gray-500">Aún no hay registros de usuarios.</p>
-                        <p className="mt-1 text-xs text-gray-600">Cuando un usuario complete una capacitación, su registro aparecerá aquí automáticamente.</p>
-                    </div>
-                    )}
-                </div>
-            </div>
-        )}
-      </div>
-      
-      {editingTraining && (
-         <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50">
-           <div className="bg-slate-800 rounded-xl shadow-2xl p-6 w-full max-w-lg border border-slate-700">
-             <div className="flex justify-between items-center mb-4">
-               <h2 className="text-xl font-semibold text-white">Editar Capacitación</h2>
-               <button onClick={() => setEditingTraining(null)} className="p-1 text-gray-400 hover:text-white">
-                 <X className="h-6 w-6" />
-               </button>
-             </div>
-             <form onSubmit={handleUpdateTraining} className="space-y-4">
-              <div>
-                <label htmlFor="editedName" className="block text-sm font-medium text-gray-300">Nombre de la Capacitación</label>
-                <input id="editedName" type="text" value={editedName} onChange={(e) => setEditedName(e.target.value)} required className="mt-1 block w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"/>
-              </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-1">Empresas Autorizadas (Opcional)</label>
-                   <CompanyManager 
-                      selectedCompanies={editedCompanies}
-                      setSelectedCompanies={setEditedCompanies}
-                      allAvailableCompanies={companies}
-                  />
-                    <p className="mt-1 text-xs text-gray-500">
-                        Asigne al menos una empresa. Los usuarios solo verán las capacitaciones asignadas a su empresa.
-                    </p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-2">Enlaces</label>
-                  <div className="space-y-3 max-h-60 overflow-y-auto">
-                      {editedTrainingLinks.map((link, index) => (
-                          <div key={link.tempId} className="flex items-center gap-2 p-2 bg-slate-700/50 rounded-md border border-slate-600">
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 flex-grow">
-                                  <input
-                                      type="text"
-                                      value={link.name}
-                                      onChange={(e) => handleEditedLinkChange(index, 'name', e.target.value)}
-                                      placeholder={`Nombre del Enlace ${index + 1} (Opcional)`}
-                                      className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                                  />
-                                  <input
-                                      type="url"
-                                      value={link.url}
-                                      onChange={(e) => handleEditedLinkChange(index, 'url', e.target.value)}
-                                      placeholder="https://ejemplo.com/recurso"
-                                      required
-                                      className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                                  />
-                              </div>
-                              <button
-                                  type="button"
-                                  onClick={() => removeEditedLink(index)}
-                                  disabled={editedTrainingLinks.length <= 1}
-                                  className="p-2 text-red-400 hover:text-red-300 disabled:text-gray-600 disabled:cursor-not-allowed hover:bg-red-900/30 rounded-full transition-colors flex-shrink-0"
-                                  title="Eliminar enlace"
-                              >
-                                  <Trash2 className="h-4 w-4" />
-                              </button>
-                          </div>
-                      ))}
-                  </div>
-                  <button
-                      type="button"
-                      onClick={addEditedLink}
-                      className="mt-3 inline-flex items-center px-3 py-1.5 border border-slate-600 text-xs font-medium rounded-md shadow-sm text-gray-300 bg-slate-700 hover:bg-slate-600 focus:outline-none"
-                  >
-                      <PlusCircle className="h-4 w-4 mr-2" />
-                      Añadir Otro Enlace
-                  </button>
-              </div>
-              <div className="flex justify-end gap-3 pt-4">
-                 <button type="button" onClick={() => setEditingTraining(null)} className="px-4 py-2 text-sm font-medium text-gray-300 bg-slate-700 rounded-md hover:bg-slate-600">Cancelar</button>
-                 <button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700">Guardar Cambios</button>
-              </div>
-             </form>
-           </div>
-         </div>
-      )}
-
-      {showShareModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50">
-          <div className="bg-slate-800 rounded-xl shadow-2xl p-6 w-full max-w-md text-center border border-slate-700">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-semibold text-white truncate pr-2">Compartir: {sharingTrainingName}</h2>
-              <button onClick={() => setShowShareModal(false)} className="p-1 text-gray-400 hover:text-white flex-shrink-0"><X className="h-6 w-6" /></button>
-            </div>
-            <p className="text-gray-400 mb-4">Los usuarios pueden escanear este código QR o usar el enlace para acceder a la capacitación.</p>
-            
-            {qrCodeDataUrl ? (
-                <div className="flex justify-center mb-4 p-2 bg-slate-900/50 rounded-lg">
-                    <img src={qrCodeDataUrl} alt="QR Code for trainings" className="border-4 border-slate-700 rounded-lg" />
-                </div>
-            ) : (
-                <div className="h-64 w-64 bg-slate-700 flex items-center justify-center rounded-lg mx-auto mb-4">
-                    <p className="text-gray-500">Generando QR...</p>
-                </div>
-            )}
-
-            <p className="text-gray-400 mb-2 text-sm">O copia y comparte el enlace:</p>
-            <div className="relative">
-               <input type="text" value={shareableLink} readOnly className="w-full bg-slate-700 border border-slate-600 rounded-md p-2 pr-10 text-sm text-gray-300"/>
-               <button onClick={copyToClipboard} className="absolute inset-y-0 right-0 px-3 flex items-center text-gray-400 hover:text-indigo-400"><Copy className="h-5 w-5" /></button>
-            </div>
-            {copySuccess && <p className="text-green-500 text-sm mt-2">{copySuccess}</p>}
-          </div>
-        </div>
-      )}
-
-      {selectedSubmission && (
-        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50">
-          <div className="bg-slate-800 rounded-xl shadow-2xl p-6 w-full max-w-lg border border-slate-700">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-semibold text-white">Detalles del Registro</h2>
-              <button onClick={() => setSelectedSubmission(null)} className="p-1 text-gray-400 hover:text-white"><X className="h-6 w-6" /></button>
-            </div>
-            <div className="space-y-3 text-sm text-gray-300">
-                <p><strong>Capacitación:</strong> {selectedSubmission.trainingName}</p>
-                <p><strong>Nombre:</strong> {selectedSubmission.firstName} {selectedSubmission.lastName}</p>
-                <p><strong>DNI:</strong> {selectedSubmission.dni}</p>
-                <p><strong>Empresa:</strong> {selectedSubmission.company}</p>
-                <p><strong>Email:</strong> {selectedSubmission.email || 'N/A'}</p>
-                <p><strong>Teléfono:</strong> {selectedSubmission.phone || 'N/A'}</p>
-                <p><strong>Fecha:</strong> {selectedSubmission.timestamp}</p>
-                <div>
-                    <p><strong>Firma:</strong></p>
-                    <div className="mt-2 border border-slate-700 rounded-lg p-2 bg-white">
-                        <img src={selectedSubmission.signature} alt="Firma digital del usuario" className="mx-auto"/>
-                    </div>
-                </div>
-            </div>
-             <div className="flex justify-end pt-4">
-                 <button type="button" onClick={() => setSelectedSubmission(null)} className="px-4 py-2 text-sm font-medium text-gray-300 bg-slate-700 rounded-md hover:bg-slate-600">Cerrar</button>
-              </div>
-          </div>
-        </div>
-      )}
-
-      {showAdminSignatureModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50">
-            <div className="bg-slate-800 rounded-xl shadow-2xl p-6 w-full max-w-lg border border-slate-700">
-                <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl font-semibold text-white">Firma del Administrador</h2>
-                <button onClick={() => setShowAdminSignatureModal(false)} className="p-1 text-gray-400 hover:text-white">
-                    <X className="h-6 w-6" />
-                </button>
-                </div>
+        {isSignatureModalOpen && (
+            <Modal title="Editar Firma y Datos" onClose={() => setIsSignatureModalOpen(false)}>
                 <div className="space-y-4">
                     <div>
-                        <p className="text-sm text-gray-400 mb-2">Dibuja tu firma en el recuadro.</p>
-                        <SignaturePad signatureRef={adminSignatureRef} onSignatureEnd={() => {}} initialData={adminSignature} />
-                    </div>
-                    <div>
-                        <label htmlFor="clarification" className="block text-sm font-medium text-gray-300">Aclaración de Firma (Nombre y Apellido)</label>
+                        <label htmlFor="adminNameModal" className="block text-sm font-medium text-gray-300">Aclaración (Nombre Completo)</label>
                         <input
-                            id="clarification"
                             type="text"
-                            value={currentClarification}
-                            onChange={(e) => setCurrentClarification(e.target.value)}
-                            placeholder="Ej: Juan Pérez"
-                            className="mt-1 block w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                            id="adminNameModal"
+                            value={modalAdminName}
+                            onChange={(e) => setModalAdminName(e.target.value)}
+                            className="mt-1 block w-full p-2 bg-slate-700 border border-slate-600 rounded-md text-white"
                         />
                     </div>
                     <div>
-                        <label htmlFor="jobTitle" className="block text-sm font-medium text-gray-300">Cargo</label>
+                        <label htmlFor="adminJobModal" className="block text-sm font-medium text-gray-300">Cargo</label>
                         <input
-                            id="jobTitle"
                             type="text"
-                            value={currentJobTitle}
-                            onChange={(e) => setCurrentJobTitle(e.target.value)}
-                            placeholder="Ej: Gerente de RRHH"
-                            className="mt-1 block w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                            id="adminJobModal"
+                            value={modalAdminJob}
+                            onChange={(e) => setModalAdminJob(e.target.value)}
+                            className="mt-1 block w-full p-2 bg-slate-700 border border-slate-600 rounded-md text-white"
                         />
                     </div>
-                </div>
-                <div className="flex justify-between items-center mt-6">
-                <div>
-                    <button
-                        type="button"
-                        onClick={() => adminSignatureRef.current?.clear()}
-                        className="px-4 py-2 text-sm font-medium text-gray-300 bg-slate-700 rounded-md hover:bg-slate-600"
-                    >
-                        Limpiar Dibujo
-                    </button>
-                    {adminSignature && (
-                       <button
-                          type="button"
-                          onClick={handleClearAdminSignature}
-                          className="ml-2 px-4 py-2 text-sm font-medium text-red-400 hover:text-red-300 bg-transparent rounded-md hover:bg-red-900/20"
+                    <div>
+                        <p className="block text-sm font-medium text-gray-300 mb-1">
+                            Firma (dibujar para reemplazar la existente)
+                        </p>
+                        <SignaturePad
+                            signatureRef={adminSignatureRef}
+                            onSignatureEnd={() => {}}
+                            initialData={adminConfig.signature}
+                        />
+                        <button
+                            type="button"
+                            onClick={() => adminSignatureRef.current?.clear()}
+                            className="text-sm text-indigo-400 hover:underline mt-2"
                         >
-                            Eliminar Firma Guardada
+                            Limpiar firma
                         </button>
-                    )}
+                    </div>
+                    <div className="flex justify-end pt-4">
+                        <button
+                            onClick={handleSaveAdminSignature}
+                            disabled={isSaving}
+                            className="inline-flex justify-center items-center px-6 py-2 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-slate-500 disabled:opacity-70 disabled:cursor-not-allowed"
+                        >
+                            <CheckCircle className="h-5 w-5 mr-2" />
+                            Guardar Cambios
+                        </button>
+                    </div>
                 </div>
-                <div className="flex gap-3">
-                    <button
-                        type="button"
-                        onClick={() => setShowAdminSignatureModal(false)}
-                        className="px-4 py-2 text-sm font-medium text-gray-300 bg-slate-700 rounded-md hover:bg-slate-600"
-                    >
-                        Cancelar
-                    </button>
-                    <button
-                        type="button"
-                        onClick={handleSaveAdminSignature}
-                        className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700"
-                    >
-                        Guardar Firma
-                    </button>
-                </div>
-                </div>
-            </div>
-        </div>
+            </Modal>
         )}
-    </div>
-  );
+      </>
+    );
+  }
+
+  return null; // Should not be reached
 };
 
-
-// A simple spinner component for the initial app load
-const LoadingSpinner: React.FC = () => (
-    <div className="flex flex-col items-center justify-center gap-4" role="status" aria-label="Cargando">
-        <div className="w-16 h-16 border-4 border-slate-600 border-t-sky-400 rounded-full animate-spin"></div>
-        <p className="text-slate-400">Cargando capacitación...</p>
-    </div>
-);
-
-// A new component for the "QR Required" screen.
-interface QrRequiredScreenProps {
-    onAdminLoginClick: () => void;
-}
-const QrRequiredScreen: React.FC<QrRequiredScreenProps> = ({ onAdminLoginClick }) => (
-    <div className="w-full max-w-md mx-auto relative">
-      <div className="bg-slate-800 p-8 rounded-xl shadow-lg text-center">
-        <QrCode className="mx-auto h-16 w-16 text-indigo-400" />
-        <h1 className="text-3xl font-bold text-white mt-4">Acceso a Capacitación</h1>
-        <p className="mt-2 text-gray-400">Por favor, escanee el código QR proporcionado por su administrador para comenzar.</p>
-      </div>
-       <div className="absolute -bottom-14 left-0 right-0 text-center">
-            <button
-                onClick={onAdminLoginClick}
-                className="text-sm font-medium text-slate-500 hover:text-slate-300 transition-colors"
-            >
-                Acceso Administrador
-            </button>
-        </div>
-    </div>
-);
-
-
-// --- APP ---
-type View = 'login' | 'admin' | 'user';
-
-const App: React.FC = () => {
-  const [view, setView] = useState<View>('user');
-  const [trainings, setTrainings] = useState<Training[]>([]);
-  const [companies, setCompanies] = useState<string[]>([]);
-  const [userPortalTrainings, setUserPortalTrainings] = useState<Training[]>([]);
-  const [isLoading, setIsLoading] = useState(true); // Start in loading state
-  
-  useEffect(() => {
-    const loadInitialData = async () => {
-      try {
-        const params = new URLSearchParams(window.location.search);
-        const shareKey = params.get('shareKey');
-        let urlWasModified = false;
-
-        const adminTrainings = await apiService.getTrainings();
-        setTrainings(adminTrainings);
-        
-        const adminCompanies = await apiService.getCompanies();
-        setCompanies(adminCompanies.sort((a,b) => a.localeCompare(b)));
-
-        if (shareKey) {
-          let sharedTrainingRef = await apiService.getSharedTraining(shareKey);
-          
-          // If key lookup fails (e.g. propagation delay), try using fallback data from URL
-          if (!sharedTrainingRef) {
-              console.warn("Could not find training by shareKey. This can happen due to a small delay after creating a link. Attempting to use fallback data from URL.");
-              const fallbackData = params.get('fallbackData');
-              if (fallbackData) {
-                  try {
-                      // atob is a browser function for Base64 decoding
-                      sharedTrainingRef = JSON.parse(atob(fallbackData));
-                      console.log("Successfully loaded training from fallback data.");
-                  } catch (e) {
-                      console.error("Failed to parse fallback data from URL.", e);
-                  }
-              }
-          }
-          
-          // Prioritize the most up-to-date version from the main list if available
-          const latestTraining = sharedTrainingRef 
-            ? adminTrainings.find(t => t.id === sharedTrainingRef.id) 
-            : null;
-
-          // Fallback to using the data from the share link itself if the main one isn't found
-          const trainingToShow = latestTraining || sharedTrainingRef;
-
-          if (trainingToShow) {
-            // Always present a clean, un-started version for a new user session
-            const pristineUserSessionTraining = {
-              ...trainingToShow,
-              links: trainingToShow.links.map(link => ({ ...link, viewed: false }))
-            };
-
-            // Clear any previous local progress for this training ID to ensure a fresh start
-            localStorage.removeItem(`training-progress-${trainingToShow.id}`);
-            setUserPortalTrainings([pristineUserSessionTraining]);
-          } else {
-            // This case now only happens if the shareKey or fallback was invalid/missing
-            alert("El enlace de la capacitación es inválido o la capacitación ha sido eliminada. Por favor, consulte con el administrador.");
-          }
-          urlWasModified = true;
-        } 
-        
-        if (urlWasModified) {
-          window.history.replaceState({}, document.title, window.location.pathname);
-        }
-      } catch (error) {
-         console.error("Failed to load data from URL or remote store", error);
-         alert("Ocurrió un error al cargar la capacitación.");
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    loadInitialData();
-    
-    // Polling mechanism for cross-device sync
-    const intervalId = setInterval(async () => {
-        try {
-            const latestTrainings = await apiService.getTrainings();
-            setTrainings(currentTrainings => {
-                if (JSON.stringify(currentTrainings) !== JSON.stringify(latestTrainings)) {
-                    return latestTrainings;
-                }
-                return currentTrainings;
-            });
-
-            const latestCompanies = await apiService.getCompanies();
-            setCompanies(currentCompanies => {
-                const sortedLatest = latestCompanies.sort((a,b) => a.localeCompare(b));
-                if (JSON.stringify(currentCompanies) !== JSON.stringify(sortedLatest)) {
-                    return sortedLatest;
-                }
-                return currentCompanies;
-            });
-
-        } catch (error) {
-            console.error("Error polling for data:", error);
-        }
-    }, 5000); // Poll every 5 seconds
-
-    return () => {
-        clearInterval(intervalId); // Cleanup on unmount
-    };
-  }, []);
-
-  const addTraining = async (name: string, links: { name: string, url: string }[], companies: string[]) => {
-    const newTraining: Training = {
-      id: `training-${Date.now()}`,
-      name,
-      links: links.map((link, index) => ({
-        id: `link-${Date.now()}-${index}`,
-        name: link.name,
-        url: link.url,
-        viewed: false,
-      })),
-      companies,
-    };
-    const updatedTrainings = [...trainings, newTraining];
-    await apiService.updateTrainings(updatedTrainings);
-    setTrainings(updatedTrainings);
-  };
-
-  const updateTraining = async (id: string, name: string, links: { name: string, url: string }[], companies: string[]) => {
-    const updatedTrainings = trainings.map(t => {
-      if (t.id === id) {
-        return {
-          ...t,
-          name,
-          links: links.map((link, index) => {
-            const existingLink = t.links.find(l => l.url === link.url);
-            return {
-                id: existingLink?.id || `link-${id}-${index}`,
-                name: link.name,
-                url: link.url,
-                viewed: existingLink?.viewed || false,
-            };
-          }),
-          companies,
-        };
-      }
-      return t;
-    });
-    await apiService.updateTrainings(updatedTrainings);
-    setTrainings(updatedTrainings);
-  };
-
-  const deleteTraining = async (id: string) => {
-    const updatedTrainings = trainings.filter(t => t.id !== id);
-    await apiService.updateTrainings(updatedTrainings);
-    setTrainings(updatedTrainings);
-  };
-
-  const updateCompanies = async (updatedCompanies: string[]) => {
-      await apiService.updateCompanies(updatedCompanies);
-      setCompanies(updatedCompanies.sort((a,b) => a.localeCompare(b)));
-  };
-
-
-  const renderView = () => {
-    switch (view) {
-      case 'login':
-        return <AdminLogin onLoginSuccess={() => setView('admin')} onBack={() => setView('user')} />;
-      case 'admin':
-        return <AdminDashboard 
-                    trainings={trainings}
-                    companies={companies}
-                    addTraining={addTraining}
-                    updateTraining={updateTraining}
-                    deleteTraining={deleteTraining}
-                    updateCompanies={updateCompanies}
-                    onLogout={() => {
-                        setUserPortalTrainings([]); // Clear any loaded training
-                        setView('user');
-                    }}
-                />;
-      case 'user':
-      default:
-        // If a training was loaded via QR code, show the portal
-        if (userPortalTrainings.length > 0) {
-            return <UserPortal 
-                        trainings={userPortalTrainings} 
-                        setTrainingsStateForUser={setUserPortalTrainings} 
-                    />;
-        }
-        // Otherwise, show the "Scan QR" instruction screen
-        return <QrRequiredScreen onAdminLoginClick={() => setView('login')} />;
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-slate-900 text-gray-200 flex items-center justify-center p-4">
-      {isLoading ? <LoadingSpinner /> : renderView()}
-    </div>
-  );
-};
-
-
-// --- RENDER ---
-const rootElement = document.getElementById('root');
-if (!rootElement) throw new Error('Failed to find the root element');
-const root = ReactDOM.createRoot(rootElement);
-
-root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
+const root = ReactDOM.createRoot(document.getElementById('root') as HTMLElement);
+// FIX: Removed invalid file content markers from the end of the file. The trailing text was causing a major syntax error, leading to a cascade of incorrect parsing errors throughout the component.
+root.render(<App />);
