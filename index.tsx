@@ -1,4 +1,3 @@
-// FIX: Removed invalid file markers from the beginning and end of the file.
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import ReactDOM from 'react-dom/client';
 import jsPDF from 'jspdf';
@@ -349,24 +348,29 @@ const Spinner: React.FC<{ size?: number }> = ({ size = 8 }) => (
   <div className={`w-${size} h-${size} border-4 border-slate-500 border-t-slate-200 rounded-full animate-spin`}></div>
 );
 
-const Modal: React.FC<{ isOpen: boolean; onClose: () => void; title: string; children: React.ReactNode }> = ({ isOpen, onClose, title, children }) => {
-  if (!isOpen) return null;
+const Modal: React.FC<{ isOpen: boolean; onClose: () => void; title: string; children: React.ReactNode; size?: 'md' | 'xl' }> = ({ isOpen, onClose, title, children, size = 'md' }) => {
+    if (!isOpen) return null;
 
-  return (
-    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-slate-800 border border-slate-700 rounded-xl shadow-2xl w-full max-w-lg relative animate-fade-in-up" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between p-4 border-b border-slate-700">
-          <h3 className="text-xl font-bold text-slate-100">{title}</h3>
-          <button onClick={onClose} className="p-1 rounded-full text-slate-400 hover:bg-slate-700 hover:text-slate-200 transition-all">
-            <X size={24} />
-          </button>
+    const sizeClasses = {
+        md: 'max-w-lg',
+        xl: 'max-w-6xl h-[90vh]'
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4" onClick={onClose}>
+            <div className={`bg-slate-800 border border-slate-700 rounded-xl shadow-2xl w-full flex flex-col relative animate-fade-in-up ${sizeClasses[size]}`} onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center justify-between p-4 border-b border-slate-700 flex-shrink-0">
+                    <h3 className="text-xl font-bold text-slate-100 truncate pr-4">{title}</h3>
+                    <button onClick={onClose} className="p-1 rounded-full text-slate-400 hover:bg-slate-700 hover:text-slate-200 transition-all">
+                        <X size={24} />
+                    </button>
+                </div>
+                <div className="p-6 overflow-y-auto flex-grow">
+                    {children}
+                </div>
+            </div>
         </div>
-        <div className="p-6">
-          {children}
-        </div>
-      </div>
-    </div>
-  );
+    );
 };
 
 
@@ -1130,11 +1134,24 @@ const UserPortal: React.FC<{ training: Training; companyName: string | null; onB
     const [allLinksViewed, setAllLinksViewed] = useState(false);
     const [submissionComplete, setSubmissionComplete] = useState(false);
 
+    const prefilledCompany = useMemo(() => {
+        // Si la URL ya especifica una empresa, esa tiene prioridad.
+        if (companyName) {
+            return companyName;
+        }
+        // Si no, pero la capacitación está asociada a UNA SOLA empresa, usamos esa.
+        if (training.companies && training.companies.length === 1) {
+            return training.companies[0];
+        }
+        // En cualquier otro caso, el campo queda libre.
+        return null;
+    }, [companyName, training.companies]);
+    
     useEffect(() => {
         setAllLinksViewed(links.every(link => link.viewed));
     }, [links]);
 
-    const handleLinkClick = (linkId: string) => {
+    const handleMarkAsViewed = (linkId: string) => {
         setLinks(prevLinks => prevLinks.map(link => link.id === linkId ? { ...link, viewed: true } : link));
     };
 
@@ -1182,27 +1199,37 @@ const UserPortal: React.FC<{ training: Training; companyName: string | null; onB
 
             <section className="bg-slate-800 border border-slate-700 p-6 rounded-xl shadow-md mb-8">
                 <h2 className="text-2xl font-bold text-slate-100 mb-4 flex items-center"><ClipboardList size={24} className="mr-2 text-blue-400"/>Paso 1: Ver el material</h2>
-                <p className="text-slate-400 mb-4">Haga clic en cada enlace para ver el contenido. Se marcarán como vistos automáticamente.</p>
+                <p className="text-slate-400 mb-4">
+                    1. Abra cada material en una nueva pestaña.
+                    <br/>
+                    2. Cuando termine de verlo, regrese aquí y marque el material como 'visto'.
+                </p>
                 <div className="space-y-3">
-                    {links.map(link => (
-                        <a 
-                            key={link.id} 
-                            href={link.url} 
-                            target="_blank" 
-                            rel="noopener noreferrer" 
-                            onClick={() => handleLinkClick(link.id)}
-                            className="flex items-center justify-between p-4 bg-slate-900 border border-slate-700 rounded-lg hover:bg-slate-700/50 hover:border-blue-500 transition-all group"
+                    {links.map((link, index) => (
+                        <div 
+                            key={link.id}
+                            className="flex flex-col sm:flex-row items-center justify-between text-left p-4 bg-slate-900 border border-slate-700 rounded-lg gap-4"
                         >
-                            <span className="font-semibold text-slate-200">{link.name || link.url}</span>
-                             <div className="flex items-center space-x-3">
-                                {link.viewed ? (
-                                    <span className="flex items-center text-xs font-bold text-green-400"><CheckCircle size={16} className="mr-1"/>Visto</span>
-                                ) : (
-                                    <span className="flex items-center text-xs font-bold text-slate-400"><Eye size={16} className="mr-1"/>Pendiente</span>
-                                )}
-                                <ArrowRight size={20} className="text-slate-500 group-hover:text-blue-400 transition-colors"/>
+                            <span className="font-semibold text-slate-200 flex-grow">{link.name || `Material de Estudio #${index + 1}`}</span>
+                            <div className="flex items-center space-x-3 flex-shrink-0">
+                                <a 
+                                    href={link.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="flex items-center space-x-2 px-3 py-1.5 text-sm font-semibold text-slate-200 bg-slate-700 rounded-md hover:bg-slate-600 transition"
+                                >
+                                    <Eye size={16}/>
+                                    <span>Abrir Material</span>
+                                </a>
+                                <button 
+                                    onClick={() => handleMarkAsViewed(link.id)} 
+                                    disabled={link.viewed}
+                                    className="flex items-center space-x-2 px-3 py-1.5 text-sm font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition disabled:bg-slate-600 disabled:opacity-70 disabled:cursor-not-allowed"
+                                >
+                                    {link.viewed ? <><CheckCircle size={16}/><span>Visto</span></> : <span>Marcar como Visto</span>}
+                                </button>
                             </div>
-                        </a>
+                        </div>
                     ))}
                 </div>
             </section>
@@ -1210,8 +1237,8 @@ const UserPortal: React.FC<{ training: Training; companyName: string | null; onB
             {allLinksViewed && (
                 <section className="bg-slate-800 border border-slate-700 p-6 rounded-xl shadow-md animate-fade-in-up">
                     <h2 className="text-2xl font-bold text-slate-100 mb-4 flex items-center"><User size={24} className="mr-2 text-blue-400"/>Paso 2: Registrar sus datos</h2>
-                    <p className="text-slate-400 mb-4">Una vez visto todo el material, por favor complete el siguiente formulario con sus datos y firme para confirmar su asistencia.</p>
-                    <UserForm training={training} companyName={companyName} onSubmit={handleUserSubmit} />
+                    <p className="text-slate-400 mb-4">¡Excelente! Ha completado todo el material. Por favor, complete el formulario con sus datos y firme para confirmar su asistencia.</p>
+                    <UserForm training={training} companyName={prefilledCompany} onSubmit={handleUserSubmit} />
                 </section>
             )}
 
