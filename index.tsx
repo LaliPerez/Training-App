@@ -460,8 +460,8 @@ const UserTrainingPortal: React.FC<{ training: Training; onBack: () => void; pre
     const [lastSubmission, setLastSubmission] = useState<UserSubmission | null>(null);
     const [adminConfig, setAdminConfig] = useState<AdminConfig | null>(null);
     const [isLoading, setIsLoading] = useState(true);
-
     const sigCanvasRef = useRef<SignatureCanvas>(null);
+    const lastOpenedLinkRef = useRef<TrainingLink | null>(null);
 
     useEffect(() => {
       apiService.getAdminConfig().then(config => {
@@ -471,15 +471,39 @@ const UserTrainingPortal: React.FC<{ training: Training; onBack: () => void; pre
       });
     }, []);
 
+    // Effect to track window focus for automatic progress update
+    useEffect(() => {
+        const handleFocus = () => {
+            if (lastOpenedLinkRef.current) {
+                const linkIdToMark = lastOpenedLinkRef.current.id;
+                // Use functional update to ensure we have the latest state
+                setViewedLinks(prevViewedLinks => {
+                    // Avoid unnecessary re-renders if already viewed
+                    if (prevViewedLinks.has(linkIdToMark)) {
+                        return prevViewedLinks;
+                    }
+                    const newSet = new Set(prevViewedLinks);
+                    newSet.add(linkIdToMark);
+                    return newSet;
+                });
+                // Reset the ref to prevent marking the same link again
+                lastOpenedLinkRef.current = null;
+            }
+        };
+
+        window.addEventListener('focus', handleFocus);
+
+        // Cleanup listener on component unmount
+        return () => {
+            window.removeEventListener('focus', handleFocus);
+        };
+    }, []); // Empty dependency array ensures this effect runs only once
+
     const handleOpenLink = (link: TrainingLink) => {
-        // Abre el enlace en una nueva pestaña
+        // Store the link that the user is about to view
+        lastOpenedLinkRef.current = link;
+        // Open the link in a new tab
         window.open(link.url, '_blank', 'noopener,noreferrer');
-        // Marca el enlace como visto inmediatamente para una retroalimentación instantánea y fiable
-        setViewedLinks(prev => {
-            const newSet = new Set(prev);
-            newSet.add(link.id);
-            return newSet;
-        });
     };
 
     const progress = training.links.length > 0 ? (viewedLinks.size / training.links.length) * 100 : 100;
