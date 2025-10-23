@@ -89,20 +89,26 @@ const apiService = {
     }
   },
 
+  // Centralized helper for writing data. Throws an error on failure.
+  _putData: async (data: AppData): Promise<void> => {
+    const response = await fetch(JSON_BLOB_URL, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+    });
+    if (!response.ok) {
+        const errorBody = await response.text();
+        throw new Error(`API Error: ${response.status} ${response.statusText}. Body: ${errorBody}`);
+    }
+  },
+
   shareTraining: async (training: Training): Promise<string> => {
       const key = `st-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
       const data = await apiService._getData();
       const sharedTrainings = data.sharedTrainings || {};
       sharedTrainings[key] = training;
-      
       const updatedData = { ...data, sharedTrainings };
-
-      await fetch(JSON_BLOB_URL, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(updatedData),
-      });
-
+      await apiService._putData(updatedData);
       return key;
   },
 
@@ -119,12 +125,7 @@ const apiService = {
   updateTrainings: async (trainings: Training[]): Promise<void> => {
     const data = await apiService._getData();
     const updatedData = { ...data, trainings };
-    
-    await fetch(JSON_BLOB_URL, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedData),
-    });
+    await apiService._putData(updatedData);
   },
   
   getCompanies: async (): Promise<string[]> => {
@@ -135,12 +136,7 @@ const apiService = {
   updateCompanies: async (companies: string[]): Promise<void> => {
     const data = await apiService._getData();
     const updatedData = { ...data, companies };
-    
-    await fetch(JSON_BLOB_URL, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedData),
-    });
+    await apiService._putData(updatedData);
   },
 
   getSubmissions: async (): Promise<UserSubmission[]> => {
@@ -156,24 +152,14 @@ const apiService = {
   updateAdminConfig: async (config: AdminConfig): Promise<void> => {
     const data = await apiService._getData();
     const updatedData = { ...data, adminConfig: config };
-    
-    await fetch(JSON_BLOB_URL, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedData),
-    });
+    await apiService._putData(updatedData);
   },
 
   addSubmission: async (submission: UserSubmission): Promise<UserSubmission> => {
     const data = await apiService._getData();
     const newSubmissions = [...(data.submissions || []), submission];
     const updatedData = { ...data, submissions: newSubmissions };
-    
-    await fetch(JSON_BLOB_URL, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedData),
-    });
+    await apiService._putData(updatedData);
     return submission;
   },
 
@@ -181,22 +167,13 @@ const apiService = {
     const data = await apiService._getData();
     let submissions = (data.submissions || []).filter(sub => sub.id !== id);
     const updatedData = { ...data, submissions };
-    
-    await fetch(JSON_BLOB_URL, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedData),
-    });
+    await apiService._putData(updatedData);
   },
 
   deleteAllSubmissions: async (): Promise<void> => {
     const data = await apiService._getData();
     const updatedData = { ...data, submissions: [] };
-    await fetch(JSON_BLOB_URL, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedData),
-    });
+    await apiService._putData(updatedData);
   }
 };
 
@@ -1266,12 +1243,17 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
         return;
     }
     const companies = newTrainingCompanies.map(c => c.trim()).filter(Boolean);
-    await addTraining(trainingName, links, companies);
-    setTrainingName('');
-    setNewTrainingLinks([{ tempId: Date.now(), name: '', url: '' }]);
-    setNewTrainingCompanies([]);
-    setFeedback('¡Capacitación agregada exitosamente!');
-    setTimeout(() => setFeedback(''), 3000);
+    try {
+        await addTraining(trainingName, links, companies);
+        setTrainingName('');
+        setNewTrainingLinks([{ tempId: Date.now(), name: '', url: '' }]);
+        setNewTrainingCompanies([]);
+        setFeedback('¡Capacitación agregada exitosamente!');
+        setTimeout(() => setFeedback(''), 3000);
+    } catch (error) {
+        console.error("Failed to add training:", error);
+        alert(`Error al agregar la capacitación: ${error.message}`);
+    }
   };
 
   const handleUpdateTraining = async (e: React.FormEvent) => {
@@ -1287,13 +1269,23 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       return;
     }
     const companies = editedCompanies.map(c => c.trim()).filter(Boolean);
-    await updateTraining(editingTraining.id, editedName, links, companies);
-    setEditingTraining(null);
+    try {
+        await updateTraining(editingTraining.id, editedName, links, companies);
+        setEditingTraining(null);
+    } catch (error) {
+        console.error("Failed to update training:", error);
+        alert(`Error al actualizar la capacitación: ${error.message}`);
+    }
   }
 
   const handleDeleteTraining = async (id: string) => {
     if(window.confirm('¿Estás seguro de que quieres eliminar esta capacitación? Esta acción no se puede deshacer.')) {
-      await deleteTraining(id);
+      try {
+        await deleteTraining(id);
+      } catch (error) {
+        console.error("Failed to delete training:", error);
+        alert(`Error al eliminar la capacitación: ${error.message}`);
+      }
     }
   }
   
@@ -1307,14 +1299,24 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
               alert(`Error: Una empresa con un nombre similar a "${trimmed}" ya existe. Por favor, revise la lista.`);
               return;
           }
-          await updateCompanies([...companies, trimmed].sort((a, b) => a.localeCompare(b)));
-          setNewGlobalCompany('');
+          try {
+              await updateCompanies([...companies, trimmed].sort((a, b) => a.localeCompare(b)));
+              setNewGlobalCompany('');
+          } catch (error) {
+              console.error("Failed to add company:", error);
+              alert(`Error al agregar la empresa: ${error.message}`);
+          }
       }
   };
 
   const handleDeleteGlobalCompany = async (companyToDelete: string) => {
       if (window.confirm(`¿Seguro que quieres eliminar la empresa "${companyToDelete}" de la lista maestra?`)) {
-          await updateCompanies(companies.filter(c => c !== companyToDelete));
+          try {
+              await updateCompanies(companies.filter(c => c !== companyToDelete));
+          } catch (error) {
+              console.error("Failed to delete company:", error);
+              alert(`Error al eliminar la empresa: ${error.message}`);
+          }
       }
   };
 
@@ -1331,7 +1333,16 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     
     try {
       const shareKey = await apiService.shareTraining(pristineTraining);
-      const link = `${window.location.origin}${window.location.pathname}?shareKey=${shareKey}`;
+      
+      let fallbackData = '';
+      try {
+        // btoa is a browser function for Base64 encoding
+        fallbackData = btoa(JSON.stringify(pristineTraining));
+      } catch (e) {
+        console.error("Failed to create fallback data for URL", e);
+      }
+      
+      const link = `${window.location.origin}${window.location.pathname}?shareKey=${shareKey}&fallbackData=${fallbackData}`;
       
       setShareableLink(link);
       setSharingTrainingName(trainingToShare.name);
@@ -1339,7 +1350,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       const dataUrl = await QRCode.toDataURL(link, { width: 256, margin: 2, color: { dark: '#FFFFFF', light: '#1E293B' } });
       setQrCodeDataUrl(dataUrl);
     } catch (err) {
-      console.error("Failed to generate QR code:", err);
+      console.error("Failed to generate share link:", err);
+      alert(`Error al generar el enlace para compartir: ${err.message}`);
       setQrCodeDataUrl('');
     }
     setShowShareModal(true);
@@ -1383,48 +1395,70 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
         clarification: currentClarification,
         jobTitle: currentJobTitle
       };
-      await apiService.updateAdminConfig(newConfig);
-      setAdminSignature(signatureDataUrl);
-      setAdminSignatureClarification(currentClarification);
-      setAdminJobTitle(currentJobTitle);
-      setShowAdminSignatureModal(false);
+      try {
+        await apiService.updateAdminConfig(newConfig);
+        setAdminSignature(signatureDataUrl);
+        setAdminSignatureClarification(currentClarification);
+        setAdminJobTitle(currentJobTitle);
+        setShowAdminSignatureModal(false);
+      } catch (error) {
+        console.error("Failed to save admin signature:", error);
+        alert(`Error al guardar la firma: ${error.message}`);
+      }
     }
   };
   
   const handleClearAdminSignature = async () => {
       if (window.confirm("¿Estás seguro de que quieres eliminar la firma y los datos guardados? Esta acción no se puede deshacer.")) {
         const newConfig = { signature: null, clarification: '', jobTitle: '' };
-        await apiService.updateAdminConfig(newConfig);
-        setAdminSignature(null);
-        setAdminSignatureClarification('');
-        setAdminJobTitle('');
-        setCurrentClarification('');
-        setCurrentJobTitle('');
-        adminSignatureRef.current?.clear();
-        setShowAdminSignatureModal(false);
+        try {
+            await apiService.updateAdminConfig(newConfig);
+            setAdminSignature(null);
+            setAdminSignatureClarification('');
+            setAdminJobTitle('');
+            setCurrentClarification('');
+            setCurrentJobTitle('');
+            adminSignatureRef.current?.clear();
+            setShowAdminSignatureModal(false);
+        } catch (error) {
+            console.error("Failed to clear admin signature:", error);
+            alert(`Error al eliminar la firma: ${error.message}`);
+        }
       }
   };
 
   const handleDeleteSubmission = async (submissionId: string) => {
     if (window.confirm('¿Estás seguro de que quieres eliminar este registro? Esta acción es irreversible.')) {
-      await apiService.deleteSubmission(submissionId);
-      await fetchSubmissions();
+      try {
+        await apiService.deleteSubmission(submissionId);
+        await fetchSubmissions();
+      } catch (error) {
+        console.error("Failed to delete submission:", error);
+        alert(`Error al eliminar el registro: ${error.message}`);
+      }
     }
   };
 
   const handleDeleteAllSubmissions = async () => {
     if (window.confirm('¿Estás seguro de que quieres eliminar TODOS los registros? Esta acción es irreversible.')) {
         if (window.confirm('Por favor, confirma de nuevo. Esta acción eliminará permanentemente todos los registros de usuarios.')) {
-            await apiService.deleteAllSubmissions();
-            await fetchSubmissions();
+            try {
+                await apiService.deleteAllSubmissions();
+                await fetchSubmissions();
+            } catch (error) {
+                console.error("Failed to delete all submissions:", error);
+                alert(`Error al eliminar todos los registros: ${error.message}`);
+            }
         }
     }
   };
   
   const handleRefresh = async () => {
     setIsRefreshing(true);
-    await fetchSubmissions();
-    await fetchAdminConfig();
+    await Promise.all([fetchSubmissions(), fetchAdminConfig()]).catch(error => {
+      console.error("Error during refresh:", error);
+      alert("Ocurrió un error al actualizar los datos.");
+    });
     setIsRefreshing(false);
   };
   
@@ -2260,7 +2294,22 @@ const App: React.FC = () => {
         setCompanies(adminCompanies.sort((a,b) => a.localeCompare(b)));
 
         if (shareKey) {
-          const sharedTrainingRef = await apiService.getSharedTraining(shareKey);
+          let sharedTrainingRef = await apiService.getSharedTraining(shareKey);
+          
+          // If key lookup fails (e.g. propagation delay), try using fallback data from URL
+          if (!sharedTrainingRef) {
+              console.warn("Could not find training by shareKey. This can happen due to a small delay after creating a link. Attempting to use fallback data from URL.");
+              const fallbackData = params.get('fallbackData');
+              if (fallbackData) {
+                  try {
+                      // atob is a browser function for Base64 decoding
+                      sharedTrainingRef = JSON.parse(atob(fallbackData));
+                      console.log("Successfully loaded training from fallback data.");
+                  } catch (e) {
+                      console.error("Failed to parse fallback data from URL.", e);
+                  }
+              }
+          }
           
           // Prioritize the most up-to-date version from the main list if available
           const latestTraining = sharedTrainingRef 
@@ -2281,7 +2330,7 @@ const App: React.FC = () => {
             localStorage.removeItem(`training-progress-${trainingToShow.id}`);
             setUserPortalTrainings([pristineUserSessionTraining]);
           } else {
-            // This case now only happens if the shareKey was completely invalid
+            // This case now only happens if the shareKey or fallback was invalid/missing
             alert("El enlace de la capacitación es inválido o la capacitación ha sido eliminada. Por favor, consulte con el administrador.");
           }
           urlWasModified = true;
