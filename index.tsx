@@ -462,7 +462,6 @@ const UserTrainingPortal: React.FC<{ training: Training; onBack: () => void; pre
     const [isLoading, setIsLoading] = useState(true);
 
     const sigCanvasRef = useRef<SignatureCanvas>(null);
-    const lastOpenedLinkInfo = useRef<{ linkId: string } | null>(null);
 
     useEffect(() => {
       apiService.getAdminConfig().then(config => {
@@ -473,28 +472,15 @@ const UserTrainingPortal: React.FC<{ training: Training; onBack: () => void; pre
     }, []);
 
     const handleOpenLink = useCallback((link: TrainingLink) => {
+        // Abre el enlace en una nueva pestaña
         window.open(link.url, '_blank', 'noopener,noreferrer');
-        lastOpenedLinkInfo.current = { linkId: link.id };
-    }, []);
-    
-    useEffect(() => {
-        const handleFocus = () => {
-            if (lastOpenedLinkInfo.current) {
-                const { linkId } = lastOpenedLinkInfo.current;
-                setViewedLinks(prev => {
-                    if (prev.has(linkId)) return prev;
-                    const newSet = new Set(prev);
-                    newSet.add(linkId);
-                    return newSet;
-                });
-                lastOpenedLinkInfo.current = null;
-            }
-        };
-
-        window.addEventListener('focus', handleFocus);
-        return () => {
-            window.removeEventListener('focus', handleFocus);
-        };
+        // Marca el enlace como visto inmediatamente para una retroalimentación instantánea y fiable
+        setViewedLinks(prev => {
+            if (prev.has(link.id)) return prev;
+            const newSet = new Set(prev);
+            newSet.add(link.id);
+            return newSet;
+        });
     }, []);
 
     const progress = training.links.length > 0 ? (viewedLinks.size / training.links.length) * 100 : 100;
@@ -710,6 +696,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     const [selectedCompaniesForTraining, setSelectedCompaniesForTraining] = useState<string[]>([]);
     const [trainingToShare, setTrainingToShare] = useState<Training | null>(null);
     const [isGeneratingShareLink, setIsGeneratingShareLink] = useState<string | null>(null);
+    const [isUpdatingSignature, setIsUpdatingSignature] = useState(false);
 
     const adminSigCanvasRef = useRef<SignatureCanvas>(null);
     const isFetching = useRef(false);
@@ -745,7 +732,6 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         try {
             await apiService._putData(newData);
             setData(newData);
-            // Do not show alert on every save, only when there is a message
         } catch (e: any) {
             setError(`Error al guardar los datos: ${e.message}`);
             alert(`Error al guardar los datos: ${e.message}`);
@@ -756,17 +742,18 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     };
 
     const handleUpdateConfig = () => {
-        const signature = adminSigCanvasRef.current?.isEmpty()
-            ? data.adminConfig?.signature
-            : adminSigCanvasRef.current?.getTrimmedCanvas().toDataURL('image/png');
+        let signature = data.adminConfig?.signature;
+        
+        if (isUpdatingSignature) {
+            if (adminSigCanvasRef.current?.isEmpty()) {
+                alert("Por favor, dibuje una nueva firma o cancele la actualización.");
+                return;
+            }
+            signature = adminSigCanvasRef.current?.getTrimmedCanvas().toDataURL('image/png') || null;
+        }
         
         const newClarification = (document.getElementById('adminClarification') as HTMLInputElement).value;
         const newJobTitle = (document.getElementById('adminJobTitle') as HTMLInputElement).value;
-
-        if (!signature || !newClarification || !newJobTitle) {
-            alert("Por favor, complete todos los campos de configuración, incluyendo la firma.");
-            return;
-        }
 
         const newConfig: AdminConfig = {
             signature,
@@ -778,8 +765,23 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         saveData(newData).then(() => {
             alert("Configuración del administrador guardada.");
             setConfigModalOpen(false);
+            setIsUpdatingSignature(false);
         });
     };
+    
+    const handleDeleteSignature = () => {
+        if (window.confirm("¿Está seguro de que desea eliminar su firma guardada?")) {
+            const newConfig = {
+                ...(data.adminConfig as AdminConfig),
+                signature: null,
+            };
+            const newData = { ...data, adminConfig: newConfig };
+            saveData(newData).then(() => {
+                alert("Firma eliminada.");
+            });
+        }
+    }
+
 
     const filteredSubmissions = useMemo(() => {
         const subs = (data.submissions || []).filter(sub => {
@@ -792,7 +794,6 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
             return searchMatch && companyMatch && trainingMatch;
         }).sort((a, b) => a.lastName.localeCompare(b.lastName));
         
-        // When filters change, reset selection
         setSelectedSubmissions(new Set());
 
         return subs;
@@ -1247,7 +1248,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                 </main>
             </div>
             
-             <Modal isOpen={isConfigModalOpen} onClose={() => setConfigModalOpen(false)} title="Configuración de Administrador">
+             <Modal isOpen={isConfigModalOpen} onClose={() => { setConfigModalOpen(false); setIsUpdatingSignature(false); }} title="Configuración de Administrador">
                 <div className="space-y-4">
                      <div>
                         <label htmlFor="adminClarification" className="block text-sm font-medium text-slate-300 mb-1">Aclaración de Firma (Nombre Completo)</label>
@@ -1259,16 +1260,40 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                     </div>
                     <div>
                         <label className="block text-sm font-medium text-slate-300 mb-2">Firma Digital</label>
-                         {data.adminConfig?.signature && (
-                            <div className="mb-2 p-2 bg-slate-900 rounded-md border border-slate-600">
-                                <p className="text-xs text-slate-400 mb-1">Firma actual:</p>
-                                <img src={data.adminConfig.signature} alt="Firma guardada" className="h-20 bg-white p-1 rounded" />
+                        {!isUpdatingSignature ? (
+                            <div className="p-4 bg-slate-900 rounded-md border border-slate-700">
+                                {data.adminConfig?.signature ? (
+                                    <div className="text-center">
+                                        <p className="text-xs text-slate-400 mb-2">Firma actual:</p>
+                                        <img src={data.adminConfig.signature} alt="Firma guardada" className="h-24 bg-white p-1 rounded mx-auto border border-slate-300" />
+                                        <div className="flex justify-center gap-2 mt-4">
+                                            <button onClick={() => setIsUpdatingSignature(true)} className="px-4 py-2 text-sm font-semibold text-slate-200 bg-slate-600 rounded-md hover:bg-slate-500 transition">
+                                                Actualizar Firma
+                                            </button>
+                                            <button onClick={handleDeleteSignature} className="px-4 py-2 text-sm font-semibold text-red-300 bg-red-900/50 rounded-md hover:bg-red-800/70 transition">
+                                                Eliminar Firma
+                                            </button>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="text-center py-4">
+                                        <p className="text-slate-500 mb-3">No hay firma guardada.</p>
+                                        <button onClick={() => setIsUpdatingSignature(true)} className="px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition">
+                                            Añadir Firma
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        ) : (
+                            <div>
+                                <SignaturePad sigCanvasRef={adminSigCanvasRef} />
+                                <button onClick={() => setIsUpdatingSignature(false)} className="mt-2 text-sm text-blue-400 hover:underline">
+                                    Cancelar
+                                </button>
                             </div>
                         )}
-                        <SignaturePad sigCanvasRef={adminSigCanvasRef} />
-                        <p className="text-xs text-slate-500 mt-1">Si deja este campo en blanco, se conservará la firma actual.</p>
                     </div>
-                    <div className="flex justify-end pt-4">
+                    <div className="flex justify-end pt-4 border-t border-slate-700">
                         <button onClick={handleUpdateConfig} className="px-6 py-2 font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition">
                             Guardar Configuración
                         </button>
@@ -1391,6 +1416,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
 const AdminLogin: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
+    const [showPassword, setShowPassword] = useState(false);
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -1418,11 +1444,19 @@ const AdminLogin: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
                             <input
                                 className={`w-full p-3 bg-slate-700 border ${error ? 'border-red-500' : 'border-slate-600'} rounded-md text-slate-100 pr-10`}
                                 id="password"
-                                type="password"
+                                type={showPassword ? 'text' : 'password'}
                                 value={password}
                                 onChange={(e) => { setPassword(e.target.value); setError(''); }}
                                 placeholder="******************"
                             />
+                            <button
+                                type="button"
+                                onClick={() => setShowPassword(!showPassword)}
+                                className="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 hover:text-slate-200"
+                                aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                            >
+                                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                            </button>
                         </div>
                          {error && <p className="text-red-500 text-xs italic mt-2">{error}</p>}
                     </div>
