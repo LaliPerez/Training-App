@@ -138,12 +138,21 @@ const apiService = {
 
 
 // --- SERVICES ---
-const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: string | null, adminSignatureClarification: string, adminJobTitle: string, companies: Company[] | undefined, showToast: (message: string, type?: ToastType) => void, trainingName?: string): void => {
+const generateSubmissionsPdf = (
+    submissions: UserSubmission[],
+    adminSignature: string | null,
+    adminSignatureClarification: string,
+    adminJobTitle: string,
+    companies: Company[] | undefined,
+    showToast: (message: string, type?: ToastType) => void,
+    trainingName?: string,
+    companyForPdf?: Company
+): void => {
   if (!submissions || submissions.length === 0) {
     showToast('No hay registros para generar el PDF.', 'info');
     return;
   }
-  
+
   try {
     const doc = new jsPDF();
     const pageHeight = doc.internal.pageSize.getHeight();
@@ -160,37 +169,79 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
     doc.text('Registro General de Asistencia', margin, 25);
 
     // --- Sub-header Info ---
-    const subheaderY = headerHeight + 12;
+    let subheaderY = headerHeight + 12;
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(11);
     doc.setTextColor(51, 65, 85); // slate-700
 
     const trainingText = `Capacitación: ${trainingName || 'Varias / No especificada'}`;
     doc.text(trainingText, margin, subheaderY);
+    subheaderY += 6;
     
-    const instructorText = `Dictada por: ${adminSignatureClarification || '[Aclaración no configurada]'} (${adminJobTitle || '[Cargo no configurado]'})`;
-    doc.text(instructorText, margin, subheaderY + 6);
+    if (companyForPdf) {
+      const companyText = `Empresa: ${companyForPdf.name}${companyForPdf.cuit ? ` (CUIT: ${companyForPdf.cuit})` : ''}`;
+      doc.text(companyText, margin, subheaderY);
+      subheaderY += 6;
+    }
 
-    // --- Table ---
-    const tableColumns = ['#', 'Apellido y Nombre', 'DNI', 'Empresa / CUIT', 'Fecha y Hora', 'Firma'];
+    const instructorText = `Dictada por: ${adminSignatureClarification || '[Aclaración no configurada]'} (${adminJobTitle || '[Cargo no configurado]'})`;
+    doc.text(instructorText, margin, subheaderY);
+    subheaderY += 6;
+
+    // --- Table Configuration ---
+    const isCompanySpecificReport = !!companyForPdf;
+    let tableColumns: string[];
+    let columnStyles: { [key: number]: any };
+    let signatureColumnIndex: number;
+
+    if (isCompanySpecificReport) {
+        // Report for a single company: Omit the company column from the table
+        tableColumns = ['#', 'Apellido y Nombre', 'DNI', 'Fecha y Hora', 'Firma'];
+        signatureColumnIndex = 4;
+        columnStyles = {
+            0: { cellWidth: 8, halign: 'center' },       // #
+            1: { cellWidth: 50 },                      // Apellido y Nombre
+            2: { cellWidth: 25 },                      // DNI
+            3: { cellWidth: 25 },                      // Fecha y Hora
+            4: { cellWidth: 72, minCellHeight: 18 },    // Firma (redistributed width)
+        };
+    } else {
+        // General report: Include the company column
+        tableColumns = ['#', 'Apellido y Nombre', 'DNI', 'Empresa / CUIT', 'Fecha y Hora', 'Firma'];
+        signatureColumnIndex = 5;
+        columnStyles = {
+            0: { cellWidth: 8, halign: 'center' },      // #
+            1: { cellWidth: 40 },                     // Apellido y Nombre
+            2: { cellWidth: 22 },                     // DNI
+            3: { cellWidth: 35 },                     // Empresa / CUIT
+            4: { cellWidth: 25 },                     // Fecha y Hora
+            5: { cellWidth: 40, minCellHeight: 18 },    // Firma
+        };
+    }
+
     const tableRows = submissions.map((sub, index) => {
         const date = new Date(sub.timestamp);
         const formattedDateTime = date.toLocaleString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
         
-        const company = companies?.find(c => c.name === sub.company);
-        const companyDisplay = company ? `${company.name}${company.cuit ? `\n${company.cuit}` : ''}` : sub.company;
-        
-        return [
+        const rowData = [
           (index + 1).toString(),
           `${sub.lastName}, ${sub.firstName}`,
           sub.dni,
-          companyDisplay,
-          formattedDateTime,
-          '', // Placeholder for signature
         ];
+        
+        if (!isCompanySpecificReport) {
+          const company = companies?.find(c => c.name === sub.company);
+          const companyDisplay = company ? `${company.name}${company.cuit ? `\n${company.cuit}` : ''}` : sub.company;
+          rowData.push(companyDisplay);
+        }
+
+        rowData.push(formattedDateTime);
+        rowData.push(''); // Placeholder for signature
+        
+        return rowData;
     });
     
-    const startY = subheaderY + 18;
+    const startY = subheaderY + 2;
     
     autoTable(doc, {
       head: [tableColumns],
@@ -201,14 +252,7 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
       headStyles: { fillColor: [30, 41, 59], textColor: 255, fontSize: 10 },
       alternateRowStyles: { fillColor: [248, 250, 252] },
       styles: { fontSize: 9, cellPadding: 2.5, valign: 'middle', textColor: [40, 40, 40] },
-      columnStyles: {
-        0: { cellWidth: 8, halign: 'center' }, // #
-        1: { cellWidth: 40 }, // Apellido y Nombre
-        2: { cellWidth: 22 }, // DNI
-        3: { cellWidth: 35 }, // Empresa / CUIT
-        4: { cellWidth: 25 }, // Fecha y Hora
-        5: { cellWidth: 40, minCellHeight: 18 }, // Signature column
-      },
+      columnStyles: columnStyles,
       didDrawPage: (data) => {
           // FOOTER
           const footerY = pageHeight - 18;
@@ -228,7 +272,7 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
           doc.text(pageStr, pageWidth - margin - pageTextWidth, footerY + 5);
       },
       didDrawCell: (data) => {
-        if (data.column.index === 5 && data.cell.section === 'body') { // Column 5 is Firma
+        if (data.column.index === signatureColumnIndex && data.cell.section === 'body') {
           const submission = submissions[data.row.index];
           if (submission && submission.signature) {
             try {
@@ -285,11 +329,16 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
         doc.setTextColor(150, 0, 0);
         doc.text('[Firma de administrador no configurada]', margin, signatureY + 20);
     }
+    
+    let pdfFileNameBase = 'asistencia_general';
+    if(trainingName) {
+        pdfFileNameBase = `asistencia_${trainingName.replace(/\s+/g, '_')}`;
+    }
+    if (companyForPdf) {
+        pdfFileNameBase += `_${companyForPdf.name.replace(/\s+/g, '_')}`;
+    }
 
-    const pdfFileName = (trainingName 
-      ? `asistencia_${trainingName.replace(/\s+/g, '_')}`
-      : 'asistencia_general'
-    ).toLowerCase() + '.pdf';
+    const pdfFileName = pdfFileNameBase.toLowerCase() + '.pdf';
     
     doc.save(pdfFileName);
 
@@ -412,7 +461,7 @@ const Modal: React.FC<{ isOpen: boolean; onClose: () => void; title: string; chi
                     {children}
                 </div>
                 {footer && (
-                    <div className="flex justify-end items-center gap-4 p-4 border-t border-slate-700 flex-shrink-0 bg-slate-800">
+                    <div className="flex justify-end items-center gap-4 p-4 border-t border-slate-700 flex-shrink-0 bg-slate-800 sticky bottom-0">
                         {footer}
                     </div>
                 )}
@@ -432,7 +481,11 @@ const SignaturePad: React.FC<{ sigCanvasRef: React.RefObject<SignatureCanvas>; c
     setIsEmpty(true);
   };
 
-  const handleBeginStroke = () => {
+  const handleBeginStroke = (event: MouseEvent | TouchEvent) => {
+    // Check if it's a touch event and prevent default page scroll
+    if (event.type === 'touchstart') {
+        event.preventDefault();
+    }
     setIsEmpty(false);
   };
   
@@ -440,25 +493,35 @@ const SignaturePad: React.FC<{ sigCanvasRef: React.RefObject<SignatureCanvas>; c
     const canvas = sigCanvasRef.current?.getCanvas();
     const wrapper = canvasWrapperRef.current;
     if (canvas && wrapper) {
-        const ratio = Math.max(window.devicePixelRatio || 1, 1);
         const { width, height } = wrapper.getBoundingClientRect();
+        const ratio = Math.max(window.devicePixelRatio || 1, 1);
         
         if (canvas.width !== Math.floor(width * ratio) || canvas.height !== Math.floor(height * ratio)) {
+            const signatureData = sigCanvasRef.current?.toDataURL();
             canvas.width = Math.floor(width * ratio);
             canvas.height = Math.floor(height * ratio);
             canvas.getContext("2d")?.scale(ratio, ratio);
-            sigCanvasRef.current?.clear();
-            setIsEmpty(true);
+            
+            if (signatureData) {
+                sigCanvasRef.current?.fromDataURL(signatureData);
+            } else {
+                sigCanvasRef.current?.clear();
+            }
         }
     }
   }, [sigCanvasRef]);
 
   useEffect(() => {
-    const timer = setTimeout(resizeCanvas, 150);
+    resizeCanvas();
     window.addEventListener('resize', resizeCanvas);
+    
+    const wrapper = canvasWrapperRef.current;
+    // Add touch event listener to prevent scrolling on the canvas
+    wrapper?.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
+
     return () => {
-        clearTimeout(timer);
         window.removeEventListener('resize', resizeCanvas);
+        wrapper?.removeEventListener('touchstart', (e) => e.preventDefault());
     };
   }, [resizeCanvas]);
 
@@ -470,7 +533,7 @@ const SignaturePad: React.FC<{ sigCanvasRef: React.RefObject<SignatureCanvas>; c
 
   return (
     <div className="w-full">
-      <div className={`relative bg-white border-2 border-dashed border-slate-600 rounded-lg overflow-hidden touch-pan-y ${canvasClassName}`}>
+      <div className={`relative bg-white border-2 border-dashed border-slate-600 rounded-lg overflow-hidden touch-none ${canvasClassName}`}>
         {isEmpty && (
           <div className="absolute inset-0 flex items-center justify-center text-slate-400 pointer-events-none select-none">
             <p>Dibuja tu firma aquí</p>
@@ -929,6 +992,17 @@ const AdminDashboard: React.FC<{ onLogout: () => void, showToast: (message: stri
         return undefined;
     }, [submissionsForPdf, selectedTraining, data.trainings]);
 
+    const companyForPdf = useMemo(() => {
+        if (submissionsForPdf.length > 0) {
+            const firstCompanyName = submissionsForPdf[0].company;
+            const allSameCompany = submissionsForPdf.every(s => s.company === firstCompanyName);
+            if (allSameCompany) {
+                return data.companies?.find(c => c.name === firstCompanyName);
+            }
+        }
+        return undefined;
+    }, [submissionsForPdf, data.companies]);
+
 
     const handleSaveTraining = () => {
         const name = (document.getElementById('trainingName') as HTMLInputElement).value;
@@ -1273,23 +1347,34 @@ const AdminDashboard: React.FC<{ onLogout: () => void, showToast: (message: stri
                         </section>
                          <section className="bg-slate-800 p-6 rounded-xl shadow-lg border border-slate-700">
                             <h2 className="text-xl font-bold text-slate-100 flex items-center mb-4"><Building size={22} className="mr-2 text-blue-400"/>Empresas</h2>
-                            <div className="flex flex-col sm:flex-row gap-2 mb-4">
-                                <input 
+                            <form
+                                onSubmit={(e) => {
+                                    e.preventDefault();
+                                    handleAddCompany();
+                                }}
+                                className="grid grid-cols-1 sm:grid-cols-5 gap-2 mb-4"
+                            >
+                                <input
                                     type="text"
                                     value={newCompanyName}
                                     onChange={(e) => setNewCompanyName(e.target.value)}
                                     placeholder="Nombre de la empresa"
-                                    className="flex-grow p-2 bg-slate-700 border border-slate-600 rounded-md text-sm text-slate-200 placeholder-slate-400"
+                                    className="w-full sm:col-span-2 p-2 bg-slate-700 border border-slate-600 rounded-md text-sm text-slate-200 placeholder-slate-400"
                                 />
-                                 <input 
+                                 <input
                                     type="text"
                                     value={newCompanyCuit}
                                     onChange={(e) => setNewCompanyCuit(e.target.value)}
                                     placeholder="CUIT (Opcional)"
-                                    className="flex-grow p-2 bg-slate-700 border border-slate-600 rounded-md text-sm text-slate-200 placeholder-slate-400"
+                                    className="w-full sm:col-span-2 p-2 bg-slate-700 border border-slate-600 rounded-md text-sm text-slate-200 placeholder-slate-400"
                                 />
-                                <button onClick={handleAddCompany} className="px-4 text-sm font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition">Añadir</button>
-                            </div>
+                                <button
+                                    type="submit"
+                                    className="w-full sm:col-span-1 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition"
+                                >
+                                    Añadir
+                                </button>
+                            </form>
                              <div className="space-y-2 max-h-[250px] overflow-y-auto pr-2">
                                 {(data.companies || []).length > 0 ? (
                                     data.companies?.map(company => (
@@ -1323,7 +1408,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void, showToast: (message: stri
                                     <Trash2 size={16}/><span>Borrar Todos</span>
                                 </button>
                                 <button 
-                                    onClick={() => generateSubmissionsPdf(submissionsForPdf, data.adminConfig?.signature || null, data.adminConfig?.clarification || '', data.adminConfig?.jobTitle || '', data.companies, showToast, trainingNameForPdf)} 
+                                    onClick={() => generateSubmissionsPdf(submissionsForPdf, data.adminConfig?.signature || null, data.adminConfig?.clarification || '', data.adminConfig?.jobTitle || '', data.companies, showToast, trainingNameForPdf, companyForPdf)} 
                                     disabled={submissionsForPdf.length === 0}
                                     className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-700 transition disabled:bg-slate-600 disabled:cursor-not-allowed"
                                 >
