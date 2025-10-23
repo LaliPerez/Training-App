@@ -118,13 +118,13 @@ const apiService = {
 
 
 // --- SERVICES ---
-const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: string | null, adminSignatureClarification: string, adminJobTitle: string, trainingName?: string, companyName?: string): void => {
+const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: string | null, adminSignatureClarification: string, adminJobTitle: string, trainingName?: string): void => {
   if (!adminSignature || !adminSignatureClarification || !adminJobTitle) {
       alert("Error: La firma y los datos del administrador deben estar configurados para generar el PDF.");
       return;
   }
   if (!submissions || submissions.length === 0) {
-    alert('No hay registros de usuarios para generar el PDF.');
+    alert('No hay registros para generar el PDF.');
     return;
   }
   
@@ -132,73 +132,76 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
     const doc = new jsPDF();
     const pageHeight = doc.internal.pageSize.getHeight();
     const pageWidth = doc.internal.pageSize.getWidth();
-    const headerHeight = 28;
-    
-    const tableColumns = ['#', 'Apellido', 'Nombre', 'DNI', 'Fecha', 'Firma'];
-    const tableRows = submissions.map((sub, index) => [
-      (index + 1).toString(),
-      sub.lastName,
-      sub.firstName,
-      sub.dni,
-      sub.timestamp,
-      '', // Placeholder for the signature image
-    ]);
+    const margin = 15;
 
+    // --- Elegant Header ---
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(18);
+    doc.setTextColor(30, 41, 59); // slate-800
+    doc.text('Certificado General de Asistencia', pageWidth / 2, 22, { align: 'center' });
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(11);
+    doc.setTextColor(100, 116, 139); // slate-500
+
+    const trainingText = `Capacitación: ${trainingName || 'Varias / No especificada'}`;
+    doc.text(trainingText, pageWidth / 2, 30, { align: 'center' });
+    
+    const instructorText = `Dictada por: ${adminSignatureClarification} (${adminJobTitle})`;
+    doc.text(instructorText, pageWidth / 2, 36, { align: 'center' });
+
+    // --- Table ---
+    const tableColumns = ['#', 'Apellido', 'Nombre', 'DNI', 'Fecha', 'Hora', 'Firma'];
+    const tableRows = submissions.map((sub, index) => {
+        const date = new Date(sub.timestamp);
+        const formattedDate = date.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' });
+        const formattedTime = date.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+        return [
+          (index + 1).toString(),
+          sub.lastName,
+          sub.firstName,
+          sub.dni,
+          formattedDate,
+          formattedTime,
+          '', // Placeholder for signature
+        ];
+    });
+    
+    const startY = 50;
+    
     autoTable(doc, {
       head: [tableColumns],
       body: tableRows,
-      startY: headerHeight + 5,
-      margin: { top: headerHeight + 5, bottom: 25 },
+      startY: startY,
+      margin: { top: startY, bottom: 25 },
       theme: 'grid',
       headStyles: { fillColor: [30, 41, 59], textColor: 255, fontSize: 10 },
       alternateRowStyles: { fillColor: [248, 250, 252] },
       styles: { fontSize: 9, cellPadding: 2.5, valign: 'middle', textColor: [40, 40, 40] },
       columnStyles: {
-        0: { cellWidth: 8, halign: 'center' },
-        5: { cellWidth: 35, minCellHeight: 18 }, // Signature column
+        0: { cellWidth: 8, halign: 'center' }, // #
+        6: { cellWidth: 40, minCellHeight: 18 }, // Signature column
       },
       didDrawPage: (data) => {
-          // HEADER
-          doc.setFillColor(30, 41, 59); // slate-800
-          doc.rect(0, 0, pageWidth, headerHeight, 'F');
-          
-          doc.setFont('helvetica', 'bold');
-          doc.setFontSize(16);
-          doc.setTextColor(255, 255, 255);
-          doc.text('Registro de Asistencia', 14, 15);
-          
-          doc.setFont('helvetica', 'normal');
-          doc.setFontSize(10);
-          
-          let subTitleParts: string[] = [];
-          if (trainingName) subTitleParts.push(`Capacitación: ${trainingName}`);
-          if (companyName) subTitleParts.push(`Empresa: ${companyName}`);
-          let subTitle = subTitleParts.join('  |  ');
-          if (!subTitle) subTitle = 'Registros Generales';
-
-          doc.text(subTitle, 14, 22);
-
           // FOOTER
           const footerY = pageHeight - 18;
           doc.setDrawColor(200, 200, 200);
           doc.setLineWidth(0.2);
-          doc.line(14, footerY, pageWidth - 14, footerY);
+          doc.line(margin, footerY, pageWidth - margin, footerY);
 
-          // FIX: The page number is available on the `data` object provided by the autoTable hook.
           const pageNum = data.pageNumber;
           const pageStr = "Página " + pageNum;
-          // FIX: `toLocaleDateTimeString` is not a valid method on the Date object. Using `toLocaleString` to get both date and time.
           const dateStr = `Generado el: ${new Date().toLocaleString('es-ES')}`;
           
           doc.setFontSize(8);
           doc.setTextColor(150);
           
-          doc.text(dateStr, 14, footerY + 5);
+          doc.text(dateStr, margin, footerY + 5);
           const pageTextWidth = doc.getStringUnitWidth(pageStr) * doc.getFontSize() / doc.internal.scaleFactor;
-          doc.text(pageStr, pageWidth - 14 - pageTextWidth, footerY + 5);
+          doc.text(pageStr, pageWidth - margin - pageTextWidth, footerY + 5);
       },
       didDrawCell: (data) => {
-        if (data.column.index === 5 && data.cell.section === 'body') {
+        if (data.column.index === 6 && data.cell.section === 'body') { // Column 6 is Firma
           const submission = submissions[data.row.index];
           if (submission && submission.signature) {
             try {
@@ -235,19 +238,19 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
     // Add new page for signature if it doesn't fit
     if (signatureY + 60 > pageHeight) {
       doc.addPage();
-      signatureY = 35; // Position below header margin
+      signatureY = 35;
     }
     
     try {
-        doc.addImage(adminSignature, 'PNG', 14, signatureY + 5, 60, 30);
+        doc.addImage(adminSignature, 'PNG', margin, signatureY + 5, 60, 30);
         doc.setDrawColor(0);
-        doc.line(14, signatureY + 38, 74, signatureY + 38);
-        doc.text(adminSignatureClarification, 14, signatureY + 43);
+        doc.line(margin, signatureY + 38, margin + 60, signatureY + 38);
+        doc.text(adminSignatureClarification, margin, signatureY + 43);
         doc.setFontSize(9);
-        doc.text(adminJobTitle, 14, signatureY + 48);
+        doc.text(adminJobTitle, margin, signatureY + 48);
     } catch (imageError) {
-        console.error("Error al añadir la firma al PDF:", imageError);
-        doc.text("Error al cargar la firma.", 14, signatureY + 20);
+        console.error("Error al añadir la firma del administrador al PDF:", imageError);
+        doc.text("Error al cargar la firma del admin.", margin, signatureY + 20);
     }
 
     const pdfFileName = (trainingName 
@@ -258,14 +261,15 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
     doc.save(pdfFileName);
 
   } catch(e) {
-    console.error("Fallo al generar el PDF general de registros:", e);
+    console.error("Fallo al generar el PDF de registros:", e);
     alert("Ocurrió un error al generar el PDF. Por favor, revisa la consola para más detalles.");
   }
 };
 
+
 const generateSingleSubmissionPdf = (submission: UserSubmission, adminSignature: string | null, adminSignatureClarification: string, adminJobTitle: string): void => {
   if (!adminSignature) {
-    alert("Error: La firma del administrador no está configurada.");
+    alert("Error: La descarga del certificado no está disponible porque el administrador no ha configurado su firma.");
     return;
   }
   try {
@@ -894,7 +898,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                     <Trash2 size={16}/><span>Borrar Todos</span>
                                 </button>
                                 <button 
-                                    onClick={() => generateSubmissionsPdf(filteredSubmissions, data.adminConfig?.signature || null, data.adminConfig?.clarification || '', data.adminConfig?.jobTitle || '', selectedTraining ? data.trainings?.find(t=>t.id===selectedTraining)?.name : undefined, selectedCompany || undefined)} 
+                                    onClick={() => generateSubmissionsPdf(filteredSubmissions, data.adminConfig?.signature || null, data.adminConfig?.clarification || '', data.adminConfig?.jobTitle || '', selectedTraining ? data.trainings?.find(t=>t.id===selectedTraining)?.name : undefined)} 
                                     disabled={filteredSubmissions.length === 0 || !data.adminConfig?.signature}
                                     className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-700 transition disabled:bg-slate-600 disabled:cursor-not-allowed"
                                 >
@@ -1164,7 +1168,6 @@ const UserPortal: React.FC<{ training: Training; companyName: string | null; onB
     const [submissionComplete, setSubmissionComplete] = useState(false);
     const [completedSubmission, setCompletedSubmission] = useState<UserSubmission | null>(null);
     const [adminConfig, setAdminConfig] = useState<AdminConfig | null>(null);
-    const lastOpenedLinkId = useRef<string | null>(null);
     
     const prefilledCompany = useMemo(() => {
         if (companyName) return companyName;
@@ -1172,26 +1175,12 @@ const UserPortal: React.FC<{ training: Training; companyName: string | null; onB
         return null;
     }, [companyName, training.companies]);
     
-    useEffect(() => {
-        const handleFocus = () => {
-            if (lastOpenedLinkId.current) {
-                setLinks(prevLinks => 
-                    prevLinks.map(link => 
-                        link.id === lastOpenedLinkId.current ? { ...link, viewed: true } : link
-                    )
-                );
-                lastOpenedLinkId.current = null; // Reset after marking
-            }
-        };
-
-        window.addEventListener('focus', handleFocus);
-        return () => {
-            window.removeEventListener('focus', handleFocus);
-        };
-    }, []);
-
     const handleOpenMaterial = (linkId: string) => {
-        lastOpenedLinkId.current = linkId;
+        setLinks(prevLinks => 
+            prevLinks.map(link => 
+                link.id === linkId ? { ...link, viewed: true } : link
+            )
+        );
     };
 
     const handleUserSubmit = async (submissionData: Omit<UserSubmission, 'id' | 'timestamp'>) => {
@@ -1229,14 +1218,13 @@ const UserPortal: React.FC<{ training: Training; companyName: string | null; onB
                 <h2 className="text-3xl font-bold text-slate-100 mb-2">¡Registro Completado!</h2>
                 <p className="text-slate-400 max-w-md mx-auto mb-8">Gracias por completar la capacitación. Sus datos han sido enviados correctamente.</p>
 
-                {adminConfig?.signature ? (
-                     <button onClick={() => generateSingleSubmissionPdf(completedSubmission, adminConfig.signature, adminConfig.clarification, adminConfig.jobTitle)} className="flex items-center justify-center mx-auto space-x-2 bg-blue-600 text-white font-semibold py-3 px-6 rounded-lg hover:bg-blue-500 transition">
-                        <FileDown size={18}/><span>Descargar Certificado</span>
-                    </button>
-                ) : (
-                    <p className="text-sm text-yellow-400 bg-yellow-900/50 p-3 rounded-md max-w-md mx-auto">La descarga del certificado no está disponible porque el administrador no ha configurado su firma.</p>
-                )}
-
+                <button 
+                    onClick={() => generateSingleSubmissionPdf(completedSubmission, adminConfig?.signature || null, adminConfig?.clarification || '', adminConfig?.jobTitle || '')} 
+                    className="flex items-center justify-center mx-auto space-x-2 bg-blue-600 text-white font-semibold py-3 px-6 rounded-lg hover:bg-blue-500 transition"
+                >
+                    <FileDown size={18}/><span>Descargar Certificado</span>
+                </button>
+                
                 <button onClick={onBackToHome} className="mt-8 flex items-center justify-center mx-auto space-x-2 text-slate-400 hover:text-slate-200 transition">
                     <ArrowLeft size={18}/><span>Volver al Inicio</span>
                 </button>
@@ -1255,7 +1243,7 @@ const UserPortal: React.FC<{ training: Training; companyName: string | null; onB
             <section className="bg-slate-800 border border-slate-700 p-6 rounded-xl shadow-md mb-8">
                 <h2 className="text-2xl font-bold text-slate-100 mb-4 flex items-center"><ClipboardList size={24} className="mr-2 text-blue-400"/>Paso 1: Ver el material</h2>
                 <p className="text-slate-400 mb-4">
-                    Abra cada material en una nueva pestaña. Su progreso se guardará automáticamente al volver a esta ventana.
+                    Abra cada material en una nueva pestaña. Su progreso se guardará automáticamente al hacer clic en el botón.
                 </p>
                 <div className="mb-4">
                     <div className="flex justify-between items-center text-sm mb-1">
@@ -1276,7 +1264,13 @@ const UserPortal: React.FC<{ training: Training; companyName: string | null; onB
                                     href={link.url}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    onClick={() => handleOpenMaterial(link.id)}
+                                    onClick={(e) => {
+                                        if (link.viewed) {
+                                            e.preventDefault();
+                                            return;
+                                        }
+                                        handleOpenMaterial(link.id);
+                                    }}
                                     className={`flex items-center space-x-2 px-3 py-1.5 text-sm font-semibold rounded-md transition ${
                                         link.viewed
                                         ? 'bg-green-800 text-green-200 cursor-default'
