@@ -471,17 +471,16 @@ const UserTrainingPortal: React.FC<{ training: Training; onBack: () => void; pre
       });
     }, []);
 
-    const handleOpenLink = useCallback((link: TrainingLink) => {
+    const handleOpenLink = (link: TrainingLink) => {
         // Abre el enlace en una nueva pestaña
         window.open(link.url, '_blank', 'noopener,noreferrer');
         // Marca el enlace como visto inmediatamente para una retroalimentación instantánea y fiable
         setViewedLinks(prev => {
-            if (prev.has(link.id)) return prev;
             const newSet = new Set(prev);
             newSet.add(link.id);
             return newSet;
         });
-    }, []);
+    };
 
     const progress = training.links.length > 0 ? (viewedLinks.size / training.links.length) * 100 : 100;
     const allLinksViewed = progress >= 100;
