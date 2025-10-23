@@ -11,7 +11,7 @@ import { ShieldCheck, User, PlusCircle, Users, FileDown, LogOut, Trash2, Edit, X
 // 1. Ve a https://jsonbin.io, crea una cuenta gratuita.
 // 2. Crea un nuevo "JSON Bin" vacío.
 // 3. Pega el ID de tu Bin aquí (de la URL).
-const JSONBIN_BIN_ID = '68fa2244d0ea881f40b57b27'; // Ejemplo: '667d7e3aad19ca34f881b2c3'
+const JSONBIN_BIN_ID = '68fa221e43b1c97be97a84f2'; // Ejemplo: '667d7e3aad19ca34f881b2c3'
 
 // 4. Ve a la sección "API Keys" en tu perfil.
 // 5. Pega tu "Master Key" aquí.
@@ -35,6 +35,7 @@ interface Training {
   name: string;
   links: TrainingLink[];
   companies?: string[];
+  shareKey?: string; // Clave permanente para compartir
 }
 
 interface UserSubmission {
@@ -60,7 +61,6 @@ interface AdminConfig {
 interface AppData {
   submissions: UserSubmission[];
   adminConfig?: AdminConfig;
-  sharedTrainings?: { [key: string]: Training };
   trainings?: Training[];
   companies?: string[];
 }
@@ -87,7 +87,6 @@ const apiService = {
     return {
         submissions: data.submissions || [],
         adminConfig: data.adminConfig || { signature: null, clarification: '', jobTitle: '' },
-        sharedTrainings: data.sharedTrainings || {},
         trainings: data.trainings || [],
         companies: data.companies || [],
     };
@@ -111,19 +110,10 @@ const apiService = {
     }
   },
 
-  shareTraining: async (training: Training): Promise<string> => {
-      const key = `st-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-      const data = await apiService._getData();
-      const sharedTrainings = data.sharedTrainings || {};
-      sharedTrainings[key] = training;
-      const updatedData = { ...data, sharedTrainings };
-      await apiService._putData(updatedData);
-      return key;
-  },
-
   getSharedTraining: async (key: string): Promise<Training | null> => {
       const data = await apiService._getData();
-      return data.sharedTrainings?.[key] || null;
+      // Find training by its permanent shareKey in the main trainings list
+      return data.trainings?.find(t => t.shareKey === key) || null;
   }
 };
 
@@ -198,7 +188,8 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
           // FIX: The page number is available on the `data` object provided by the autoTable hook.
           const pageNum = data.pageNumber;
           const pageStr = "Página " + pageNum;
-          const dateStr = `Generado el: ${new Date().toLocaleDateString('es-ES')}`;
+          // FIX: `toLocaleDateTimeString` is not a valid method on the Date object. Using `toLocaleString` to get both date and time.
+          const dateStr = `Generado el: ${new Date().toLocaleString('es-ES')}`;
           
           doc.setFontSize(8);
           doc.setTextColor(150);
@@ -355,18 +346,18 @@ const generateSingleSubmissionPdf = (submission: UserSubmission, adminSignature:
 // --- UI COMPONENTS ---
 
 const Spinner: React.FC<{ size?: number }> = ({ size = 8 }) => (
-  <div className={`w-${size} h-${size} border-4 border-slate-200 border-t-slate-600 rounded-full animate-spin`}></div>
+  <div className={`w-${size} h-${size} border-4 border-slate-500 border-t-slate-200 rounded-full animate-spin`}></div>
 );
 
 const Modal: React.FC<{ isOpen: boolean; onClose: () => void; title: string; children: React.ReactNode }> = ({ isOpen, onClose, title, children }) => {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg relative animate-fade-in-up" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between p-4 border-b border-slate-200">
-          <h3 className="text-xl font-bold text-slate-800">{title}</h3>
-          <button onClick={onClose} className="p-1 rounded-full text-slate-400 hover:bg-slate-200 hover:text-slate-600 transition-all">
+    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-slate-800 border border-slate-700 rounded-xl shadow-2xl w-full max-w-lg relative animate-fade-in-up" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-4 border-b border-slate-700">
+          <h3 className="text-xl font-bold text-slate-100">{title}</h3>
+          <button onClick={onClose} className="p-1 rounded-full text-slate-400 hover:bg-slate-700 hover:text-slate-200 transition-all">
             <X size={24} />
           </button>
         </div>
@@ -395,13 +386,11 @@ const SignaturePad: React.FC<{ onSave: (dataUrl: string) => void; onClear: () =>
     onClear();
   };
   
-  // FIX: The 'penColor' prop is valid but causes a type error, likely due to incorrect library typings.
-  // Casting the component to 'any' to bypass the incorrect type check for this prop.
   const AnySignatureCanvas = SignatureCanvas as any;
 
   return (
     <div className="w-full">
-      <div className="bg-slate-100 border-2 border-dashed border-slate-300 rounded-lg overflow-hidden">
+      <div className="bg-white border-2 border-dashed border-slate-600 rounded-lg overflow-hidden">
         <AnySignatureCanvas
           ref={sigCanvasRef}
           penColor='black'
@@ -410,14 +399,16 @@ const SignaturePad: React.FC<{ onSave: (dataUrl: string) => void; onClear: () =>
       </div>
       <div className="flex justify-end space-x-3 mt-4">
         <button
+          type="button"
           onClick={handleClear}
-          className="px-4 py-2 text-sm font-semibold text-slate-600 bg-slate-200 rounded-md hover:bg-slate-300 transition-colors"
+          className="px-4 py-2 text-sm font-semibold text-slate-200 bg-slate-600 rounded-md hover:bg-slate-500 transition-colors"
         >
           Limpiar
         </button>
         <button
+          type="button"
           onClick={handleSave}
-          className="px-4 py-2 text-sm font-semibold text-white bg-slate-800 rounded-md hover:bg-slate-700 transition-colors"
+          className="px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition-colors"
         >
           Guardar Firma
         </button>
@@ -432,29 +423,27 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     const [error, setError] = useState<string | null>(null);
     const [isSaving, setIsSaving] = useState(false);
     
-    // Data state
     const [data, setData] = useState<AppData>({
         submissions: [],
         trainings: [],
         companies: [],
         adminConfig: { signature: null, clarification: '', jobTitle: '' },
-        sharedTrainings: {}
     });
 
     const [filter, setFilter] = useState('');
     const [selectedCompany, setSelectedCompany] = useState<string>('');
     const [selectedTraining, setSelectedTraining] = useState<string>('');
+    const [newCompanyName, setNewCompanyName] = useState('');
 
     const [isConfigModalOpen, setConfigModalOpen] = useState(false);
     const [isTrainingModalOpen, setTrainingModalOpen] = useState(false);
     const [isShareModalOpen, setShareModalOpen] = useState(false);
     
     const [currentTraining, setCurrentTraining] = useState<Training | null>(null);
-    const [shareableLink, setShareableLink] = useState('');
-    const [qrCodeUrl, setQrCodeUrl] = useState('');
+    const [trainingToShare, setTrainingToShare] = useState<Training | null>(null);
+    const [isGeneratingShareLink, setIsGeneratingShareLink] = useState<string | null>(null); // Stores ID of training being shared
 
     const adminSigCanvasRef = useRef<SignatureCanvas>(null);
-
     const isFetching = useRef(false);
 
     const fetchData = async () => {
@@ -488,7 +477,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         try {
             await apiService._putData(newData);
             setData(newData);
-            alert("¡Configuración guardada exitosamente!");
+            alert("¡Cambios guardados exitosamente!");
         } catch (e: any) {
             setError(`Error al guardar los datos: ${e.message}`);
             alert(`Error al guardar los datos: ${e.message}`);
@@ -547,7 +536,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
             name: (el.querySelector('.training-link-name') as HTMLInputElement)?.value || '',
             url: (el.querySelector('.training-link-url') as HTMLInputElement).value,
             viewed: false
-        })).filter(link => link.url); // Only save links that have a URL
+        })).filter(link => link.url);
     
         if (links.length === 0) {
             alert('Debe agregar al menos un enlace a la capacitación.');
@@ -555,14 +544,10 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         }
         
         let updatedTrainings;
-        if (currentTraining) { // Editing existing training
+        if (currentTraining && currentTraining.id) {
             updatedTrainings = data.trainings?.map(t => t.id === currentTraining.id ? { ...currentTraining, name, links } : t) || [];
-        } else { // Creating new training
-            const newTraining: Training = {
-                id: `train-${Date.now()}`,
-                name,
-                links,
-            };
+        } else {
+            const newTraining: Training = { id: `train-${Date.now()}`, name, links };
             updatedTrainings = [...(data.trainings || []), newTraining];
         }
     
@@ -570,34 +555,6 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         saveData(newData);
         setTrainingModalOpen(false);
         setCurrentTraining(null);
-    };
-    
-    const handleAddLinkField = () => {
-        if (currentTraining) {
-            const newLinks = [...(currentTraining.links || []), { id: `new-${Date.now()}`, url: '', viewed: false, name: '' }];
-            setCurrentTraining({ ...currentTraining, links: newLinks });
-        } else {
-             // If creating a new training, we need to handle this differently.
-             // This logic should be handled inside the modal state.
-             // For now, let's just log a warning.
-             console.warn("Cannot add link field when not editing a training. State should be managed within the modal.");
-        }
-    };
-    
-    // A simplified version to be used inside the modal render
-    const renderTrainingLinks = (training: Training | null) => {
-        // This is a placeholder. The actual state management for new/edited links should be inside the modal component itself
-        // to avoid re-renders of the entire dashboard.
-        const links = training?.links || [{ id: 'new-1', url: '', viewed: false, name: '' }];
-        return links.map((link, index) => (
-            <div key={link.id || index} className="training-link-group flex items-center space-x-2 mb-2">
-                <input type="text" defaultValue={link.name} placeholder="Nombre del enlace (opcional)" className="training-link-name flex-grow p-2 border border-slate-300 rounded-md text-sm" />
-                <input type="url" defaultValue={link.url} placeholder="https://ejemplo.com" required className="training-link-url flex-grow p-2 border border-slate-300 rounded-md text-sm" />
-                <button type="button" onClick={() => removeLink(index)} className="p-2 text-red-500 hover:text-red-700">
-                    <Trash2 size={16}/>
-                </button>
-            </div>
-        ));
     };
     
     const removeLink = (indexToRemove: number) => {
@@ -613,7 +570,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     };
     
     const openEditTrainingModal = (training: Training) => {
-        setCurrentTraining(JSON.parse(JSON.stringify(training))); // Deep copy to avoid direct mutation
+        setCurrentTraining(JSON.parse(JSON.stringify(training)));
         setTrainingModalOpen(true);
     };
 
@@ -621,6 +578,31 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         if (window.confirm("¿Está seguro de que desea eliminar esta capacitación? Esta acción no se puede deshacer.")) {
             const updatedTrainings = data.trainings?.filter(t => t.id !== trainingId);
             const newData = { ...data, trainings: updatedTrainings };
+            saveData(newData);
+        }
+    };
+    
+    const handleAddCompany = () => {
+        if (!newCompanyName.trim()) {
+            alert("El nombre de la empresa no puede estar vacío.");
+            return;
+        }
+        const normalizedNew = normalizeString(newCompanyName);
+        if ((data.companies || []).some(c => normalizeString(c) === normalizedNew)) {
+            alert("Esta empresa ya existe.");
+            setNewCompanyName('');
+            return;
+        }
+        const updatedCompanies = [...(data.companies || []), newCompanyName.trim()].sort();
+        const newData = { ...data, companies: updatedCompanies };
+        saveData(newData);
+        setNewCompanyName('');
+    };
+
+    const handleDeleteCompany = (companyNameToDelete: string) => {
+        if (window.confirm(`¿Seguro que quieres eliminar la empresa "${companyNameToDelete}"? Se eliminará de todas las listas.`)) {
+            const updatedCompanies = (data.companies || []).filter(c => c !== companyNameToDelete);
+            const newData = { ...data, companies: updatedCompanies };
             saveData(newData);
         }
     };
@@ -634,33 +616,134 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     };
     
     const handleShareTraining = async (training: Training) => {
-        try {
-            const key = await apiService.shareTraining(training);
-            const url = `${window.location.origin}${window.location.pathname}?trainingKey=${key}`;
-            setShareableLink(url);
-            const qr = await QRCode.toDataURL(url, { width: 256, margin: 2 });
-            setQrCodeUrl(qr);
-            setShareModalOpen(true);
-        } catch (error) {
-            console.error("Error sharing training:", error);
-            alert("No se pudo generar el enlace para compartir.");
+        let trainingToOpen = training;
+
+        // If the training doesn't have a permanent share key, create one and save it.
+        if (!training.shareKey) {
+            setIsGeneratingShareLink(training.id);
+            setError(null);
+            try {
+                const newShareKey = `st-${training.id}-${Date.now()}`; // Add timestamp for uniqueness
+                const updatedTraining = { ...training, shareKey: newShareKey };
+                
+                const newTrainings = (data.trainings || []).map(t =>
+                    t.id === training.id ? updatedTraining : t
+                );
+                const newData = { ...data, trainings: newTrainings };
+
+                // Use the core _putData to save without showing a global alert
+                await apiService._putData(newData);
+                
+                // Update local state to reflect the change immediately
+                setData(newData); 
+                trainingToOpen = updatedTraining;
+
+            } catch (e: any) {
+                setError(`Error al generar el enlace permanente: ${e.message}`);
+                setIsGeneratingShareLink(null);
+                return; // Stop if it fails
+            } finally {
+                setIsGeneratingShareLink(null);
+            }
         }
+        
+        setTrainingToShare(trainingToOpen);
+        setShareModalOpen(true);
+    };
+    
+    const ShareModalContent: React.FC<{ training: Training | null }> = ({ training }) => {
+        const [qrCodes, setQrCodes] = useState<{[key: string]: string}>({});
+        const [isLoadingQRs, setIsLoadingQRs] = useState(true);
+        
+        useEffect(() => {
+            const generateQRs = async () => {
+                if(training && training.shareKey) {
+                    setIsLoadingQRs(true);
+                    try {
+                        const generatedQRs: {[key: string]: string} = {};
+                        const baseUrl = `${window.location.origin}${window.location.pathname}?trainingKey=${training.shareKey}`;
+
+                        generatedQRs['general'] = await QRCode.toDataURL(baseUrl, { width: 256, margin: 2, color: { dark: '#FFFFFF', light: '#1E293B' } });
+
+                        for (const company of data.companies || []) {
+                            const companyUrl = `${baseUrl}&company=${encodeURIComponent(company)}`;
+                            generatedQRs[company] = await QRCode.toDataURL(companyUrl, { width: 256, margin: 2, color: { dark: '#FFFFFF', light: '#1E293B' } });
+                        }
+                        setQrCodes(generatedQRs);
+
+                    } catch(e) {
+                        console.error("Failed to generate QR codes:", e);
+                        alert("No se pudieron generar los códigos QR.");
+                    } finally {
+                        setIsLoadingQRs(false);
+                    }
+                }
+            };
+            generateQRs();
+        }, [training]);
+
+        if (isLoadingQRs) return <div className="flex justify-center p-8"><Spinner /></div>;
+        if (!training || !training.shareKey) return <p className="text-red-400">Error: No se pudo encontrar la clave para compartir de esta capacitación.</p>;
+
+        const baseUrl = `${window.location.origin}${window.location.pathname}?trainingKey=${training.shareKey}`;
+
+        return (
+            <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
+                <p className="text-slate-400 text-center">Usa los siguientes enlaces o códigos QR para que los asistentes se registren. <strong className="text-slate-200">Estos enlaces son permanentes.</strong></p>
+                <div className="space-y-6">
+                    {/* General Link */}
+                    <div>
+                        <h4 className="font-bold text-slate-200 mb-2">Enlace General</h4>
+                        <div className="flex flex-col sm:flex-row items-center gap-4">
+                            {qrCodes['general'] && <img src={qrCodes['general']} alt="QR Code General" className="border-4 border-slate-600 rounded-lg w-24 h-24"/>}
+                            <div className="flex-grow w-full flex items-center bg-slate-700 p-2 rounded-md border border-slate-600">
+                                <input type="text" value={baseUrl} readOnly className="flex-grow bg-transparent text-sm text-slate-300 outline-none w-full"/>
+                                <button onClick={() => { navigator.clipboard.writeText(baseUrl); alert('Enlace copiado!'); }} className="p-2 text-slate-400 hover:bg-slate-600 rounded-md"><Copy size={16}/></button>
+                            </div>
+                        </div>
+                    </div>
+                    {/* Company Links */}
+                    {(data.companies || []).length > 0 && (
+                        <div className="border-t border-slate-700 pt-4">
+                            <h4 className="font-bold text-slate-200 mb-2">Enlaces por Empresa</h4>
+                            <div className="space-y-4">
+                                {(data.companies || []).map(company => {
+                                    const companyUrl = `${baseUrl}&company=${encodeURIComponent(company)}`;
+                                    return (
+                                        <div key={company}>
+                                            <p className="text-sm font-semibold text-slate-300 mb-1">{company}</p>
+                                            <div className="flex flex-col sm:flex-row items-center gap-4">
+                                                {qrCodes[company] && <img src={qrCodes[company]} alt={`QR Code ${company}`} className="border-4 border-slate-600 rounded-lg w-24 h-24"/>}
+                                                <div className="flex-grow w-full flex items-center bg-slate-700 p-2 rounded-md border border-slate-600">
+                                                    <input type="text" value={companyUrl} readOnly className="flex-grow bg-transparent text-sm text-slate-300 outline-none w-full"/>
+                                                    <button onClick={() => { navigator.clipboard.writeText(companyUrl); alert(`Enlace para ${company} copiado!`); }} className="p-2 text-slate-400 hover:bg-slate-600 rounded-md"><Copy size={16}/></button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )
+                                })}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
+        );
     };
 
     if (isLoading) {
-        return <div className="min-h-screen bg-slate-100 flex items-center justify-center"><Spinner size={12} /></div>;
+        return <div className="min-h-screen bg-slate-900 flex items-center justify-center"><Spinner size={12} /></div>;
     }
     
     const configCheck = () => {
         if (JSONBIN_BIN_ID.startsWith('REEMPLAZA') || JSONBIN_MASTER_KEY.startsWith('REEMPLAZA')) {
              return (
-                <div className="min-h-screen bg-red-50 flex items-center justify-center p-4">
-                    <div className="bg-white p-8 rounded-lg shadow-md max-w-2xl text-center">
+                <div className="min-h-screen bg-red-900 bg-opacity-50 flex items-center justify-center p-4">
+                    <div className="bg-slate-800 border border-red-500 p-8 rounded-lg shadow-md max-w-2xl text-center">
                         <ShieldCheck size={48} className="mx-auto text-red-500 mb-4" />
-                        <h1 className="text-2xl font-bold text-red-800 mb-2">Configuración Requerida</h1>
-                        <p className="text-slate-600">
+                        <h1 className="text-2xl font-bold text-red-300 mb-2">Configuración Requerida</h1>
+                        <p className="text-slate-400">
                             Para utilizar la aplicación, primero debe configurar las credenciales de la API de 
-                            <a href="https://jsonbin.io" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline font-semibold"> jsonbin.io</a>.
+                            <a href="https://jsonbin.io" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline font-semibold"> jsonbin.io</a>.
                             Siga las instrucciones en la parte superior del archivo <code>index.tsx</code> para obtener y establecer su <code>JSONBIN_BIN_ID</code> y <code>JSONBIN_MASTER_KEY</code>.
                         </p>
                     </div>
@@ -674,69 +757,97 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     if(configError) return configError;
 
     return (
-        <div className="min-h-screen bg-slate-100 p-4 sm:p-6 lg:p-8">
+        <div className="min-h-screen bg-slate-900 text-slate-200 p-4 sm:p-6 lg:p-8">
             <div className="max-w-7xl mx-auto">
-                {/* Header */}
-                <header className="flex flex-wrap items-center justify-between gap-4 pb-6 border-b border-slate-300">
+                <header className="flex flex-wrap items-center justify-between gap-4 pb-6 border-b border-slate-700">
                     <div className="flex items-center space-x-3">
-                         <ShieldCheck className="w-8 h-8 text-slate-800" />
-                        <h1 className="text-3xl font-bold text-slate-800">Panel de Administrador</h1>
+                         <ShieldCheck className="w-8 h-8 text-slate-200" />
+                        <h1 className="text-2xl md:text-3xl font-bold text-slate-100">Panel de Administrador</h1>
                     </div>
-                    <div className="flex items-center space-x-4">
-                        <button onClick={fetchData} disabled={isFetching.current} className="p-2 text-slate-500 hover:text-slate-800 disabled:opacity-50 transition-colors">
+                    <div className="flex items-center space-x-2 sm:space-x-4">
+                        <button onClick={fetchData} disabled={isFetching.current} className="p-2 text-slate-400 hover:text-slate-100 disabled:opacity-50 transition-colors">
                             <RefreshCw size={20} className={isFetching.current ? 'animate-spin' : ''}/>
                         </button>
-                        <button onClick={() => setConfigModalOpen(true)} className="flex items-center space-x-2 px-4 py-2 text-sm font-semibold text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 transition">
-                           <User size={16}/><span>Configurar Firma</span>
+                        <button onClick={() => setConfigModalOpen(true)} className="flex items-center space-x-2 px-3 py-2 text-sm font-semibold text-slate-200 bg-slate-700 border border-slate-600 rounded-md hover:bg-slate-600 transition">
+                           <User size={16}/><span>Firma</span>
                         </button>
-                        <button onClick={onLogout} className="flex items-center space-x-2 px-4 py-2 text-sm font-semibold text-red-600 bg-red-100 border border-red-200 rounded-md hover:bg-red-200 transition">
-                            <LogOut size={16}/><span>Cerrar Sesión</span>
+                        <button onClick={onLogout} className="flex items-center space-x-2 px-3 py-2 text-sm font-semibold text-red-300 bg-red-900 bg-opacity-50 border border-red-800 rounded-md hover:bg-red-800 hover:text-red-200 transition">
+                            <LogOut size={16}/><span>Salir</span>
                         </button>
                     </div>
                 </header>
-                 {error && <div className="mt-4 bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-md" role="alert">{error}</div>}
+                 {error && <div className="mt-4 bg-red-900 bg-opacity-50 border border-red-500 text-red-300 px-4 py-3 rounded-md" role="alert">{error}</div>}
 
-                {/* Main Content */}
-                <main className="grid grid-cols-1 lg:grid-cols-3 gap-8 mt-6">
-                    {/* Trainings Section */}
-                    <section className="lg:col-span-1 bg-white p-6 rounded-xl shadow-sm">
-                         <div className="flex items-center justify-between mb-4">
-                            <h2 className="text-xl font-bold text-slate-800 flex items-center"><Award size={22} className="mr-2"/>Capacitaciones</h2>
-                            <button onClick={openNewTrainingModal} className="flex items-center space-x-2 px-3 py-1.5 text-sm font-semibold text-white bg-slate-800 rounded-md hover:bg-slate-700 transition">
-                               <PlusCircle size={16}/><span>Nueva</span>
-                            </button>
-                        </div>
-                        <div className="space-y-3 max-h-[600px] overflow-y-auto pr-2">
-                             {(data.trainings || []).length > 0 ? (
-                                data.trainings?.map(training => (
-                                    <div key={training.id} className="p-4 bg-slate-50 rounded-lg border border-slate-200 hover:border-slate-300 transition-all group">
-                                        <div className="flex items-start justify-between">
-                                            <div>
-                                                <p className="font-semibold text-slate-700">{training.name}</p>
-                                                <span className="text-xs text-slate-500">{training.links.length} enlace(s)</span>
-                                            </div>
-                                            <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                <button onClick={() => handleShareTraining(training)} title="Compartir" className="p-1.5 text-slate-500 hover:bg-slate-200 rounded-md"><Share2 size={16}/></button>
-                                                <button onClick={() => openEditTrainingModal(training)} title="Editar" className="p-1.5 text-slate-500 hover:bg-slate-200 rounded-md"><Edit size={16}/></button>
-                                                <button onClick={() => handleDeleteTraining(training.id)} title="Eliminar" className="p-1.5 text-red-500 hover:bg-red-100 rounded-md"><Trash2 size={16}/></button>
+                <main className="grid grid-cols-1 xl:grid-cols-3 gap-8 mt-6">
+                    <div className="xl:col-span-1 flex flex-col gap-8">
+                        {/* Trainings Section */}
+                        <section className="bg-slate-800 p-6 rounded-xl shadow-lg border border-slate-700">
+                            <div className="flex items-center justify-between mb-4">
+                                <h2 className="text-xl font-bold text-slate-100 flex items-center"><Award size={22} className="mr-2 text-blue-400"/>Capacitaciones</h2>
+                                <button onClick={openNewTrainingModal} className="flex items-center space-x-2 px-3 py-1.5 text-sm font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition">
+                                <PlusCircle size={16}/><span>Nueva</span>
+                                </button>
+                            </div>
+                            <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2">
+                                {(data.trainings || []).length > 0 ? (
+                                    data.trainings?.map(training => (
+                                        <div key={training.id} className="p-3 bg-slate-900 rounded-lg border border-slate-700 hover:border-blue-500 transition-all group">
+                                            <div className="flex items-start justify-between">
+                                                <div>
+                                                    <p className="font-semibold text-slate-200">{training.name}</p>
+                                                    <span className="text-xs text-slate-400">{training.links.length} enlace(s)</span>
+                                                </div>
+                                                <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    <button onClick={() => handleShareTraining(training)} disabled={isGeneratingShareLink === training.id} title="Compartir" className="p-1.5 text-slate-400 hover:bg-slate-700 rounded-md disabled:opacity-50">
+                                                        {isGeneratingShareLink === training.id ? <Spinner size={4}/> : <Share2 size={16}/>}
+                                                    </button>
+                                                    <button onClick={() => openEditTrainingModal(training)} title="Editar" className="p-1.5 text-slate-400 hover:bg-slate-700 rounded-md"><Edit size={16}/></button>
+                                                    <button onClick={() => handleDeleteTraining(training.id)} title="Eliminar" className="p-1.5 text-red-400 hover:bg-red-900/50 rounded-md"><Trash2 size={16}/></button>
+                                                </div>
                                             </div>
                                         </div>
-                                    </div>
-                                ))
-                            ) : (
-                                <p className="text-sm text-slate-500 text-center py-8">No hay capacitaciones creadas.</p>
-                            )}
-                        </div>
-                    </section>
+                                    ))
+                                ) : (
+                                    <p className="text-sm text-slate-500 text-center py-8">No hay capacitaciones creadas.</p>
+                                )}
+                            </div>
+                        </section>
+                         {/* Companies Section */}
+                         <section className="bg-slate-800 p-6 rounded-xl shadow-lg border border-slate-700">
+                            <h2 className="text-xl font-bold text-slate-100 flex items-center mb-4"><Building size={22} className="mr-2 text-blue-400"/>Empresas</h2>
+                            <div className="flex gap-2 mb-4">
+                                <input 
+                                    type="text"
+                                    value={newCompanyName}
+                                    onChange={(e) => setNewCompanyName(e.target.value)}
+                                    placeholder="Nombre de la nueva empresa"
+                                    className="flex-grow p-2 bg-slate-700 border border-slate-600 rounded-md text-sm text-slate-200 placeholder-slate-400"
+                                />
+                                <button onClick={handleAddCompany} className="px-4 text-sm font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition">Añadir</button>
+                            </div>
+                             <div className="space-y-2 max-h-[250px] overflow-y-auto pr-2">
+                                {(data.companies || []).length > 0 ? (
+                                    data.companies?.map(company => (
+                                        <div key={company} className="flex items-center justify-between p-2 bg-slate-900 rounded-lg border border-slate-700 group">
+                                            <p className="text-sm text-slate-300">{company}</p>
+                                            <button onClick={() => handleDeleteCompany(company)} title="Eliminar Empresa" className="p-1.5 text-red-400 hover:bg-red-900/50 rounded-md opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={16}/></button>
+                                        </div>
+                                    ))
+                                ) : (
+                                    <p className="text-sm text-slate-500 text-center py-8">No hay empresas añadidas.</p>
+                                )}
+                            </div>
+                        </section>
+                    </div>
                     
                     {/* Submissions Section */}
-                    <section className="lg:col-span-2 bg-white p-6 rounded-xl shadow-sm">
+                    <section className="xl:col-span-2 bg-slate-800 p-6 rounded-xl shadow-lg border border-slate-700">
                         <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mb-4">
-                            <h2 className="text-xl font-bold text-slate-800 flex items-center"><Users size={22} className="mr-2"/>Registros de Asistentes</h2>
+                            <h2 className="text-xl font-bold text-slate-100 flex items-center"><Users size={22} className="mr-2 text-blue-400"/>Registros de Asistentes</h2>
                             <button 
                                 onClick={() => generateSubmissionsPdf(filteredSubmissions, data.adminConfig?.signature || null, data.adminConfig?.clarification || '', data.adminConfig?.jobTitle || '', selectedTraining ? data.trainings?.find(t=>t.id===selectedTraining)?.name : undefined, selectedCompany || undefined)} 
                                 disabled={filteredSubmissions.length === 0 || !data.adminConfig?.signature}
-                                className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-700 transition disabled:bg-slate-400 disabled:cursor-not-allowed"
+                                className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-700 transition disabled:bg-slate-600 disabled:cursor-not-allowed"
                             >
                                 <FileDown size={16}/><span>Descargar PDF ({filteredSubmissions.length})</span>
                             </button>
@@ -749,45 +860,44 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                 placeholder="Buscar por nombre, apellido o DNI..."
                                 value={filter}
                                 onChange={(e) => setFilter(e.target.value)}
-                                className="p-2 border border-slate-300 rounded-md text-sm"
+                                className="p-2 bg-slate-700 border border-slate-600 rounded-md text-sm text-slate-200 placeholder-slate-400"
                             />
-                            <select value={selectedTraining} onChange={e => setSelectedTraining(e.target.value)} className="p-2 border border-slate-300 rounded-md text-sm bg-white">
+                            <select value={selectedTraining} onChange={e => setSelectedTraining(e.target.value)} className="p-2 border bg-slate-700 border-slate-600 rounded-md text-sm text-slate-200">
                                 <option value="">Todas las Capacitaciones</option>
                                 {data.trainings?.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                             </select>
-                            <select value={selectedCompany} onChange={e => setSelectedCompany(e.target.value)} className="p-2 border border-slate-300 rounded-md text-sm bg-white">
+                            <select value={selectedCompany} onChange={e => setSelectedCompany(e.target.value)} className="p-2 border bg-slate-700 border-slate-600 rounded-md text-sm text-slate-200">
                                 <option value="">Todas las Empresas</option>
-                                {/* Unique companies */}
-                                {[...new Set(data.submissions?.map(s => s.company) || [])].map(c => <option key={c} value={c}>{c}</option>)}
+                                {[...new Set(data.submissions?.map(s => s.company) || [])].sort().map(c => <option key={c} value={c}>{c}</option>)}
                             </select>
                         </div>
                         
                         {/* Submissions Table */}
-                        <div className="overflow-x-auto max-h-[520px] overflow-y-auto border border-slate-200 rounded-lg">
-                             <table className="min-w-full divide-y divide-slate-200">
-                                <thead className="bg-slate-50 sticky top-0">
+                        <div className="overflow-x-auto max-h-[60vh] overflow-y-auto border border-slate-700 rounded-lg">
+                             <table className="min-w-full divide-y divide-slate-700">
+                                <thead className="bg-slate-900 sticky top-0">
                                     <tr>
-                                        <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Asistente</th>
-                                        <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Capacitación</th>
-                                        <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Empresa</th>
-                                        <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Fecha</th>
-                                        <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Acciones</th>
+                                        <th className="px-4 py-3 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider">Asistente</th>
+                                        <th className="px-4 py-3 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider">Capacitación</th>
+                                        <th className="px-4 py-3 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider">Empresa</th>
+                                        <th className="px-4 py-3 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider">Fecha</th>
+                                        <th className="px-4 py-3 text-right text-xs font-semibold text-slate-400 uppercase tracking-wider">Acciones</th>
                                     </tr>
                                 </thead>
-                                <tbody className="bg-white divide-y divide-slate-200">
+                                <tbody className="bg-slate-800 divide-y divide-slate-700">
                                     {filteredSubmissions.length > 0 ? filteredSubmissions.map(sub => (
-                                        <tr key={sub.id} className="hover:bg-slate-50 transition-colors">
+                                        <tr key={sub.id} className="hover:bg-slate-700/50 transition-colors">
                                             <td className="px-4 py-3 whitespace-nowrap">
-                                                <div className="text-sm font-medium text-slate-900">{sub.lastName}, {sub.firstName}</div>
-                                                <div className="text-xs text-slate-500">DNI: {sub.dni}</div>
+                                                <div className="text-sm font-medium text-slate-100">{sub.lastName}, {sub.firstName}</div>
+                                                <div className="text-xs text-slate-400">DNI: {sub.dni}</div>
                                             </td>
-                                            <td className="px-4 py-3 whitespace-nowrap text-sm text-slate-600">{sub.trainingName}</td>
-                                            <td className="px-4 py-3 whitespace-nowrap text-sm text-slate-600">{sub.company}</td>
-                                            <td className="px-4 py-3 whitespace-nowrap text-sm text-slate-600">{new Date(sub.timestamp).toLocaleString('es-ES')}</td>
+                                            <td className="px-4 py-3 whitespace-nowrap text-sm text-slate-300">{sub.trainingName}</td>
+                                            <td className="px-4 py-3 whitespace-nowrap text-sm text-slate-300">{sub.company}</td>
+                                            <td className="px-4 py-3 whitespace-nowrap text-sm text-slate-300">{new Date(sub.timestamp).toLocaleString('es-ES')}</td>
                                             <td className="px-4 py-3 whitespace-nowrap text-right text-sm font-medium">
                                                 <div className="flex items-center justify-end space-x-2">
-                                                    <button onClick={() => generateSingleSubmissionPdf(sub, data.adminConfig?.signature || null, data.adminConfig?.clarification || '', data.adminConfig?.jobTitle || '')} disabled={!data.adminConfig?.signature} title="Descargar Certificado" className="p-1.5 text-slate-500 hover:bg-slate-200 rounded-md disabled:opacity-30"><FileText size={16}/></button>
-                                                    <button onClick={() => handleDeleteSubmission(sub.id)} title="Eliminar Registro" className="p-1.5 text-red-500 hover:bg-red-100 rounded-md"><Trash2 size={16}/></button>
+                                                    <button onClick={() => generateSingleSubmissionPdf(sub, data.adminConfig?.signature || null, data.adminConfig?.clarification || '', data.adminConfig?.jobTitle || '')} disabled={!data.adminConfig?.signature} title="Descargar Certificado" className="p-1.5 text-slate-400 hover:bg-slate-700 rounded-md disabled:opacity-30"><FileText size={16}/></button>
+                                                    <button onClick={() => handleDeleteSubmission(sub.id)} title="Eliminar Registro" className="p-1.5 text-red-400 hover:bg-red-900/50 rounded-md"><Trash2 size={16}/></button>
                                                 </div>
                                             </td>
                                         </tr>
@@ -809,24 +919,24 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
             <Modal isOpen={isConfigModalOpen} onClose={() => setConfigModalOpen(false)} title="Configurar Datos del Administrador">
                 <div className="space-y-4">
                     <div>
-                        <label htmlFor="adminClarification" className="block text-sm font-medium text-slate-700 mb-1">Aclaración de Firma</label>
-                        <input type="text" id="adminClarification" defaultValue={data.adminConfig?.clarification} className="w-full p-2 border border-slate-300 rounded-md" placeholder="Nombre y Apellido"/>
+                        <label htmlFor="adminClarification" className="block text-sm font-medium text-slate-300 mb-1">Aclaración de Firma</label>
+                        <input type="text" id="adminClarification" defaultValue={data.adminConfig?.clarification} className="w-full p-2 bg-slate-700 border border-slate-600 rounded-md text-slate-200" placeholder="Nombre y Apellido"/>
                     </div>
                      <div>
-                        <label htmlFor="adminJobTitle" className="block text-sm font-medium text-slate-700 mb-1">Cargo / Puesto</label>
-                        <input type="text" id="adminJobTitle" defaultValue={data.adminConfig?.jobTitle} className="w-full p-2 border border-slate-300 rounded-md" placeholder="Ej: Gerente de RRHH"/>
+                        <label htmlFor="adminJobTitle" className="block text-sm font-medium text-slate-300 mb-1">Cargo / Puesto</label>
+                        <input type="text" id="adminJobTitle" defaultValue={data.adminConfig?.jobTitle} className="w-full p-2 bg-slate-700 border border-slate-600 rounded-md text-slate-200" placeholder="Ej: Gerente de RRHH"/>
                     </div>
                     <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Firma Digital</label>
+                        <label className="block text-sm font-medium text-slate-300 mb-1">Firma Digital</label>
                          {data.adminConfig?.signature && (
-                            <div className="mb-2 p-2 border rounded-md bg-slate-50 flex items-center justify-center">
+                            <div className="mb-2 p-2 border rounded-md bg-slate-700 flex items-center justify-center">
                                 <img src={data.adminConfig.signature} alt="Firma guardada" className="h-20"/>
                             </div>
                         )}
                         <SignaturePad onSave={() => {}} onClear={() => {}} sigCanvasRef={adminSigCanvasRef} />
                     </div>
                     <div className="flex justify-end pt-4">
-                         <button onClick={handleUpdateConfig} disabled={isSaving} className="flex items-center justify-center w-32 h-10 px-4 py-2 font-semibold text-white bg-slate-800 rounded-md hover:bg-slate-700 transition disabled:bg-slate-400">
+                         <button onClick={handleUpdateConfig} disabled={isSaving} className="flex items-center justify-center w-36 h-10 px-4 py-2 font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition disabled:bg-slate-600">
                             {isSaving ? <Spinner size={5}/> : 'Guardar Cambios'}
                         </button>
                     </div>
@@ -836,29 +946,17 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
             <Modal isOpen={isTrainingModalOpen} onClose={() => {setTrainingModalOpen(false); setCurrentTraining(null);}} title={currentTraining?.id ? 'Editar Capacitación' : 'Nueva Capacitación'}>
                 <div className="space-y-4">
                     <div>
-                        <label htmlFor="trainingName" className="block text-sm font-medium text-slate-700 mb-1">Nombre de la Capacitación</label>
-                        <input type="text" id="trainingName" defaultValue={currentTraining?.name} className="w-full p-2 border border-slate-300 rounded-md" required />
+                        <label htmlFor="trainingName" className="block text-sm font-medium text-slate-300 mb-1">Nombre de la Capacitación</label>
+                        <input type="text" id="trainingName" defaultValue={currentTraining?.name} className="w-full p-2 bg-slate-700 border border-slate-600 rounded-md text-slate-200" required />
                     </div>
                     <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Enlaces</label>
+                        <label className="block text-sm font-medium text-slate-300 mb-1">Enlaces</label>
                         <div className="space-y-2">
                         {(currentTraining?.links || []).map((link, index) => (
-                            <div key={link.id || index} className="flex items-center space-x-2">
-                                <input type="text" placeholder="Nombre del enlace (Opcional)" value={link.name} onChange={(e) => {
-                                    if(currentTraining){
-                                        const newLinks = [...currentTraining.links];
-                                        newLinks[index].name = e.target.value;
-                                        setCurrentTraining({...currentTraining, links: newLinks});
-                                    }
-                                }} className="flex-grow p-2 border border-slate-300 rounded-md text-sm" />
-                                <input type="url" placeholder="https://ejemplo.com" value={link.url} onChange={(e) => {
-                                      if(currentTraining){
-                                        const newLinks = [...currentTraining.links];
-                                        newLinks[index].url = e.target.value;
-                                        setCurrentTraining({...currentTraining, links: newLinks});
-                                    }
-                                }} required className="flex-grow p-2 border border-slate-300 rounded-md text-sm" />
-                                <button type="button" onClick={() => removeLink(index)} className="p-2 text-red-500 hover:bg-red-100 rounded-full transition"><Trash2 size={16}/></button>
+                            <div key={link.id || index} className="flex items-center space-x-2 training-link-group">
+                                <input type="text" placeholder="Nombre (Opcional)" defaultValue={link.name} className="flex-grow p-2 bg-slate-700 border border-slate-600 rounded-md text-sm text-slate-200 training-link-name" />
+                                <input type="url" placeholder="https://ejemplo.com" defaultValue={link.url} required className="flex-grow p-2 bg-slate-700 border border-slate-600 rounded-md text-sm text-slate-200 training-link-url" />
+                                <button type="button" onClick={() => removeLink(index)} className="p-2 text-red-400 hover:bg-red-900/50 rounded-full transition"><Trash2 size={16}/></button>
                             </div>
                         ))}
                         </div>
@@ -869,27 +967,20 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                     links: [...currentTraining.links, {id: `new-${Date.now()}`, url: '', viewed: false, name: ''}]
                                 });
                             }
-                        }} className="mt-2 flex items-center space-x-2 text-sm font-semibold text-blue-600 hover:text-blue-800">
+                        }} className="mt-2 flex items-center space-x-2 text-sm font-semibold text-blue-400 hover:text-blue-300">
                             <PlusCircle size={16}/><span>Añadir Enlace</span>
                         </button>
                     </div>
                     <div className="flex justify-end pt-4">
-                         <button onClick={handleSaveTraining} disabled={isSaving} className="flex items-center justify-center w-32 h-10 px-4 py-2 font-semibold text-white bg-slate-800 rounded-md hover:bg-slate-700 transition disabled:bg-slate-400">
+                         <button onClick={handleSaveTraining} disabled={isSaving} className="flex items-center justify-center w-32 h-10 px-4 py-2 font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition disabled:bg-slate-600">
                              {isSaving ? <Spinner size={5}/> : 'Guardar'}
                         </button>
                     </div>
                 </div>
             </Modal>
             
-            <Modal isOpen={isShareModalOpen} onClose={() => setShareModalOpen(false)} title="Compartir Capacitación">
-                <div className="space-y-4 text-center">
-                    <p className="text-slate-600">Usa el siguiente enlace o código QR para que los asistentes se registren:</p>
-                    {qrCodeUrl && <img src={qrCodeUrl} alt="QR Code" className="mx-auto my-4 border-4 border-slate-200 rounded-lg"/>}
-                    <div className="flex items-center w-full bg-slate-100 p-2 rounded-md border border-slate-200">
-                        <input type="text" value={shareableLink} readOnly className="flex-grow bg-transparent text-sm text-slate-700 outline-none"/>
-                        <button onClick={() => { navigator.clipboard.writeText(shareableLink); alert('Enlace copiado!'); }} className="p-2 text-slate-500 hover:bg-slate-200 rounded-md"><Copy size={16}/></button>
-                    </div>
-                </div>
+            <Modal isOpen={isShareModalOpen} onClose={() => {setShareModalOpen(false); setTrainingToShare(null)}} title={`Compartir: ${trainingToShare?.name}`}>
+                 <ShareModalContent training={trainingToShare} />
             </Modal>
         </div>
     );
@@ -897,11 +988,11 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
 
 // --- USER PORTAL COMPONENTS ---
 
-const UserForm: React.FC<{ training: Training; onSubmit: (submission: Omit<UserSubmission, 'id' | 'timestamp'>) => Promise<void> }> = ({ training, onSubmit }) => {
+const UserForm: React.FC<{ training: Training; companyName?: string | null; onSubmit: (submission: Omit<UserSubmission, 'id' | 'timestamp'>) => Promise<void> }> = ({ training, companyName, onSubmit }) => {
     const [firstName, setFirstName] = useState('');
     const [lastName, setLastName] = useState('');
     const [dni, setDni] = useState('');
-    const [company, setCompany] = useState('');
+    const [company, setCompany] = useState(companyName || '');
     const [email, setEmail] = useState('');
     const [phone, setPhone] = useState('');
     const [signature, setSignature] = useState<string | null>(null);
@@ -944,16 +1035,16 @@ const UserForm: React.FC<{ training: Training; onSubmit: (submission: Omit<UserS
     return (
         <form onSubmit={handleSubmit} className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <input type="text" value={firstName} onChange={e => setFirstName(e.target.value)} placeholder="Nombre" required className="p-3 border border-slate-300 rounded-lg w-full"/>
-                <input type="text" value={lastName} onChange={e => setLastName(e.target.value)} placeholder="Apellido" required className="p-3 border border-slate-300 rounded-lg w-full"/>
-                <input type="text" value={dni} onChange={e => setDni(e.target.value)} placeholder="DNI" required className="p-3 border border-slate-300 rounded-lg w-full"/>
-                <input type="text" value={company} onChange={e => setCompany(e.target.value)} placeholder="Empresa" required className="p-3 border border-slate-300 rounded-lg w-full"/>
-                <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email (Opcional)" className="p-3 border border-slate-300 rounded-lg w-full"/>
-                <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="Teléfono (Opcional)" className="p-3 border border-slate-300 rounded-lg w-full"/>
+                <input type="text" value={firstName} onChange={e => setFirstName(e.target.value)} placeholder="Nombre" required className="p-3 bg-slate-700 border border-slate-600 rounded-lg w-full text-slate-100 placeholder:text-slate-400"/>
+                <input type="text" value={lastName} onChange={e => setLastName(e.target.value)} placeholder="Apellido" required className="p-3 bg-slate-700 border border-slate-600 rounded-lg w-full text-slate-100 placeholder:text-slate-400"/>
+                <input type="text" value={dni} onChange={e => setDni(e.target.value)} placeholder="DNI" required className="p-3 bg-slate-700 border border-slate-600 rounded-lg w-full text-slate-100 placeholder:text-slate-400"/>
+                <input type="text" value={company} onChange={e => setCompany(e.target.value)} placeholder="Empresa" required readOnly={!!companyName} className={`p-3 border rounded-lg w-full text-slate-100 placeholder:text-slate-400 ${companyName ? 'bg-slate-600 border-slate-500 cursor-not-allowed' : 'bg-slate-700 border-slate-600'}`}/>
+                <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email (Opcional)" className="p-3 bg-slate-700 border border-slate-600 rounded-lg w-full text-slate-100 placeholder:text-slate-400"/>
+                <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="Teléfono (Opcional)" className="p-3 bg-slate-700 border border-slate-600 rounded-lg w-full text-slate-100 placeholder:text-slate-400"/>
             </div>
 
             <div>
-                 <h3 className="text-lg font-semibold text-slate-800 mb-2">Firma Digital</h3>
+                 <h3 className="text-lg font-semibold text-slate-100 mb-2">Firma Digital</h3>
                  <SignaturePad 
                     sigCanvasRef={sigCanvasRef} 
                     onSave={setSignature} 
@@ -961,7 +1052,7 @@ const UserForm: React.FC<{ training: Training; onSubmit: (submission: Omit<UserS
                 />
             </div>
             
-            <button type="submit" disabled={isSubmitting} className="w-full flex items-center justify-center space-x-2 bg-slate-800 text-white font-bold py-3 px-4 rounded-lg hover:bg-slate-700 transition disabled:bg-slate-400">
+            <button type="submit" disabled={isSubmitting} className="w-full flex items-center justify-center space-x-2 bg-blue-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-blue-500 transition disabled:bg-slate-600">
                 {isSubmitting ? <Spinner size={6} /> : <Send size={20}/>}
                 <span>{isSubmitting ? 'Enviando...' : 'Finalizar y Enviar Registro'}</span>
             </button>
@@ -969,7 +1060,7 @@ const UserForm: React.FC<{ training: Training; onSubmit: (submission: Omit<UserS
     );
 };
 
-const UserPortal: React.FC<{ training: Training; onBackToHome: () => void }> = ({ training, onBackToHome }) => {
+const UserPortal: React.FC<{ training: Training; companyName: string | null; onBackToHome: () => void }> = ({ training, companyName, onBackToHome }) => {
     const [links, setLinks] = useState<TrainingLink[]>(training.links.map(l => ({ ...l, viewed: false })));
     const [allLinksViewed, setAllLinksViewed] = useState(false);
     const [submissionComplete, setSubmissionComplete] = useState(false);
@@ -992,7 +1083,7 @@ const UserPortal: React.FC<{ training: Training; onBackToHome: () => void }> = (
         try {
             const data = await apiService._getData();
             const updatedSubmissions = [...(data.submissions || []), fullSubmission];
-            const uniqueCompanies = [...new Set([...(data.companies || []), fullSubmission.company])];
+            const uniqueCompanies = [...new Set([...(data.companies || []), fullSubmission.company])].sort();
             
             await apiService._putData({ ...data, submissions: updatedSubmissions, companies: uniqueCompanies });
             
@@ -1006,10 +1097,10 @@ const UserPortal: React.FC<{ training: Training; onBackToHome: () => void }> = (
     if (submissionComplete) {
         return (
             <div className="text-center py-20 px-4">
-                 <CheckCircle size={64} className="mx-auto text-green-500 mb-4" />
-                <h2 className="text-3xl font-bold text-slate-800 mb-2">¡Registro Completado!</h2>
-                <p className="text-slate-600 max-w-md mx-auto">Gracias por completar la capacitación. Sus datos han sido enviados correctamente.</p>
-                <button onClick={onBackToHome} className="mt-8 flex items-center justify-center mx-auto space-x-2 bg-slate-800 text-white font-semibold py-2 px-6 rounded-lg hover:bg-slate-700 transition">
+                 <CheckCircle size={64} className="mx-auto text-green-400 mb-4" />
+                <h2 className="text-3xl font-bold text-slate-100 mb-2">¡Registro Completado!</h2>
+                <p className="text-slate-400 max-w-md mx-auto">Gracias por completar la capacitación. Sus datos han sido enviados correctamente.</p>
+                <button onClick={onBackToHome} className="mt-8 flex items-center justify-center mx-auto space-x-2 bg-slate-700 text-white font-semibold py-2 px-6 rounded-lg hover:bg-slate-600 transition">
                     <ArrowLeft size={18}/><span>Volver al Inicio</span>
                 </button>
             </div>
@@ -1019,14 +1110,14 @@ const UserPortal: React.FC<{ training: Training; onBackToHome: () => void }> = (
     return (
         <div className="max-w-4xl mx-auto py-8 px-4">
             <header className="text-center mb-8">
-                <GraduationCap size={48} className="mx-auto text-slate-800 mb-2"/>
-                <h1 className="text-4xl font-extrabold text-slate-800">{training.name}</h1>
-                <p className="text-slate-500 mt-2">Siga los pasos a continuación para completar su registro.</p>
+                <GraduationCap size={48} className="mx-auto text-slate-300 mb-2"/>
+                <h1 className="text-3xl sm:text-4xl font-extrabold text-slate-100">{training.name}</h1>
+                <p className="text-slate-400 mt-2">Siga los pasos a continuación para completar su registro.</p>
             </header>
 
-            <section className="bg-white p-6 rounded-xl shadow-md mb-8">
-                <h2 className="text-2xl font-bold text-slate-800 mb-4 flex items-center"><ClipboardList size={24} className="mr-2"/>Paso 1: Ver el material</h2>
-                <p className="text-slate-600 mb-4">Haga clic en cada enlace para ver el contenido. Se marcarán como vistos automáticamente.</p>
+            <section className="bg-slate-800 border border-slate-700 p-6 rounded-xl shadow-md mb-8">
+                <h2 className="text-2xl font-bold text-slate-100 mb-4 flex items-center"><ClipboardList size={24} className="mr-2 text-blue-400"/>Paso 1: Ver el material</h2>
+                <p className="text-slate-400 mb-4">Haga clic en cada enlace para ver el contenido. Se marcarán como vistos automáticamente.</p>
                 <div className="space-y-3">
                     {links.map(link => (
                         <a 
@@ -1035,16 +1126,16 @@ const UserPortal: React.FC<{ training: Training; onBackToHome: () => void }> = (
                             target="_blank" 
                             rel="noopener noreferrer" 
                             onClick={() => handleLinkClick(link.id)}
-                            className="flex items-center justify-between p-4 bg-slate-50 border border-slate-200 rounded-lg hover:bg-blue-50 hover:border-blue-300 transition-all group"
+                            className="flex items-center justify-between p-4 bg-slate-900 border border-slate-700 rounded-lg hover:bg-slate-700/50 hover:border-blue-500 transition-all group"
                         >
-                            <span className="font-semibold text-slate-700">{link.name || link.url}</span>
+                            <span className="font-semibold text-slate-200">{link.name || link.url}</span>
                              <div className="flex items-center space-x-3">
                                 {link.viewed ? (
-                                    <span className="flex items-center text-xs font-bold text-green-600"><CheckCircle size={16} className="mr-1"/>Visto</span>
+                                    <span className="flex items-center text-xs font-bold text-green-400"><CheckCircle size={16} className="mr-1"/>Visto</span>
                                 ) : (
-                                    <span className="flex items-center text-xs font-bold text-slate-500"><Eye size={16} className="mr-1"/>Pendiente</span>
+                                    <span className="flex items-center text-xs font-bold text-slate-400"><Eye size={16} className="mr-1"/>Pendiente</span>
                                 )}
-                                <ArrowRight size={20} className="text-slate-400 group-hover:text-blue-600 transition-colors"/>
+                                <ArrowRight size={20} className="text-slate-500 group-hover:text-blue-400 transition-colors"/>
                             </div>
                         </a>
                     ))}
@@ -1052,14 +1143,14 @@ const UserPortal: React.FC<{ training: Training; onBackToHome: () => void }> = (
             </section>
             
             {allLinksViewed && (
-                <section className="bg-white p-6 rounded-xl shadow-md animate-fade-in-up">
-                    <h2 className="text-2xl font-bold text-slate-800 mb-4 flex items-center"><User size={24} className="mr-2"/>Paso 2: Registrar sus datos</h2>
-                    <p className="text-slate-600 mb-4">Una vez visto todo el material, por favor complete el siguiente formulario con sus datos y firme para confirmar su asistencia.</p>
-                    <UserForm training={training} onSubmit={handleUserSubmit} />
+                <section className="bg-slate-800 border border-slate-700 p-6 rounded-xl shadow-md animate-fade-in-up">
+                    <h2 className="text-2xl font-bold text-slate-100 mb-4 flex items-center"><User size={24} className="mr-2 text-blue-400"/>Paso 2: Registrar sus datos</h2>
+                    <p className="text-slate-400 mb-4">Una vez visto todo el material, por favor complete el siguiente formulario con sus datos y firme para confirmar su asistencia.</p>
+                    <UserForm training={training} companyName={companyName} onSubmit={handleUserSubmit} />
                 </section>
             )}
 
-            <button onClick={onBackToHome} className="mt-12 flex items-center justify-center mx-auto space-x-2 text-sm text-slate-500 hover:text-slate-800 transition-colors">
+            <button onClick={onBackToHome} className="mt-12 flex items-center justify-center mx-auto space-x-2 text-sm text-slate-500 hover:text-slate-300 transition-colors">
                  <ArrowLeft size={16}/><span>No soy un asistente / Volver</span>
             </button>
         </div>
@@ -1086,17 +1177,17 @@ const AdminLogin: React.FC<{ onLogin: () => void; onUserView: () => void }> = ({
     };
 
     return (
-        <div className="min-h-screen bg-slate-100 flex flex-col items-center justify-center p-4">
+        <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4">
             <div className="w-full max-w-sm">
                 <div className="text-center mb-8">
-                     <ShieldCheck size={48} className="mx-auto text-slate-800 mb-2"/>
-                    <h1 className="text-3xl font-bold text-slate-800">Acceso de Administrador</h1>
-                    <p className="text-slate-500 mt-1">Ingrese la contraseña para continuar.</p>
+                     <ShieldCheck size={48} className="mx-auto text-slate-300 mb-2"/>
+                    <h1 className="text-3xl font-bold text-slate-100">Acceso de Administrador</h1>
+                    <p className="text-slate-400 mt-1">Ingrese la contraseña para continuar.</p>
                 </div>
 
-                <form onSubmit={handleSubmit} className="bg-white p-8 rounded-xl shadow-lg space-y-6">
+                <form onSubmit={handleSubmit} className="bg-slate-800 border border-slate-700 p-8 rounded-xl shadow-lg space-y-6">
                     <div>
-                        <label className="block text-sm font-semibold text-slate-700 mb-2" htmlFor="password">
+                        <label className="block text-sm font-semibold text-slate-300 mb-2" htmlFor="password">
                             Contraseña
                         </label>
                         <div className="relative">
@@ -1105,27 +1196,27 @@ const AdminLogin: React.FC<{ onLogin: () => void; onUserView: () => void }> = ({
                                 type={showPassword ? 'text' : 'password'}
                                 value={password}
                                 onChange={(e) => { setPassword(e.target.value); setError(''); }}
-                                className={`w-full p-3 pr-10 border rounded-lg ${error ? 'border-red-500' : 'border-slate-300'}`}
+                                className={`w-full p-3 pr-10 bg-slate-700 border rounded-lg text-slate-100 ${error ? 'border-red-500' : 'border-slate-600'}`}
                                 required
                             />
                             <button
                                 type="button"
                                 onClick={() => setShowPassword(!showPassword)}
-                                className="absolute inset-y-0 right-0 px-3 flex items-center text-slate-500"
+                                className="absolute inset-y-0 right-0 px-3 flex items-center text-slate-400"
                             >
                                 {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
                             </button>
                         </div>
-                        {error && <p className="text-red-500 text-xs mt-2">{error}</p>}
+                        {error && <p className="text-red-400 text-xs mt-2">{error}</p>}
                     </div>
-                    <button type="submit" className="w-full flex items-center justify-center space-x-2 bg-slate-800 text-white font-bold py-3 px-4 rounded-lg hover:bg-slate-700 transition">
+                    <button type="submit" className="w-full flex items-center justify-center space-x-2 bg-blue-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-blue-500 transition">
                          <LogIn size={20}/>
                         <span>Ingresar</span>
                     </button>
                 </form>
 
                  <div className="text-center mt-8">
-                    <button onClick={onUserView} className="text-sm text-slate-600 hover:text-slate-900 hover:underline transition">
+                    <button onClick={onUserView} className="text-sm text-slate-400 hover:text-slate-200 hover:underline transition">
                         ¿Buscas registrarte a una capacitación? Haz clic aquí
                     </button>
                 </div>
@@ -1139,17 +1230,22 @@ const App = () => {
     const [isAdmin, setIsAdmin] = useState(false);
     const [isLoadingTraining, setIsLoadingTraining] = useState(true);
     const [training, setTraining] = useState<Training | null>(null);
+    const [company, setCompany] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
 
     const loadSharedTraining = async () => {
         const urlParams = new URLSearchParams(window.location.search);
         const trainingKey = urlParams.get('trainingKey');
+        const companyName = urlParams.get('company');
         
         if (trainingKey) {
             try {
                 const fetchedTraining = await apiService.getSharedTraining(trainingKey);
                 if (fetchedTraining) {
                     setTraining(fetchedTraining);
+                    if(companyName) {
+                        setCompany(companyName);
+                    }
                 } else {
                     setError("El enlace de la capacitación no es válido o ha expirado.");
                 }
@@ -1176,15 +1272,14 @@ const App = () => {
     };
     
     const resetToHome = () => {
-        // Clear URL params and reload to go to the home/login screen
-        window.history.pushState({}, document.title, window.location.pathname);
-        setTraining(null);
-        setError(null);
-        setIsLoadingTraining(false); // Make sure we don't show a loader
+        // Navigate to the base URL of the app. This triggers a reload and state reset.
+        const url = new URL(window.location.href);
+        url.search = ''; // Clear query parameters
+        url.hash = ''; // Clear hash
+        window.location.href = url.pathname;
     };
     
     useEffect(() => {
-        // Check if user was previously logged in
         if (localStorage.getItem('isAdmin') === 'true') {
             setIsAdmin(true);
         }
@@ -1192,24 +1287,24 @@ const App = () => {
 
     if (isLoadingTraining) {
         return (
-            <div className="min-h-screen bg-slate-100 flex flex-col items-center justify-center p-4">
+            <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4">
                 <Spinner size={12} />
-                <p className="mt-4 text-slate-600">Cargando capacitación...</p>
+                <p className="mt-4 text-slate-400">Cargando capacitación...</p>
             </div>
         );
     }
     
      if (training) {
-        return <UserPortal training={training} onBackToHome={resetToHome} />;
+        return <UserPortal training={training} companyName={company} onBackToHome={resetToHome} />;
     }
 
     if(error){
          return (
-             <div className="min-h-screen bg-red-50 flex flex-col items-center justify-center p-4 text-center">
-                 <X size={48} className="text-red-500 mb-4" />
-                <h2 className="text-2xl font-bold text-red-800 mb-2">Error al Cargar</h2>
-                <p className="text-slate-600 max-w-md">{error}</p>
-                 <button onClick={resetToHome} className="mt-8 flex items-center justify-center mx-auto space-x-2 bg-slate-800 text-white font-semibold py-2 px-6 rounded-lg hover:bg-slate-700 transition">
+             <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 text-center">
+                 <X size={48} className="text-red-400 mb-4" />
+                <h2 className="text-2xl font-bold text-red-300 mb-2">Error al Cargar</h2>
+                <p className="text-slate-400 max-w-md">{error}</p>
+                 <button onClick={resetToHome} className="mt-8 flex items-center justify-center mx-auto space-x-2 bg-slate-700 text-white font-semibold py-2 px-6 rounded-lg hover:bg-slate-600 transition">
                     <ArrowLeft size={18}/><span>Volver al Inicio</span>
                 </button>
             </div>
@@ -1219,24 +1314,46 @@ const App = () => {
     if (isAdmin) {
         return <AdminDashboard onLogout={handleLogout} />;
     }
+    
+    const urlParams = new URLSearchParams(window.location.search);
+    if(urlParams.get('admin') === 'true') {
+        return <AdminLogin onLogin={handleLogin} onUserView={resetToHome}/>;
+    }
 
     return (
-        <div className="min-h-screen bg-slate-100 flex flex-col items-center justify-center p-4">
-            <div className="w-full max-w-lg text-center">
-                 <QrCode size={48} className="mx-auto text-slate-800 mb-2"/>
-                 <h1 className="text-3xl font-bold text-slate-800">Portal de Capacitaciones</h1>
-                <p className="text-slate-500 mt-2">
-                    Si eres un asistente, por favor utiliza el código QR o el enlace proporcionado por el administrador para acceder a la capacitación.
-                </p>
-                <div className="mt-8 border-t border-slate-300 pt-8">
-                    <button onClick={() => setIsAdmin(true)} className="text-sm text-slate-600 hover:text-slate-900 hover:underline transition">
-                        ¿Eres el administrador? Inicia sesión aquí
+        <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4">
+            <div className="w-full max-w-md text-center">
+                <GraduationCap size={64} className="mx-auto text-blue-400 mb-4" />
+                <h1 className="text-4xl font-extrabold text-slate-100">Bienvenido</h1>
+                <p className="text-lg text-slate-400 mt-2 mb-10">Portal de Capacitaciones</p>
+                
+                <div className="space-y-6">
+                    <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 text-left">
+                         <div className="flex items-center mb-3">
+                            <User size={22} className="mr-3 text-slate-300"/>
+                            <h2 className="text-xl font-bold text-slate-100">Soy Asistente</h2>
+                         </div>
+                         <p className="text-slate-400 leading-relaxed">
+                             Para registrar tu asistencia, escanea el código QR o utiliza el enlace que te proporcionó el administrador.
+                         </p>
+                    </div>
+
+                    <button 
+                        onClick={() => {
+                            const url = new URL(window.location.href);
+                            url.searchParams.set('admin', 'true');
+                            window.location.href = url.href;
+                        }} 
+                        className="w-full flex items-center justify-center space-x-3 bg-blue-600 text-white font-bold py-4 px-4 rounded-xl hover:bg-blue-500 transition-transform transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-blue-500 focus:ring-opacity-50"
+                    >
+                         <ShieldCheck size={22}/>
+                         <span className="text-lg">Acceso Administrador</span>
+                         <ArrowRight size={22}/>
                     </button>
                 </div>
             </div>
         </div>
     );
-
 };
 
 const root = ReactDOM.createRoot(document.getElementById('root') as HTMLElement);
