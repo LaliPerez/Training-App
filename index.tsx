@@ -1523,16 +1523,12 @@ const App: React.FC = () => {
     const [prefilledCompany, setPrefilledCompany] = useState<string | undefined>(undefined);
     const [error, setError] = useState<string | null>(null);
 
+    // This useEffect hook runs only once on initial component mount.
+    // It's responsible for handling deep links to training sessions.
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
-        const adminParam = params.get('admin');
         const trainingKey = params.get('trainingKey');
         const companyParam = params.get('company');
-
-        if (adminParam === 'true') {
-            setView('adminLogin');
-            return;
-        }
 
         if (trainingKey) {
             setView('loading');
@@ -1552,20 +1548,27 @@ const App: React.FC = () => {
                 setView('home');
             });
         } else {
+            // If there's no training key, start at the home screen.
             setView('home');
         }
-    }, []);
+    }, []); // Empty dependency array ensures this runs only once.
     
+    // Navigation is now handled by simple state changes.
     const goToAdminLogin = () => {
-        window.location.href = `${window.location.pathname}?admin=true`;
+        setView('adminLogin');
     };
 
     const handleAdminLogin = () => {
         setView('adminDashboard');
     };
     
-    const handleLogout = () => {
-        window.location.href = window.location.pathname;
+    const goHome = () => {
+        // Clear the URL just in case it had params from a training link.
+        history.pushState({}, '', window.location.pathname);
+        setView('home');
+        setCurrentTraining(null);
+        setPrefilledCompany(undefined);
+        setError(null);
     };
     
     if(error) {
@@ -1573,7 +1576,7 @@ const App: React.FC = () => {
             <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 text-center">
                  <h1 className="text-2xl font-bold text-red-400 mb-4">Error</h1>
                  <p className="text-slate-300 mb-6">{error}</p>
-                 <button onClick={() => window.location.href = window.location.pathname} className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Volver al Inicio</button>
+                 <button onClick={goHome} className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Volver al Inicio</button>
             </div>
         )
     }
@@ -1586,12 +1589,13 @@ const App: React.FC = () => {
         case 'adminLogin':
             return <AdminLogin onLogin={handleAdminLogin} />;
         case 'adminDashboard':
-            return <AdminDashboard onLogout={handleLogout} />;
+            return <AdminDashboard onLogout={goHome} />;
         case 'user':
              if (currentTraining) {
-                 return <UserTrainingPortal training={currentTraining} onBack={handleLogout} prefilledCompany={prefilledCompany} />;
+                 return <UserTrainingPortal training={currentTraining} onBack={goHome} prefilledCompany={prefilledCompany} />;
              }
-             return <WelcomeScreen onAdminClick={goToAdminLogin} />; // Fallback
+             // Fallback to home if state is inconsistent
+             return <WelcomeScreen onAdminClick={goToAdminLogin} />;
         default:
             return <WelcomeScreen onAdminClick={goToAdminLogin} />;
     }
