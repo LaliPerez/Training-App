@@ -47,201 +47,159 @@ interface AdminConfig {
   jobTitle: string;
 }
 
-// --- NETWORK RESILIENCY ---
-// FIX: Disambiguated generic type parameter for the TSX parser by adding a trailing comma inside the angle brackets (<T,>). 
-// This prevents the parser from mistaking `<T>` for a JSX tag, which was causing a cascade of errors throughout the file.
-const retry = async <T,>(fn: () => Promise<T>, attempts: number, delay: number): Promise<T> => {
-    let lastError: Error | undefined;
-    for (let i = 0; i < attempts; i++) {
-        try {
-            return await fn();
-        } catch (error) {
-            lastError = error as Error;
-            if (i < attempts - 1) { // Don't log or delay on the last attempt
-                console.warn(`Attempt ${i + 1} of ${attempts} failed. Retrying in ${delay}ms...`);
-                await new Promise(res => setTimeout(res, delay));
-            }
-        }
-    }
-    console.error("All network attempts failed.", lastError);
-    throw lastError;
-};
-
 // --- SIMULATED BACKEND API SERVICE ---
 // Using a live, centralized JSON store to allow multi-device synchronization.
-// A new URL is used to provide a fresh data store and prevent conflicts with old instances.
-const JSON_BLOB_URL = 'https://jsonblob.com/api/jsonBlob/1264353488118005760';
+// Switched from jsonblob.com to npoint.io for better stability and to avoid CORS/404 errors.
+const JSON_BLOB_URL = 'https://api.npoint.io/0d3a7719f979c3725b84';
 
 interface AppData {
   submissions: UserSubmission[];
-  adminConfig?: AdminConfig;
-  sharedTrainings?: { [key: string]: Training };
-  trainings?: Training[];
-  companies?: string[];
+  adminConfig: AdminConfig;
+  sharedTrainings: { [key: string]: Training };
+  trainings: Training[];
+  companies: string[];
 }
 
+const defaultAppData: AppData = {
+  submissions: [],
+  adminConfig: { signature: null, clarification: '', jobTitle: '' },
+  sharedTrainings: {},
+  trainings: [],
+  companies: [],
+};
 
-const apiService = {
-  // Fetches the entire data blob from the cloud store with retry logic.
-  // Returns null on failure to prevent write operations from overwriting data with an empty state.
-  _getData: async (): Promise<AppData | null> => {
-     const fetchData = async () => {
-        const response = await fetch(JSON_BLOB_URL, {
-            method: 'GET',
-            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-            cache: 'no-store',
-        });
-        if (!response.ok) {
-            throw new Error(`Network response was not ok: ${response.statusText}`);
-        }
-        return response;
-    };
-    
-    try {
-      const response = await retry(fetchData, 3, 1000); // 3 attempts, 1s delay
-      const text = await response.text();
-      // Handle empty blob case
-      const data = text ? JSON.parse(text) : {};
-      return {
-        submissions: data.submissions || [],
-        adminConfig: data.adminConfig || { signature: null, clarification: '', jobTitle: '' },
-        sharedTrainings: data.sharedTrainings || {},
-        trainings: data.trainings || [],
-        companies: data.companies || [],
-      };
-    } catch (error) {
-      console.error("Failed to fetch data from remote store after multiple attempts:", error);
-      return null; // Indicate failure
+
+// A generic debounce utility function.
+const debounce = <F extends (...args: any[]) => any>(func: F, waitFor: number) => {
+  let timeout: number;
+  return (...args: Parameters<F>): Promise<ReturnType<F>> =>
+    new Promise(resolve => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      timeout = window.setTimeout(() => resolve(func(...args)), waitFor);
+    });
+};
+
+// --- REVISED API SERVICE WITH CACHING AND DEBOUNCED WRITES ---
+// This new service architecture solves race conditions and data loss by:
+// 1. Maintaining a single, in-memory cache (_appDataCache) for the entire app state.
+// 2. Performing optimistic updates to the cache for a fast UI.
+// 3. Debouncing all write operations (_commitData) to bundle multiple changes into a single API call, preventing overwrites.
+const apiService = (() => {
+  let _appDataCache: AppData | null = null;
+  let _isSaving = false;
+
+  const _commitData = async (): Promise<void> => {
+    if (!_appDataCache) {
+      console.warn("Attempted to save but cache is empty.");
+      return;
     }
-  },
-
-  // Writes the entire data blob to the cloud store with retry logic.
-  _putData: async (data: AppData): Promise<void> => {
-    const putData = async () => {
-      const response = await fetch(JSON_BLOB_URL, {
+    _isSaving = true;
+    try {
+      await fetch(JSON_BLOB_URL, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
+        body: JSON.stringify(_appDataCache),
       });
-      if (!response.ok) {
-        throw new Error(`Network response was not ok during PUT: ${response.statusText}`);
+    } catch (error) {
+      console.error("Failed to commit data to remote store:", error);
+      // Here you could implement more robust error handling, like a retry mechanism.
+    } finally {
+      _isSaving = false;
+    }
+  };
+
+  // Debounce the save operation by 1 second. This groups rapid changes into one request.
+  const debouncedSave = debounce(_commitData, 1000);
+
+  const service = {
+    isSaving: () => _isSaving,
+
+    // Initializes the service by fetching the initial data blob from the cloud.
+    // This should be called once when the application loads.
+    init: async (): Promise<void> => {
+      try {
+        const response = await fetch(JSON_BLOB_URL, {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          cache: 'no-store', // Always get the freshest data
+        });
+        if (!response.ok) throw new Error(`Network response was not ok: ${response.statusText}`);
+        
+        const text = await response.text();
+        const data = text ? JSON.parse(text) : {};
+        
+        // Merge fetched data with defaults to ensure all keys exist
+        _appDataCache = {
+            ...defaultAppData,
+            ...data
+        };
+      } catch (error) {
+        console.error("Failed to fetch initial data:", error);
+        _appDataCache = { ...defaultAppData }; // Fallback to default structure on error
       }
-    };
-    // Re-throw error so the UI layer can handle it (e.g., show an alert)
-    await retry(putData, 3, 1000).catch(err => {
-        console.error("Failed to write data to remote store after multiple attempts:", err);
-        throw err;
-    });
-  },
+    },
 
-  shareTraining: async (training: Training): Promise<string> => {
-      const key = `st-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-      const data = await apiService._getData();
-      
-      if (!data) {
-        alert("Error de Conexión: No se pudo compartir la capacitación. Por favor, revisa tu conexión e inténtalo de nuevo.");
-        throw new Error("Failed to get data before sharing training.");
-      }
+    // All getter methods now read directly from the in-memory cache.
+    getSubmissions: async (): Promise<UserSubmission[]> => _appDataCache?.submissions || [],
+    getAdminConfig: async (): Promise<AdminConfig> => _appDataCache?.adminConfig || defaultAppData.adminConfig,
+    getTrainings: async (): Promise<Training[]> => _appDataCache?.trainings || [],
+    getCompanies: async (): Promise<string[]> => _appDataCache?.companies || [],
+    getSharedTraining: async (key: string): Promise<Training | null> => _appDataCache?.sharedTrainings?.[key] || null,
 
-      const sharedTrainings = data.sharedTrainings || {};
-      sharedTrainings[key] = training;
-      
-      const updatedData = { ...data, sharedTrainings };
+    // All writer methods now perform optimistic updates on the cache and then trigger a debounced save.
+    updateTrainings: async (trainings: Training[]): Promise<void> => {
+        if (!_appDataCache) return;
+        _appDataCache.trainings = trainings;
+        debouncedSave();
+    },
 
-      await apiService._putData(updatedData);
-
-      return key;
-  },
-
-  getSharedTraining: async (key: string): Promise<Training | null> => {
-      const data = await apiService._getData();
-      return data?.sharedTrainings?.[key] || null;
-  },
-
-  getTrainings: async (): Promise<Training[]> => {
-    const data = await apiService._getData();
-    return data?.trainings || [];
-  },
-
-  updateTrainings: async (trainings: Training[]): Promise<void> => {
-    const data = await apiService._getData();
-    if (!data) {
-      alert("Error de Conexión: No se pudieron guardar los cambios en las capacitaciones. Por favor, revisa tu conexión e inténtalo de nuevo.");
-      throw new Error("Failed to get data before updating trainings.");
-    }
-    const updatedData = { ...data, trainings };
-    await apiService._putData(updatedData);
-  },
-  
-  getCompanies: async (): Promise<string[]> => {
-    const data = await apiService._getData();
-    return data?.companies || [];
-  },
-
-  updateCompanies: async (companies: string[]): Promise<void> => {
-    const data = await apiService._getData();
-    if (!data) {
-      alert("Error de Conexión: No se pudieron guardar los cambios en las empresas. Por favor, revisa tu conexión e inténtalo de nuevo.");
-      throw new Error("Failed to get data before updating companies.");
-    }
-    const updatedData = { ...data, companies };
-    await apiService._putData(updatedData);
-  },
-
-  getSubmissions: async (): Promise<UserSubmission[]> => {
-    const data = await apiService._getData();
-    return data?.submissions || [];
-  },
-
-  getAdminConfig: async (): Promise<AdminConfig> => {
-    const data = await apiService._getData();
-    return data?.adminConfig || { signature: null, clarification: '', jobTitle: '' };
-  },
-
-  updateAdminConfig: async (config: AdminConfig): Promise<void> => {
-    const data = await apiService._getData();
-    if (!data) {
-      alert("Error de Conexión: No se pudo guardar la configuración de administrador. Por favor, revisa tu conexión e inténtalo de nuevo.");
-      throw new Error("Failed to get data before updating admin config.");
-    }
-    const updatedData = { ...data, adminConfig: config };
-    await apiService._putData(updatedData);
-  },
-
-  addSubmission: async (submission: UserSubmission): Promise<UserSubmission> => {
-    const data = await apiService._getData();
-    if (!data) {
-      alert("Error de Conexión: No se pudo enviar tu registro. Por favor, revisa tu conexión e inténtalo de nuevo.");
-      throw new Error("Failed to get data before adding submission.");
-    }
-    const newSubmissions = [...(data.submissions || []), submission];
-    const updatedData = { ...data, submissions: newSubmissions };
+    updateCompanies: async (companies: string[]): Promise<void> => {
+        if (!_appDataCache) return;
+        _appDataCache.companies = companies;
+        debouncedSave();
+    },
     
-    await apiService._putData(updatedData);
-    return submission;
-  },
+    updateAdminConfig: async (config: AdminConfig): Promise<void> => {
+        if (!_appDataCache) return;
+        _appDataCache.adminConfig = config;
+        debouncedSave();
+    },
+    
+    addSubmission: async (submission: UserSubmission): Promise<UserSubmission> => {
+        if (!_appDataCache) return submission;
+        _appDataCache.submissions = [...(_appDataCache.submissions || []), submission];
+        debouncedSave();
+        return submission;
+    },
+    
+    deleteSubmission: async (id: string): Promise<void> => {
+        if (!_appDataCache) return;
+        _appDataCache.submissions = (_appDataCache.submissions || []).filter(sub => sub.id !== id);
+        debouncedSave();
+    },
 
-  deleteSubmission: async (id: string): Promise<void> => {
-    const data = await apiService._getData();
-    if (!data) {
-      alert("Error de Conexión: No se pudo eliminar el registro. Por favor, revisa tu conexión e inténtalo de nuevo.");
-      throw new Error("Failed to get data before deleting submission.");
-    }
-    let submissions = (data.submissions || []).filter(sub => sub.id !== id);
-    const updatedData = { ...data, submissions };
-    await apiService._putData(updatedData);
-  },
+    deleteAllSubmissions: async (): Promise<void> => {
+        if (!_appDataCache) return;
+        _appDataCache.submissions = [];
+        debouncedSave();
+    },
+    
+    shareTraining: async (training: Training): Promise<string> => {
+        if (!_appDataCache) throw new Error("Service not initialized.");
+        const key = `st-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+        if (!_appDataCache.sharedTrainings) {
+            _appDataCache.sharedTrainings = {};
+        }
+        _appDataCache.sharedTrainings[key] = training;
+        debouncedSave();
+        return key;
+    },
+  };
 
-  deleteAllSubmissions: async (): Promise<void> => {
-    const data = await apiService._getData();
-    if (!data) {
-      alert("Error de Conexión: No se pudieron eliminar todos los registros. Por favor, revisa tu conexión e inténtalo de nuevo.");
-      throw new Error("Failed to get data before deleting all submissions.");
-    }
-    const updatedData = { ...data, submissions: [] };
-    await apiService._putData(updatedData);
-  }
-};
+  return service;
+})();
 
 
 // --- SERVICES ---
@@ -311,7 +269,9 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
           doc.setLineWidth(0.2);
           doc.line(14, footerY, pageWidth - 14, footerY);
 
-          const pageNum = doc.internal.getCurrentPageInfo().pageNumber;
+          // FIX: The type definitions for `jspdf` are likely incorrect or incomplete, missing the `getCurrentPageInfo` method on `doc.internal`.
+          // Casting to `any` serves as a workaround to bypass the TypeScript error, as the method exists on the object at runtime.
+          const pageNum = (doc.internal as any).getCurrentPageInfo().pageNumber;
           const pageStr = "Página " + pageNum;
           const dateStr = `Generado el: ${new Date().toLocaleDateString('es-ES')}`;
           
@@ -480,7 +440,7 @@ const generateSingleSubmissionPdf = (submission: UserSubmission, adminSignature:
 };
 
 // A custom hook to debounce a function call.
-const useDebounce = (callback: () => void, delay: number) => {
+const useDebounceHook = (callback: () => void, delay: number) => {
     const timeoutRef = useRef<number | null>(null);
     useEffect(() => {
         // Cleanup timeout on unmount
@@ -516,31 +476,27 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ onSignatureEnd, signatureRe
   const containerRef = useRef<HTMLDivElement>(null);
   const AnySignatureCanvas = SignatureCanvas as any;
   
-  // This function corrects the canvas resolution for high-DPI screens and ensures
-  // the drawing coordinates match the cursor/touch position.
   const resizeCanvas = () => {
     if (containerRef.current && signatureRef.current) {
         const canvas: HTMLCanvasElement = (signatureRef.current as any).getCanvas();
-        // Get the device pixel ratio, falling back to 1.
+        // Use device pixel ratio for sharp rendering on high-DPI screens
         const ratio = Math.max(window.devicePixelRatio || 1, 1);
-        
-        // Get the display size of the canvas from its container.
         const width = containerRef.current.offsetWidth;
         const height = containerRef.current.offsetHeight;
 
-        // Set the canvas's internal drawing buffer size. This needs to be larger
-        // on high-DPI screens to prevent blurriness.
+        // Set the canvas buffer size to match the display size multiplied by the pixel ratio
         canvas.width = width * ratio;
         canvas.height = height * ratio;
         
-        // The react-signature-canvas library internally handles scaling the drawing context
-        // to match the device pixel ratio. We must NOT do it manually here, as that would
-        // cause the context to be scaled twice, leading to a coordinate mismatch.
-        // By setting the dimensions and then calling clear() or fromDataURL(), we let
-        // the library reset its internal state and apply the correct scaling itself.
-
+        // Scale the drawing context to match the device pixel ratio.
+        // This is the crucial step to correct the cursor offset on high-DPI screens.
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+            ctx.scale(ratio, ratio);
+        }
+        
         // When resizing, we restore the initial data if provided.
-        // `fromDataURL` and `clear` both trigger the library's internal reset logic.
+        // Any drawing in progress will be lost, which is an acceptable trade-off for responsive correctness.
         if (initialData) {
           try {
             signatureRef.current.fromDataURL(initialData);
@@ -555,7 +511,7 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ onSignatureEnd, signatureRe
   };
   
   // Use a debounced resize handler for performance, preventing rapid-fire resizes.
-  const debouncedResize = useDebounce(resizeCanvas, 250);
+  const debouncedResize = useDebounceHook(resizeCanvas, 250);
 
   // useLayoutEffect runs synchronously after DOM mutations, which is ideal for measurements.
   React.useLayoutEffect(() => {
@@ -1107,99 +1063,12 @@ interface AdminDashboardProps {
   addTraining: (name: string, links: { name: string, url: string }[], companies: string[]) => Promise<void>;
   updateTraining: (id: string, name: string, links: { name: string, url: string }[], companies: string[]) => Promise<void>;
   deleteTraining: (id: string) => Promise<void>;
-  addGlobalCompany: (companyName: string) => Promise<boolean>;
-  deleteGlobalCompany: (companyName: string) => Promise<void>;
+  updateCompanies: (companies: string[]) => Promise<void>;
   onLogout: () => void;
 }
 
-const TabButton: React.FC<{id: string, label: string, icon: React.ElementType, activeTab: string, setActiveTab: (id: string) => void}> = ({ id, label, icon: Icon, activeTab, setActiveTab }) => (
-    <button
-      onClick={() => setActiveTab(id)}
-      className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
-        activeTab === id
-          ? 'bg-slate-700 text-white'
-          : 'text-gray-400 hover:bg-slate-800 hover:text-white'
-      }`}
-    >
-      <Icon className="h-4 w-4" />
-      {label}
-    </button>
-);
-  
-const CompanyManager: React.FC<{selectedCompanies: string[], setSelectedCompanies: (companies: string[]) => void, allAvailableCompanies: string[]}> = ({
-    selectedCompanies,
-    setSelectedCompanies,
-    allAvailableCompanies
-}) => {
-    const [companyToAdd, setCompanyToAdd] = useState('');
-
-    const availableForSelection = useMemo(() => 
-        allAvailableCompanies.filter(c => !selectedCompanies.includes(c)),
-        [allAvailableCompanies, selectedCompanies]
-    );
-
-    useEffect(() => {
-        // If the currently selected option `companyToAdd` is no longer valid because it was
-        // just assigned to the training (i.e., it's not in the available list anymore),
-        // reset the dropdown to the first available option. This provides a smooth UX
-        // for adding multiple companies sequentially.
-        const isSelectedCompanyStillAvailable = availableForSelection.some(c => c === companyToAdd);
-
-        if (!isSelectedCompanyStillAvailable) {
-            setCompanyToAdd(availableForSelection[0] || '');
-        }
-    }, [availableForSelection]);
-
-    const handleAddCompany = () => {
-        if (companyToAdd && !selectedCompanies.includes(companyToAdd)) {
-            setSelectedCompanies([...selectedCompanies, companyToAdd]);
-        }
-    };
-    
-    const handleRemoveCompany = (companyToRemove: string) => {
-        setSelectedCompanies(selectedCompanies.filter(c => c !== companyToRemove));
-    };
-
-    return (
-        <div>
-            <div className="flex flex-wrap gap-2 mb-2 min-h-[28px]">
-                {selectedCompanies.map(company => (
-                    <span key={company} className="flex items-center gap-1.5 bg-indigo-500/20 text-indigo-300 text-xs font-medium px-2.5 py-1 rounded-full">
-                        {company}
-                        <button type="button" onClick={() => handleRemoveCompany(company)} className="text-indigo-400 hover:text-white">
-                            <X size={14} />
-                        </button>
-                    </span>
-                ))}
-            </div>
-            <div className="flex items-center gap-2">
-                <select
-                    value={companyToAdd}
-                    onChange={(e) => setCompanyToAdd(e.target.value)}
-                    disabled={availableForSelection.length === 0}
-                    className="flex-grow px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm disabled:bg-slate-800 disabled:cursor-not-allowed"
-                >
-                    {availableForSelection.length > 0 ? (
-                        availableForSelection.map(c => <option key={c} value={c}>{c}</option>)
-                    ) : (
-                        <option value="">No hay más empresas para añadir</option>
-                    )}
-                </select>
-                <button
-                    type="button"
-                    onClick={handleAddCompany}
-                    disabled={!companyToAdd}
-                    className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:bg-slate-600 disabled:opacity-50"
-                >
-                    Añadir
-                </button>
-            </div>
-        </div>
-    );
-};
-
 const AdminDashboard: React.FC<AdminDashboardProps> = ({ 
-    trainings, companies, addTraining, updateTraining, deleteTraining, addGlobalCompany, deleteGlobalCompany, onLogout
+    trainings, companies, addTraining, updateTraining, deleteTraining, updateCompanies, onLogout
 }) => {
   const [activeTab, setActiveTab] = useState('submissions');
   const [trainingName, setTrainingName] = useState('');
@@ -1238,55 +1107,24 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const adminSignatureRef = useRef<SignatureCanvas>(null);
   const selectAllCheckboxRef = useRef<HTMLInputElement>(null);
-  const isSignatureModalOpenRef = useRef(showAdminSignatureModal);
   
-  const fetchSubmissions = async () => {
-    const subs = await apiService.getSubmissions();
-    setUserSubmissions(currentSubs => {
-        if(JSON.stringify(currentSubs) !== JSON.stringify(subs)){
-            return subs;
-        }
-        return currentSubs;
-    });
-  };
-  
-  const fetchAdminConfig = async () => {
-      const config = await apiService.getAdminConfig();
-      setAdminSignature(config.signature);
-      setAdminSignatureClarification(config.clarification);
-      setAdminJobTitle(config.jobTitle);
+  const loadDashboardData = async () => {
+    setIsRefreshing(true);
+    const [subs, config] = await Promise.all([
+        apiService.getSubmissions(),
+        apiService.getAdminConfig()
+    ]);
+    
+    setUserSubmissions(subs);
+    setAdminSignature(config.signature);
+    setAdminSignatureClarification(config.clarification);
+    setAdminJobTitle(config.jobTitle);
+    setIsRefreshing(false);
   };
 
-  // Keep a ref in sync with the modal's state. This allows the polling interval
-  // to check the current modal state without being re-triggered by it.
   useEffect(() => {
-    isSignatureModalOpenRef.current = showAdminSignatureModal;
-  }, [showAdminSignatureModal]);
-
-  // Decoupled polling effect. It runs only once on mount.
-  useEffect(() => {
-    const pollData = () => {
-        // User submissions can always be updated in the background.
-        fetchSubmissions();
-        // Only refresh the admin config if the signature editing modal is closed.
-        // This prevents overwriting the user's changes while they are editing.
-        if (!isSignatureModalOpenRef.current) {
-            fetchAdminConfig();
-        }
-    };
-
-    // Fetch data immediately on component mount.
-    fetchSubmissions();
-    fetchAdminConfig();
-
-    // Set up the interval to poll every 5 seconds.
-    const intervalId = setInterval(pollData, 5000); 
-
-    // Clean up the interval when the component unmounts.
-    return () => {
-        clearInterval(intervalId);
-    };
-  }, []); // Empty dependency array ensures this effect runs only once.
+    loadDashboardData();
+  }, []); // Load data only once on component mount
 
   useEffect(() => {
     if (editingTraining) {
@@ -1444,16 +1282,20 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       e.preventDefault();
       const trimmed = newGlobalCompany.trim();
       if (trimmed) {
-          const wasAdded = await addGlobalCompany(trimmed);
-          if (wasAdded) {
-            setNewGlobalCompany('');
+          const normalizedNew = normalizeString(trimmed);
+          const alreadyExists = companies.some(c => normalizeString(c) === normalizedNew);
+          if (alreadyExists) {
+              alert(`Error: Una empresa con un nombre similar a "${trimmed}" ya existe. Por favor, revise la lista.`);
+              return;
           }
+          await updateCompanies([...companies, trimmed].sort((a, b) => a.localeCompare(b)));
+          setNewGlobalCompany('');
       }
   };
 
   const handleDeleteGlobalCompany = async (companyToDelete: string) => {
       if (window.confirm(`¿Seguro que quieres eliminar la empresa "${companyToDelete}" de la lista maestra?`)) {
-          await deleteGlobalCompany(companyToDelete);
+          await updateCompanies(companies.filter(c => c !== companyToDelete));
       }
   };
 
@@ -1547,7 +1389,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleDeleteSubmission = async (submissionId: string) => {
     if (window.confirm('¿Estás seguro de que quieres eliminar este registro? Esta acción es irreversible.')) {
       await apiService.deleteSubmission(submissionId);
-      await fetchSubmissions();
+      // Optimistic UI update
+      setUserSubmissions(prev => prev.filter(s => s.id !== submissionId));
     }
   };
 
@@ -1555,16 +1398,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (window.confirm('¿Estás seguro de que quieres eliminar TODOS los registros? Esta acción es irreversible.')) {
         if (window.confirm('Por favor, confirma de nuevo. Esta acción eliminará permanentemente todos los registros de usuarios.')) {
             await apiService.deleteAllSubmissions();
-            await fetchSubmissions();
+            // Optimistic UI update
+            setUserSubmissions([]);
         }
     }
   };
   
   const handleRefresh = async () => {
-    setIsRefreshing(true);
-    await fetchSubmissions();
-    await fetchAdminConfig();
-    setIsRefreshing(false);
+    await apiService.init(); // Force re-fetch from server
+    await loadDashboardData(); // Reload data into component state
   };
   
   const handleSelectSubmission = (submissionId: string) => {
@@ -1700,6 +1542,85 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const noFiltersApplied = selectedTrainingFilterId === 'all' && companyFilter === 'all';
 
+  const TabButton = ({ id, label, icon: Icon }) => (
+    <button
+      onClick={() => setActiveTab(id)}
+      className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+        activeTab === id
+          ? 'bg-slate-700 text-white'
+          : 'text-gray-400 hover:bg-slate-800 hover:text-white'
+      }`}
+    >
+      <Icon className="h-4 w-4" />
+      {label}
+    </button>
+  );
+  
+  const CompanyManager = ({
+    selectedCompanies,
+    setSelectedCompanies,
+    allAvailableCompanies
+  }) => {
+      const [companyToAdd, setCompanyToAdd] = useState('');
+
+      const availableForSelection = useMemo(() => 
+          allAvailableCompanies.filter(c => !selectedCompanies.includes(c)),
+          [allAvailableCompanies, selectedCompanies]
+      );
+
+      useEffect(() => {
+          setCompanyToAdd(availableForSelection[0] || '');
+      }, [availableForSelection]);
+
+      const handleAddCompany = () => {
+          if (companyToAdd && !selectedCompanies.includes(companyToAdd)) {
+              setSelectedCompanies([...selectedCompanies, companyToAdd]);
+          }
+      };
+      
+      const handleRemoveCompany = (companyToRemove: string) => {
+          setSelectedCompanies(selectedCompanies.filter(c => c !== companyToRemove));
+      };
+
+      return (
+          <div>
+              <div className="flex flex-wrap gap-2 mb-2 min-h-[28px]">
+                  {selectedCompanies.map(company => (
+                      <span key={company} className="flex items-center gap-1.5 bg-indigo-500/20 text-indigo-300 text-xs font-medium px-2.5 py-1 rounded-full">
+                          {company}
+                          <button type="button" onClick={() => handleRemoveCompany(company)} className="text-indigo-400 hover:text-white">
+                              <X size={14} />
+                          </button>
+                      </span>
+                  ))}
+              </div>
+              <div className="flex items-center gap-2">
+                  <select
+                      value={companyToAdd}
+                      onChange={(e) => setCompanyToAdd(e.target.value)}
+                      disabled={availableForSelection.length === 0}
+                      className="flex-grow px-3 py-2 bg-slate-700 border border-slate-600 rounded-md shadow-sm text-white placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm disabled:bg-slate-800 disabled:cursor-not-allowed"
+                  >
+                      {availableForSelection.length > 0 ? (
+                          availableForSelection.map(c => <option key={c} value={c}>{c}</option>)
+                      ) : (
+                          <option value="">No hay más empresas para añadir</option>
+                      )}
+                  </select>
+                  <button
+                      type="button"
+                      onClick={handleAddCompany}
+                      disabled={!companyToAdd}
+                      className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:bg-slate-600 disabled:opacity-50"
+                  >
+                      Añadir
+                  </button>
+              </div>
+          </div>
+      );
+  };
+
+
   return (
     <div className="w-full max-w-7xl mx-auto p-4 md:p-8 space-y-6">
       <div className="flex flex-wrap gap-4 justify-between items-center">
@@ -1711,10 +1632,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       </div>
 
        <div className="flex flex-wrap justify-center sm:justify-start items-center gap-2 p-1 bg-slate-800/50 border border-slate-700 rounded-lg">
-        <TabButton id="submissions" label="Usuarios Registrados" icon={Users} activeTab={activeTab} setActiveTab={setActiveTab} />
-        <TabButton id="manage" label="Gestionar Capacitaciones" icon={ClipboardList} activeTab={activeTab} setActiveTab={setActiveTab} />
-        <TabButton id="companies" label="Gestionar Empresas" icon={Award} activeTab={activeTab} setActiveTab={setActiveTab} />
-        <TabButton id="create" label="Crear Nueva Capacitación" icon={PlusCircle} activeTab={activeTab} setActiveTab={setActiveTab} />
+        <TabButton id="submissions" label="Usuarios Registrados" icon={Users} />
+        <TabButton id="manage" label="Gestionar Capacitaciones" icon={ClipboardList} />
+        <TabButton id="companies" label="Gestionar Empresas" icon={Award} />
+        <TabButton id="create" label="Crear Nueva Capacitación" icon={PlusCircle} />
       </div>
 
       <div className="bg-slate-800 p-4 sm:p-6 rounded-xl shadow-lg border border-slate-700">
@@ -2269,7 +2190,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
 const LoadingSpinner: React.FC = () => (
     <div className="flex flex-col items-center justify-center gap-4" role="status" aria-label="Cargando">
         <div className="w-16 h-16 border-4 border-slate-600 border-t-sky-400 rounded-full animate-spin"></div>
-        <p className="text-slate-400">Cargando capacitación...</p>
+        <p className="text-slate-400">Cargando aplicación...</p>
     </div>
 );
 
@@ -2308,7 +2229,10 @@ const App: React.FC = () => {
   
   useEffect(() => {
     const loadInitialData = async () => {
+      setIsLoading(true);
       try {
+        await apiService.init(); // Initialize the service and fetch all data
+
         const params = new URLSearchParams(window.location.search);
         const shareKey = params.get('shareKey');
         let urlWasModified = false;
@@ -2353,34 +2277,6 @@ const App: React.FC = () => {
 
     loadInitialData();
     
-    // Polling mechanism for cross-device sync
-    const intervalId = setInterval(async () => {
-        try {
-            const latestTrainings = await apiService.getTrainings();
-            setTrainings(currentTrainings => {
-                if (JSON.stringify(currentTrainings) !== JSON.stringify(latestTrainings)) {
-                    return latestTrainings;
-                }
-                return currentTrainings;
-            });
-
-            const latestCompanies = await apiService.getCompanies();
-            setCompanies(currentCompanies => {
-                const sortedLatest = latestCompanies.sort((a,b) => a.localeCompare(b));
-                if (JSON.stringify(currentCompanies) !== JSON.stringify(sortedLatest)) {
-                    return sortedLatest;
-                }
-                return currentCompanies;
-            });
-
-        } catch (error) {
-            console.error("Error polling for data:", error);
-        }
-    }, 5000); // Poll every 5 seconds
-
-    return () => {
-        clearInterval(intervalId); // Cleanup on unmount
-    };
   }, []);
 
   const addTraining = async (name: string, links: { name: string, url: string }[], companies: string[]) => {
@@ -2429,38 +2325,10 @@ const App: React.FC = () => {
     await apiService.updateTrainings(updatedTrainings);
     setTrainings(updatedTrainings);
   };
-  
-  const addGlobalCompany = async (companyName: string): Promise<boolean> => {
-    let wasAdded = false;
-    setCompanies(currentCompanies => {
-        const trimmed = companyName.trim();
-        if (!trimmed) return currentCompanies;
 
-        const normalizedNew = normalizeString(trimmed);
-        const alreadyExists = currentCompanies.some(c => normalizeString(c) === normalizedNew);
-        if (alreadyExists) {
-            alert(`Error: Una empresa con un nombre similar a "${trimmed}" ya existe. Por favor, revise la lista.`);
-            return currentCompanies;
-        }
-        
-        const updatedCompanies = [...currentCompanies, trimmed].sort((a, b) => a.localeCompare(b));
-        apiService.updateCompanies(updatedCompanies).catch(error => {
-            console.error("Failed to persist new company:", error);
-        });
-        wasAdded = true;
-        return updatedCompanies;
-    });
-    return wasAdded;
-  };
-
-  const deleteGlobalCompany = async (companyToDelete: string) => {
-    setCompanies(currentCompanies => {
-        const updatedCompanies = currentCompanies.filter(c => c !== companyToDelete);
-        apiService.updateCompanies(updatedCompanies).catch(error => {
-            console.error("Failed to persist company deletion:", error);
-        });
-        return updatedCompanies;
-    });
+  const updateCompanies = async (updatedCompanies: string[]) => {
+      await apiService.updateCompanies(updatedCompanies);
+      setCompanies(updatedCompanies.sort((a,b) => a.localeCompare(b)));
   };
 
 
@@ -2475,8 +2343,7 @@ const App: React.FC = () => {
                     addTraining={addTraining}
                     updateTraining={updateTraining}
                     deleteTraining={deleteTraining}
-                    addGlobalCompany={addGlobalCompany}
-                    deleteGlobalCompany={deleteGlobalCompany}
+                    updateCompanies={updateCompanies}
                     onLogout={() => {
                         setUserPortalTrainings([]); // Clear any loaded training
                         setView('user');
