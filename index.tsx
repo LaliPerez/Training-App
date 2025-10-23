@@ -34,8 +34,8 @@ interface Training {
   id:string;
   name: string;
   links: TrainingLink[];
-  companies?: string[];
   shareKey?: string; // Clave permanente para compartir
+  companies?: string[]; // Empresas asociadas
 }
 
 interface UserSubmission {
@@ -417,6 +417,45 @@ const SignaturePad: React.FC<{ onSave: (dataUrl: string) => void; onClear: () =>
   );
 };
 
+const QRCodeDisplay: React.FC<{ shareKey: string | undefined }> = ({ shareKey }) => {
+    const [qrCodeUrl, setQrCodeUrl] = useState<string | null>(null);
+    const [error, setError] = useState(false);
+
+    useEffect(() => {
+        if (shareKey) {
+            setError(false);
+            setQrCodeUrl(null); // Reset for loading state
+            const baseUrl = `${window.location.origin}${window.location.pathname}?trainingKey=${shareKey}`;
+            QRCode.toDataURL(baseUrl, { width: 128, margin: 1, color: { dark: '#FFFFFF', light: '#1E293B' } })
+                .then(url => setQrCodeUrl(url))
+                .catch(err => {
+                    console.error("QR generation failed:", err);
+                    setError(true);
+                });
+        } else {
+            setQrCodeUrl(null);
+        }
+    }, [shareKey]);
+
+    if (!shareKey) {
+        return (
+            <div className="w-32 h-32 bg-slate-800 rounded-md flex items-center justify-center text-center text-xs text-slate-500 p-2">
+                Comparta la capacitación para generar el QR.
+            </div>
+        );
+    }
+
+    if (error) {
+        return <div className="w-32 h-32 bg-red-900/50 rounded-md flex items-center justify-center text-center text-xs text-red-300 p-2">Error al generar QR.</div>
+    }
+
+    if (!qrCodeUrl) {
+        return <div className="w-32 h-32 bg-slate-800 rounded-md flex items-center justify-center"><Spinner size={6} /></div>;
+    }
+
+    return <img src={qrCodeUrl} alt="Código QR de la capacitación" className="w-32 h-32 rounded-md border-4 border-slate-600"/>
+};
+
 
 const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     const [isLoading, setIsLoading] = useState(true);
@@ -440,8 +479,9 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     const [isShareModalOpen, setShareModalOpen] = useState(false);
     
     const [currentTraining, setCurrentTraining] = useState<Training | null>(null);
+    const [selectedCompaniesForTraining, setSelectedCompaniesForTraining] = useState<string[]>([]);
     const [trainingToShare, setTrainingToShare] = useState<Training | null>(null);
-    const [isGeneratingShareLink, setIsGeneratingShareLink] = useState<string | null>(null); // Stores ID of training being shared
+    const [isGeneratingShareLink, setIsGeneratingShareLink] = useState<string | null>(null);
 
     const adminSigCanvasRef = useRef<SignatureCanvas>(null);
     const isFetching = useRef(false);
@@ -545,9 +585,18 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         
         let updatedTrainings;
         if (currentTraining && currentTraining.id) {
-            updatedTrainings = data.trainings?.map(t => t.id === currentTraining.id ? { ...currentTraining, name, links } : t) || [];
+            // Editing existing training
+            updatedTrainings = data.trainings?.map(t => 
+                t.id === currentTraining.id ? { ...currentTraining, name, links, companies: selectedCompaniesForTraining } : t
+            ) || [];
         } else {
-            const newTraining: Training = { id: `train-${Date.now()}`, name, links };
+            // Creating new training
+            const newTraining: Training = { 
+                id: `train-${Date.now()}`, 
+                name, 
+                links, 
+                companies: selectedCompaniesForTraining 
+            };
             updatedTrainings = [...(data.trainings || []), newTraining];
         }
     
@@ -557,20 +606,15 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         setCurrentTraining(null);
     };
     
-    const removeLink = (indexToRemove: number) => {
-        if (currentTraining) {
-            const newLinks = currentTraining.links.filter((_, index) => index !== indexToRemove);
-            setCurrentTraining({ ...currentTraining, links: newLinks });
-        }
-    };
-    
     const openNewTrainingModal = () => {
-        setCurrentTraining({ id: '', name: '', links: [{id: 'new-1', url: '', viewed: false, name: ''}] });
+        setCurrentTraining({ id: '', name: '', links: [{id: 'new-1', url: '', viewed: false, name: ''}], companies: [] });
+        setSelectedCompaniesForTraining([]);
         setTrainingModalOpen(true);
     };
     
     const openEditTrainingModal = (training: Training) => {
         setCurrentTraining(JSON.parse(JSON.stringify(training)));
+        setSelectedCompaniesForTraining(training.companies || []);
         setTrainingModalOpen(true);
     };
 
@@ -618,12 +662,11 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     const handleShareTraining = async (training: Training) => {
         let trainingToOpen = training;
 
-        // If the training doesn't have a permanent share key, create one and save it.
         if (!training.shareKey) {
             setIsGeneratingShareLink(training.id);
             setError(null);
             try {
-                const newShareKey = `st-${training.id}-${Date.now()}`; // Add timestamp for uniqueness
+                const newShareKey = `st-${training.id}-${Date.now()}`;
                 const updatedTraining = { ...training, shareKey: newShareKey };
                 
                 const newTrainings = (data.trainings || []).map(t =>
@@ -631,17 +674,15 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                 );
                 const newData = { ...data, trainings: newTrainings };
 
-                // Use the core _putData to save without showing a global alert
                 await apiService._putData(newData);
                 
-                // Update local state to reflect the change immediately
                 setData(newData); 
                 trainingToOpen = updatedTraining;
 
             } catch (e: any) {
                 setError(`Error al generar el enlace permanente: ${e.message}`);
                 setIsGeneratingShareLink(null);
-                return; // Stop if it fails
+                return;
             } finally {
                 setIsGeneratingShareLink(null);
             }
@@ -691,7 +732,6 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
             <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
                 <p className="text-slate-400 text-center">Usa los siguientes enlaces o códigos QR para que los asistentes se registren. <strong className="text-slate-200">Estos enlaces son permanentes.</strong></p>
                 <div className="space-y-6">
-                    {/* General Link */}
                     <div>
                         <h4 className="font-bold text-slate-200 mb-2">Enlace General</h4>
                         <div className="flex flex-col sm:flex-row items-center gap-4">
@@ -702,7 +742,6 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                             </div>
                         </div>
                     </div>
-                    {/* Company Links */}
                     {(data.companies || []).length > 0 && (
                         <div className="border-t border-slate-700 pt-4">
                             <h4 className="font-bold text-slate-200 mb-2">Enlaces por Empresa</h4>
@@ -780,24 +819,28 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
 
                 <main className="grid grid-cols-1 xl:grid-cols-3 gap-8 mt-6">
                     <div className="xl:col-span-1 flex flex-col gap-8">
-                        {/* Trainings Section */}
-                        <section className="bg-slate-800 p-6 rounded-xl shadow-lg border border-slate-700">
+                        <section className="bg-slate-800 p-6 rounded-xl shadow-lg border border-slate-700 flex flex-col">
                             <div className="flex items-center justify-between mb-4">
                                 <h2 className="text-xl font-bold text-slate-100 flex items-center"><Award size={22} className="mr-2 text-blue-400"/>Capacitaciones</h2>
                                 <button onClick={openNewTrainingModal} className="flex items-center space-x-2 px-3 py-1.5 text-sm font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition">
                                 <PlusCircle size={16}/><span>Nueva</span>
                                 </button>
                             </div>
-                            <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2">
+                            <div className="space-y-4 flex-grow overflow-y-auto pr-2 -mr-2">
                                 {(data.trainings || []).length > 0 ? (
                                     data.trainings?.map(training => (
-                                        <div key={training.id} className="p-3 bg-slate-900 rounded-lg border border-slate-700 hover:border-blue-500 transition-all group">
-                                            <div className="flex items-start justify-between">
-                                                <div>
-                                                    <p className="font-semibold text-slate-200">{training.name}</p>
-                                                    <span className="text-xs text-slate-400">{training.links.length} enlace(s)</span>
+                                        <div key={training.id} className="p-4 bg-slate-900 rounded-lg border border-slate-700 group flex gap-4 items-start">
+                                            <QRCodeDisplay shareKey={training.shareKey} />
+                                            <div className="flex-grow flex flex-col h-full">
+                                                <p className="font-bold text-lg text-slate-100 leading-tight">{training.name}</p>
+                                                <div className="flex flex-wrap gap-1 mt-2">
+                                                    {(training.companies && training.companies.length > 0) ? (
+                                                        training.companies.map(c => <span key={c} className="text-xs font-semibold bg-slate-700 text-slate-300 px-2 py-0.5 rounded-full">{c}</span>)
+                                                    ) : (
+                                                        <span className="text-xs italic text-slate-500">Capacitación general</span>
+                                                    )}
                                                 </div>
-                                                <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                <div className="mt-auto flex items-center justify-end space-x-1 pt-2">
                                                     <button onClick={() => handleShareTraining(training)} disabled={isGeneratingShareLink === training.id} title="Compartir" className="p-1.5 text-slate-400 hover:bg-slate-700 rounded-md disabled:opacity-50">
                                                         {isGeneratingShareLink === training.id ? <Spinner size={4}/> : <Share2 size={16}/>}
                                                     </button>
@@ -812,7 +855,6 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                 )}
                             </div>
                         </section>
-                         {/* Companies Section */}
                          <section className="bg-slate-800 p-6 rounded-xl shadow-lg border border-slate-700">
                             <h2 className="text-xl font-bold text-slate-100 flex items-center mb-4"><Building size={22} className="mr-2 text-blue-400"/>Empresas</h2>
                             <div className="flex gap-2 mb-4">
@@ -840,7 +882,6 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                         </section>
                     </div>
                     
-                    {/* Submissions Section */}
                     <section className="xl:col-span-2 bg-slate-800 p-6 rounded-xl shadow-lg border border-slate-700">
                         <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mb-4">
                             <h2 className="text-xl font-bold text-slate-100 flex items-center"><Users size={22} className="mr-2 text-blue-400"/>Registros de Asistentes</h2>
@@ -853,7 +894,6 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                             </button>
                         </div>
 
-                        {/* Filters */}
                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
                             <input
                                 type="text"
@@ -872,7 +912,6 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                             </select>
                         </div>
                         
-                        {/* Submissions Table */}
                         <div className="overflow-x-auto max-h-[60vh] overflow-y-auto border border-slate-700 rounded-lg">
                              <table className="min-w-full divide-y divide-slate-700">
                                 <thead className="bg-slate-900 sticky top-0">
@@ -915,7 +954,6 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                 </main>
             </div>
             
-             {/* Modals */}
             <Modal isOpen={isConfigModalOpen} onClose={() => setConfigModalOpen(false)} title="Configurar Datos del Administrador">
                 <div className="space-y-4">
                     <div>
@@ -956,7 +994,12 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                             <div key={link.id || index} className="flex items-center space-x-2 training-link-group">
                                 <input type="text" placeholder="Nombre (Opcional)" defaultValue={link.name} className="flex-grow p-2 bg-slate-700 border border-slate-600 rounded-md text-sm text-slate-200 training-link-name" />
                                 <input type="url" placeholder="https://ejemplo.com" defaultValue={link.url} required className="flex-grow p-2 bg-slate-700 border border-slate-600 rounded-md text-sm text-slate-200 training-link-url" />
-                                <button type="button" onClick={() => removeLink(index)} className="p-2 text-red-400 hover:bg-red-900/50 rounded-full transition"><Trash2 size={16}/></button>
+                                <button type="button" onClick={() => {
+                                    if(currentTraining) {
+                                        const newLinks = currentTraining.links.filter((_, i) => i !== index);
+                                        setCurrentTraining({...currentTraining, links: newLinks});
+                                    }
+                                }} className="p-2 text-red-400 hover:bg-red-900/50 rounded-full transition"><Trash2 size={16}/></button>
                             </div>
                         ))}
                         </div>
@@ -970,6 +1013,28 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                         }} className="mt-2 flex items-center space-x-2 text-sm font-semibold text-blue-400 hover:text-blue-300">
                             <PlusCircle size={16}/><span>Añadir Enlace</span>
                         </button>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-slate-300 mb-2">Asignar a Empresas (Opcional)</label>
+                        <div className="max-h-32 overflow-y-auto space-y-2 p-3 bg-slate-700 rounded-md border border-slate-600">
+                            {(data.companies && data.companies.length > 0) ? data.companies.map(company => (
+                                <label key={company} className="flex items-center space-x-3 cursor-pointer">
+                                    <input 
+                                        type="checkbox"
+                                        checked={selectedCompaniesForTraining.includes(company)}
+                                        onChange={() => {
+                                            setSelectedCompaniesForTraining(prev => 
+                                                prev.includes(company) 
+                                                    ? prev.filter(c => c !== company)
+                                                    : [...prev, company]
+                                            );
+                                        }}
+                                        className="h-4 w-4 rounded bg-slate-600 border-slate-500 text-blue-600 focus:ring-blue-500"
+                                    />
+                                    <span className="text-slate-300">{company}</span>
+                                </label>
+                            )) : <p className="text-sm text-slate-500">No hay empresas. Añádalas desde el panel de Empresas.</p>}
+                        </div>
                     </div>
                     <div className="flex justify-end pt-4">
                          <button onClick={handleSaveTraining} disabled={isSaving} className="flex items-center justify-center w-32 h-10 px-4 py-2 font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition disabled:bg-slate-600">
@@ -1168,7 +1233,7 @@ const AdminLogin: React.FC<{ onLogin: () => void; onUserView: () => void }> = ({
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         // Simple hardcoded password. In a real app, this should be secure.
-        if (password === 'admin') {
+        if (password === 'admin2025') {
             onLogin();
         } else {
             setError('Contraseña incorrecta.');
