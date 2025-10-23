@@ -49,157 +49,156 @@ interface AdminConfig {
 
 // --- SIMULATED BACKEND API SERVICE ---
 // Using a live, centralized JSON store to allow multi-device synchronization.
-// Switched from jsonblob.com to npoint.io for better stability and to avoid CORS/404 errors.
-const JSON_BLOB_URL = 'https://api.npoint.io/0d3a7719f979c3725b84';
+const JSON_BLOB_URL = 'https://jsonblob.com/api/jsonBlob/1262973950664982528';
 
 interface AppData {
   submissions: UserSubmission[];
-  adminConfig: AdminConfig;
-  sharedTrainings: { [key: string]: Training };
-  trainings: Training[];
-  companies: string[];
+  adminConfig?: AdminConfig;
+  sharedTrainings?: { [key: string]: Training };
+  trainings?: Training[];
+  companies?: string[];
 }
 
-const defaultAppData: AppData = {
-  submissions: [],
-  adminConfig: { signature: null, clarification: '', jobTitle: '' },
-  sharedTrainings: {},
-  trainings: [],
-  companies: [],
-};
 
-
-// A generic debounce utility function.
-const debounce = <F extends (...args: any[]) => any>(func: F, waitFor: number) => {
-  let timeout: number;
-  return (...args: Parameters<F>): Promise<ReturnType<F>> =>
-    new Promise(resolve => {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-      timeout = window.setTimeout(() => resolve(func(...args)), waitFor);
-    });
-};
-
-// --- REVISED API SERVICE WITH CACHING AND DEBOUNCED WRITES ---
-// This new service architecture solves race conditions and data loss by:
-// 1. Maintaining a single, in-memory cache (_appDataCache) for the entire app state.
-// 2. Performing optimistic updates to the cache for a fast UI.
-// 3. Debouncing all write operations (_commitData) to bundle multiple changes into a single API call, preventing overwrites.
-const apiService = (() => {
-  let _appDataCache: AppData | null = null;
-  let _isSaving = false;
-
-  const _commitData = async (): Promise<void> => {
-    if (!_appDataCache) {
-      console.warn("Attempted to save but cache is empty.");
-      return;
-    }
-    _isSaving = true;
+const apiService = {
+  // Fetches the entire data blob from the cloud store.
+  _getData: async (): Promise<AppData> => {
     try {
+      const response = await fetch(JSON_BLOB_URL, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        cache: 'no-store', // Prevent browser caching to ensure data is always fresh
+      });
+      if (!response.ok) {
+        console.error(`Network response was not ok: ${response.statusText}`);
+        return { submissions: [], adminConfig: { signature: null, clarification: '', jobTitle: '' }, sharedTrainings: {}, trainings: [], companies: [] };
+      }
+      const text = await response.text();
+      // Handle empty blob case
+      const data = text ? JSON.parse(text) : {};
+      return {
+        submissions: data.submissions || [],
+        adminConfig: data.adminConfig || { signature: null, clarification: '', jobTitle: '' },
+        sharedTrainings: data.sharedTrainings || {},
+        trainings: data.trainings || [],
+        companies: data.companies || [],
+      };
+    } catch (error) {
+      console.error("Failed to fetch data from remote store:", error);
+      return { submissions: [], adminConfig: { signature: null, clarification: '', jobTitle: '' }, sharedTrainings: {}, trainings: [], companies: [] }; // Return default structure on error
+    }
+  },
+
+  shareTraining: async (training: Training): Promise<string> => {
+      const key = `st-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      const data = await apiService._getData();
+      const sharedTrainings = data.sharedTrainings || {};
+      sharedTrainings[key] = training;
+      
+      const updatedData = { ...data, sharedTrainings };
+
       await fetch(JSON_BLOB_URL, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updatedData),
+      });
+
+      return key;
+  },
+
+  getSharedTraining: async (key: string): Promise<Training | null> => {
+      const data = await apiService._getData();
+      return data.sharedTrainings?.[key] || null;
+  },
+
+  getTrainings: async (): Promise<Training[]> => {
+    const data = await apiService._getData();
+    return data.trainings || [];
+  },
+
+  updateTrainings: async (trainings: Training[]): Promise<void> => {
+    const data = await apiService._getData();
+    const updatedData = { ...data, trainings };
+    
+    await fetch(JSON_BLOB_URL, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(_appDataCache),
-      });
-    } catch (error) {
-      console.error("Failed to commit data to remote store:", error);
-      // Here you could implement more robust error handling, like a retry mechanism.
-    } finally {
-      _isSaving = false;
-    }
-  };
+        body: JSON.stringify(updatedData),
+    });
+  },
+  
+  getCompanies: async (): Promise<string[]> => {
+    const data = await apiService._getData();
+    return data.companies || [];
+  },
 
-  // Debounce the save operation by 1 second. This groups rapid changes into one request.
-  const debouncedSave = debounce(_commitData, 1000);
-
-  const service = {
-    isSaving: () => _isSaving,
-
-    // Initializes the service by fetching the initial data blob from the cloud.
-    // This should be called once when the application loads.
-    init: async (): Promise<void> => {
-      try {
-        const response = await fetch(JSON_BLOB_URL, {
-          method: 'GET',
-          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-          cache: 'no-store', // Always get the freshest data
-        });
-        if (!response.ok) throw new Error(`Network response was not ok: ${response.statusText}`);
-        
-        const text = await response.text();
-        const data = text ? JSON.parse(text) : {};
-        
-        // Merge fetched data with defaults to ensure all keys exist
-        _appDataCache = {
-            ...defaultAppData,
-            ...data
-        };
-      } catch (error) {
-        console.error("Failed to fetch initial data:", error);
-        _appDataCache = { ...defaultAppData }; // Fallback to default structure on error
-      }
-    },
-
-    // All getter methods now read directly from the in-memory cache.
-    getSubmissions: async (): Promise<UserSubmission[]> => _appDataCache?.submissions || [],
-    getAdminConfig: async (): Promise<AdminConfig> => _appDataCache?.adminConfig || defaultAppData.adminConfig,
-    getTrainings: async (): Promise<Training[]> => _appDataCache?.trainings || [],
-    getCompanies: async (): Promise<string[]> => _appDataCache?.companies || [],
-    getSharedTraining: async (key: string): Promise<Training | null> => _appDataCache?.sharedTrainings?.[key] || null,
-
-    // All writer methods now perform optimistic updates on the cache and then trigger a debounced save.
-    updateTrainings: async (trainings: Training[]): Promise<void> => {
-        if (!_appDataCache) return;
-        _appDataCache.trainings = trainings;
-        debouncedSave();
-    },
-
-    updateCompanies: async (companies: string[]): Promise<void> => {
-        if (!_appDataCache) return;
-        _appDataCache.companies = companies;
-        debouncedSave();
-    },
+  updateCompanies: async (companies: string[]): Promise<void> => {
+    const data = await apiService._getData();
+    const updatedData = { ...data, companies };
     
-    updateAdminConfig: async (config: AdminConfig): Promise<void> => {
-        if (!_appDataCache) return;
-        _appDataCache.adminConfig = config;
-        debouncedSave();
-    },
-    
-    addSubmission: async (submission: UserSubmission): Promise<UserSubmission> => {
-        if (!_appDataCache) return submission;
-        _appDataCache.submissions = [...(_appDataCache.submissions || []), submission];
-        debouncedSave();
-        return submission;
-    },
-    
-    deleteSubmission: async (id: string): Promise<void> => {
-        if (!_appDataCache) return;
-        _appDataCache.submissions = (_appDataCache.submissions || []).filter(sub => sub.id !== id);
-        debouncedSave();
-    },
+    await fetch(JSON_BLOB_URL, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedData),
+    });
+  },
 
-    deleteAllSubmissions: async (): Promise<void> => {
-        if (!_appDataCache) return;
-        _appDataCache.submissions = [];
-        debouncedSave();
-    },
-    
-    shareTraining: async (training: Training): Promise<string> => {
-        if (!_appDataCache) throw new Error("Service not initialized.");
-        const key = `st-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-        if (!_appDataCache.sharedTrainings) {
-            _appDataCache.sharedTrainings = {};
-        }
-        _appDataCache.sharedTrainings[key] = training;
-        debouncedSave();
-        return key;
-    },
-  };
+  getSubmissions: async (): Promise<UserSubmission[]> => {
+    const data = await apiService._getData();
+    return data.submissions || [];
+  },
 
-  return service;
-})();
+  getAdminConfig: async (): Promise<AdminConfig> => {
+    const data = await apiService._getData();
+    return data.adminConfig || { signature: null, clarification: '', jobTitle: '' };
+  },
+
+  updateAdminConfig: async (config: AdminConfig): Promise<void> => {
+    const data = await apiService._getData();
+    const updatedData = { ...data, adminConfig: config };
+    
+    await fetch(JSON_BLOB_URL, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedData),
+    });
+  },
+
+  addSubmission: async (submission: UserSubmission): Promise<UserSubmission> => {
+    const data = await apiService._getData();
+    const newSubmissions = [...(data.submissions || []), submission];
+    const updatedData = { ...data, submissions: newSubmissions };
+    
+    await fetch(JSON_BLOB_URL, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedData),
+    });
+    return submission;
+  },
+
+  deleteSubmission: async (id: string): Promise<void> => {
+    const data = await apiService._getData();
+    let submissions = (data.submissions || []).filter(sub => sub.id !== id);
+    const updatedData = { ...data, submissions };
+    
+    await fetch(JSON_BLOB_URL, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedData),
+    });
+  },
+
+  deleteAllSubmissions: async (): Promise<void> => {
+    const data = await apiService._getData();
+    const updatedData = { ...data, submissions: [] };
+    await fetch(JSON_BLOB_URL, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedData),
+    });
+  }
+};
 
 
 // --- SERVICES ---
@@ -269,9 +268,7 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
           doc.setLineWidth(0.2);
           doc.line(14, footerY, pageWidth - 14, footerY);
 
-          // FIX: The type definitions for `jspdf` are likely incorrect or incomplete, missing the `getCurrentPageInfo` method on `doc.internal`.
-          // Casting to `any` serves as a workaround to bypass the TypeScript error, as the method exists on the object at runtime.
-          const pageNum = (doc.internal as any).getCurrentPageInfo().pageNumber;
+          const pageNum = doc.internal.getCurrentPageInfo().pageNumber;
           const pageStr = "Página " + pageNum;
           const dateStr = `Generado el: ${new Date().toLocaleDateString('es-ES')}`;
           
@@ -440,7 +437,7 @@ const generateSingleSubmissionPdf = (submission: UserSubmission, adminSignature:
 };
 
 // A custom hook to debounce a function call.
-const useDebounceHook = (callback: () => void, delay: number) => {
+const useDebounce = (callback: () => void, delay: number) => {
     const timeoutRef = useRef<number | null>(null);
     useEffect(() => {
         // Cleanup timeout on unmount
@@ -511,7 +508,7 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ onSignatureEnd, signatureRe
   };
   
   // Use a debounced resize handler for performance, preventing rapid-fire resizes.
-  const debouncedResize = useDebounceHook(resizeCanvas, 250);
+  const debouncedResize = useDebounce(resizeCanvas, 250);
 
   // useLayoutEffect runs synchronously after DOM mutations, which is ideal for measurements.
   React.useLayoutEffect(() => {
@@ -1108,23 +1105,45 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const adminSignatureRef = useRef<SignatureCanvas>(null);
   const selectAllCheckboxRef = useRef<HTMLInputElement>(null);
   
-  const loadDashboardData = async () => {
-    setIsRefreshing(true);
-    const [subs, config] = await Promise.all([
-        apiService.getSubmissions(),
-        apiService.getAdminConfig()
-    ]);
-    
-    setUserSubmissions(subs);
-    setAdminSignature(config.signature);
-    setAdminSignatureClarification(config.clarification);
-    setAdminJobTitle(config.jobTitle);
-    setIsRefreshing(false);
+  const fetchSubmissions = async () => {
+    const subs = await apiService.getSubmissions();
+    setUserSubmissions(currentSubs => {
+        if(JSON.stringify(currentSubs) !== JSON.stringify(subs)){
+            return subs;
+        }
+        return currentSubs;
+    });
+  };
+  
+  const fetchAdminConfig = async () => {
+      const config = await apiService.getAdminConfig();
+      setAdminSignature(config.signature);
+      setAdminSignatureClarification(config.clarification);
+      setAdminJobTitle(config.jobTitle);
   };
 
   useEffect(() => {
-    loadDashboardData();
-  }, []); // Load data only once on component mount
+    const pollData = () => {
+        // User submissions can always be updated in the background.
+        fetchSubmissions();
+        // Only refresh the admin config if the signature editing modal is closed.
+        // This prevents overwriting the user's changes while they are editing.
+        if (!showAdminSignatureModal) {
+            fetchAdminConfig();
+        }
+    };
+
+    // Fetch data immediately on component mount.
+    pollData();
+
+    // Set up the interval to poll every 5 seconds.
+    const intervalId = setInterval(pollData, 5000); 
+
+    // Clean up the interval when the component unmounts.
+    return () => {
+        clearInterval(intervalId);
+    };
+  }, [showAdminSignatureModal]); // Rerun effect if modal state changes to get latest check
 
   useEffect(() => {
     if (editingTraining) {
@@ -1389,8 +1408,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleDeleteSubmission = async (submissionId: string) => {
     if (window.confirm('¿Estás seguro de que quieres eliminar este registro? Esta acción es irreversible.')) {
       await apiService.deleteSubmission(submissionId);
-      // Optimistic UI update
-      setUserSubmissions(prev => prev.filter(s => s.id !== submissionId));
+      await fetchSubmissions();
     }
   };
 
@@ -1398,15 +1416,16 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (window.confirm('¿Estás seguro de que quieres eliminar TODOS los registros? Esta acción es irreversible.')) {
         if (window.confirm('Por favor, confirma de nuevo. Esta acción eliminará permanentemente todos los registros de usuarios.')) {
             await apiService.deleteAllSubmissions();
-            // Optimistic UI update
-            setUserSubmissions([]);
+            await fetchSubmissions();
         }
     }
   };
   
   const handleRefresh = async () => {
-    await apiService.init(); // Force re-fetch from server
-    await loadDashboardData(); // Reload data into component state
+    setIsRefreshing(true);
+    await fetchSubmissions();
+    await fetchAdminConfig();
+    setIsRefreshing(false);
   };
   
   const handleSelectSubmission = (submissionId: string) => {
@@ -2190,7 +2209,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
 const LoadingSpinner: React.FC = () => (
     <div className="flex flex-col items-center justify-center gap-4" role="status" aria-label="Cargando">
         <div className="w-16 h-16 border-4 border-slate-600 border-t-sky-400 rounded-full animate-spin"></div>
-        <p className="text-slate-400">Cargando aplicación...</p>
+        <p className="text-slate-400">Cargando capacitación...</p>
     </div>
 );
 
@@ -2229,10 +2248,7 @@ const App: React.FC = () => {
   
   useEffect(() => {
     const loadInitialData = async () => {
-      setIsLoading(true);
       try {
-        await apiService.init(); // Initialize the service and fetch all data
-
         const params = new URLSearchParams(window.location.search);
         const shareKey = params.get('shareKey');
         let urlWasModified = false;
@@ -2246,20 +2262,27 @@ const App: React.FC = () => {
         if (shareKey) {
           const sharedTrainingRef = await apiService.getSharedTraining(shareKey);
           
+          // Prioritize the most up-to-date version from the main list if available
           const latestTraining = sharedTrainingRef 
             ? adminTrainings.find(t => t.id === sharedTrainingRef.id) 
             : null;
 
-          if (latestTraining) {
+          // Fallback to using the data from the share link itself if the main one isn't found
+          const trainingToShow = latestTraining || sharedTrainingRef;
+
+          if (trainingToShow) {
+            // Always present a clean, un-started version for a new user session
             const pristineUserSessionTraining = {
-              ...latestTraining,
-              links: latestTraining.links.map(link => ({ ...link, viewed: false }))
+              ...trainingToShow,
+              links: trainingToShow.links.map(link => ({ ...link, viewed: false }))
             };
 
-            localStorage.removeItem(`training-progress-${latestTraining.id}`);
+            // Clear any previous local progress for this training ID to ensure a fresh start
+            localStorage.removeItem(`training-progress-${trainingToShow.id}`);
             setUserPortalTrainings([pristineUserSessionTraining]);
           } else {
-            alert("Esta capacitación ya no está disponible o ha sido eliminada por el administrador.");
+            // This case now only happens if the shareKey was completely invalid
+            alert("El enlace de la capacitación es inválido o la capacitación ha sido eliminada. Por favor, consulte con el administrador.");
           }
           urlWasModified = true;
         } 
@@ -2277,6 +2300,34 @@ const App: React.FC = () => {
 
     loadInitialData();
     
+    // Polling mechanism for cross-device sync
+    const intervalId = setInterval(async () => {
+        try {
+            const latestTrainings = await apiService.getTrainings();
+            setTrainings(currentTrainings => {
+                if (JSON.stringify(currentTrainings) !== JSON.stringify(latestTrainings)) {
+                    return latestTrainings;
+                }
+                return currentTrainings;
+            });
+
+            const latestCompanies = await apiService.getCompanies();
+            setCompanies(currentCompanies => {
+                const sortedLatest = latestCompanies.sort((a,b) => a.localeCompare(b));
+                if (JSON.stringify(currentCompanies) !== JSON.stringify(sortedLatest)) {
+                    return sortedLatest;
+                }
+                return currentCompanies;
+            });
+
+        } catch (error) {
+            console.error("Error polling for data:", error);
+        }
+    }, 5000); // Poll every 5 seconds
+
+    return () => {
+        clearInterval(intervalId); // Cleanup on unmount
+    };
   }, []);
 
   const addTraining = async (name: string, links: { name: string, url: string }[], companies: string[]) => {
