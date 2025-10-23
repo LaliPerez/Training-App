@@ -4,7 +4,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import SignatureCanvas from 'react-signature-canvas';
 import QRCode from 'qrcode';
-import { ShieldCheck, User, PlusCircle, Users, FileDown, LogOut, Trash2, Edit, X, Share2, Copy, Eye, EyeOff, FileText, CheckCircle, ArrowLeft, Send, LogIn, RefreshCw, Award, ClipboardList, GraduationCap, Building, ArrowRight, QrCode } from 'lucide-react';
+import { ShieldCheck, User, PlusCircle, Users, FileDown, LogOut, Trash2, Edit, X, Share2, Copy, Eye, EyeOff, FileText, CheckCircle, ArrowLeft, Send, LogIn, RefreshCw, Award, ClipboardList, GraduationCap, Building, ArrowRight, QrCode, Info, XCircle } from 'lucide-react';
 
 // --- CONFIGURACIÓN REQUERIDA ---
 // 1. Ve a https://jsonbin.io, crea una cuenta gratuita.
@@ -15,6 +15,8 @@ const JSONBIN_BIN_ID = '68fa221e43b1c97be97a84f2'; // Ejemplo: '667d7e3aad19ca34
 // 4. Ve a la sección "API Keys" en tu perfil.
 // 5. Pega tu "Master Key" aquí.
 const JSONBIN_MASTER_KEY = '$2a$10$CGBmrjbO1PM5CPstFtwXN.PMvfkyYUpEb9rGtO5rJZBLuEtAfWQ7i'; // Ejemplo: '$2a$10$...'
+
+type ToastType = 'success' | 'error' | 'info';
 
 const normalizeString = (str: string): string => {
     if (!str) return '';
@@ -33,7 +35,12 @@ interface Training {
   name: string;
   links: TrainingLink[];
   shareKey?: string; // Clave permanente para compartir
-  companies?: string[]; // Empresas asociadas
+  companies?: string[]; // Nombres de empresas asociadas
+}
+
+interface Company {
+    name: string;
+    cuit?: string;
 }
 
 interface UserSubmission {
@@ -43,7 +50,7 @@ interface UserSubmission {
   firstName: string;
   lastName: string;
   dni: string;
-  company: string;
+  company: string; // This is the company NAME
   signature: string; // Base64 data URL from the signature pad
   timestamp: string;
   email?: string;
@@ -60,8 +67,14 @@ interface AppData {
   submissions: UserSubmission[];
   adminConfig?: AdminConfig;
   trainings?: Training[];
-  companies?: string[];
+  companies?: Company[];
 }
+
+interface PublicConfig {
+  adminConfig: AdminConfig;
+  companies: Company[];
+}
+
 
 // --- CLOUD API SERVICE (JSONBIN.IO) ---
 const apiService = {
@@ -114,17 +127,20 @@ const apiService = {
       return data.trainings?.find(t => t.shareKey === key) || null;
   },
 
-  getAdminConfig: async (): Promise<AdminConfig> => {
-    const data = await apiService._getData();
-    return data.adminConfig || { signature: null, clarification: '', jobTitle: '' };
+  getPublicConfig: async (): Promise<PublicConfig> => {
+      const data = await apiService._getData();
+      return {
+          adminConfig: data.adminConfig || { signature: null, clarification: '', jobTitle: '' },
+          companies: data.companies || [],
+      };
   },
 };
 
 
 // --- SERVICES ---
-const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: string | null, adminSignatureClarification: string, adminJobTitle: string, trainingName?: string): void => {
+const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: string | null, adminSignatureClarification: string, adminJobTitle: string, companies: Company[] | undefined, showToast: (message: string, type?: ToastType) => void, trainingName?: string): void => {
   if (!submissions || submissions.length === 0) {
-    alert('No hay registros para generar el PDF.');
+    showToast('No hay registros para generar el PDF.', 'info');
     return;
   }
   
@@ -134,40 +150,47 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
     const pageWidth = doc.internal.pageSize.getWidth();
     const margin = 15;
 
-    // --- Elegant Header ---
+    // --- Header ---
+    const headerHeight = 40;
+    doc.setFillColor(30, 41, 59); // slate-800
+    doc.rect(0, 0, pageWidth, headerHeight, 'F');
+    doc.setFontSize(22);
+    doc.setTextColor(255, 255, 255);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(18);
-    doc.setTextColor(30, 41, 59); // slate-800
-    doc.text('Certificado General de Asistencia', pageWidth / 2, 22, { align: 'center' });
+    doc.text('Registro General de Asistencia', margin, 25);
 
+    // --- Sub-header Info ---
+    const subheaderY = headerHeight + 12;
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(11);
-    doc.setTextColor(100, 116, 139); // slate-500
+    doc.setTextColor(51, 65, 85); // slate-700
 
     const trainingText = `Capacitación: ${trainingName || 'Varias / No especificada'}`;
-    doc.text(trainingText, pageWidth / 2, 30, { align: 'center' });
+    doc.text(trainingText, margin, subheaderY);
     
     const instructorText = `Dictada por: ${adminSignatureClarification || '[Aclaración no configurada]'} (${adminJobTitle || '[Cargo no configurado]'})`;
-    doc.text(instructorText, pageWidth / 2, 36, { align: 'center' });
+    doc.text(instructorText, margin, subheaderY + 6);
 
     // --- Table ---
-    const tableColumns = ['#', 'Apellido', 'Nombre', 'DNI', 'Fecha', 'Hora', 'Firma'];
+    const tableColumns = ['#', 'Apellido y Nombre', 'DNI', 'Empresa / CUIT', 'Fecha y Hora', 'Firma'];
     const tableRows = submissions.map((sub, index) => {
         const date = new Date(sub.timestamp);
-        const formattedDate = date.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' });
-        const formattedTime = date.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+        const formattedDateTime = date.toLocaleString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+        
+        const company = companies?.find(c => c.name === sub.company);
+        const companyDisplay = company ? `${company.name}${company.cuit ? `\n${company.cuit}` : ''}` : sub.company;
+        
         return [
           (index + 1).toString(),
-          sub.lastName,
-          sub.firstName,
+          `${sub.lastName}, ${sub.firstName}`,
           sub.dni,
-          formattedDate,
-          formattedTime,
+          companyDisplay,
+          formattedDateTime,
           '', // Placeholder for signature
         ];
     });
     
-    const startY = 50;
+    const startY = subheaderY + 18;
     
     autoTable(doc, {
       head: [tableColumns],
@@ -180,7 +203,11 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
       styles: { fontSize: 9, cellPadding: 2.5, valign: 'middle', textColor: [40, 40, 40] },
       columnStyles: {
         0: { cellWidth: 8, halign: 'center' }, // #
-        6: { cellWidth: 40, minCellHeight: 18 }, // Signature column
+        1: { cellWidth: 40 }, // Apellido y Nombre
+        2: { cellWidth: 22 }, // DNI
+        3: { cellWidth: 35 }, // Empresa / CUIT
+        4: { cellWidth: 25 }, // Fecha y Hora
+        5: { cellWidth: 40, minCellHeight: 18 }, // Signature column
       },
       didDrawPage: (data) => {
           // FOOTER
@@ -201,7 +228,7 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
           doc.text(pageStr, pageWidth - margin - pageTextWidth, footerY + 5);
       },
       didDrawCell: (data) => {
-        if (data.column.index === 6 && data.cell.section === 'body') { // Column 6 is Firma
+        if (data.column.index === 5 && data.cell.section === 'body') { // Column 5 is Firma
           const submission = submissions[data.row.index];
           if (submission && submission.signature) {
             try {
@@ -268,12 +295,12 @@ const generateSubmissionsPdf = (submissions: UserSubmission[], adminSignature: s
 
   } catch(e) {
     console.error("Fallo al generar el PDF de registros:", e);
-    alert("Ocurrió un error al generar el PDF. Por favor, revisa la consola para más detalles.");
+    showToast("Ocurrió un error al generar el PDF. Revisa la consola.", 'error');
   }
 };
 
 
-const generateSingleSubmissionPdf = (submission: UserSubmission, adminSignature: string | null, adminSignatureClarification: string, adminJobTitle: string): void => {
+const generateSingleSubmissionPdf = (submission: UserSubmission, adminSignature: string | null, adminSignatureClarification: string, adminJobTitle: string, companies: Company[] | undefined, showToast: (message: string, type?: ToastType) => void): void => {
   try {
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.getWidth();
@@ -302,7 +329,11 @@ const generateSingleSubmissionPdf = (submission: UserSubmission, adminSignature:
     
     doc.setFontSize(12);
     doc.setFont('helvetica', 'normal');
-    doc.text(`con DNI N° ${submission.dni}, de la empresa ${submission.company},`, margin, bodyY + 20);
+
+    const company = companies?.find(c => c.name === submission.company);
+    const companyDisplay = company ? `${company.name}${company.cuit ? ` (CUIT: ${company.cuit})` : ''}` : submission.company;
+    
+    doc.text(`con DNI N° ${submission.dni}, de la empresa ${companyDisplay},`, margin, bodyY + 20);
     
     doc.text(`ha completado y aprobado la capacitación denominada:`, margin, bodyY + 30);
 
@@ -349,7 +380,7 @@ const generateSingleSubmissionPdf = (submission: UserSubmission, adminSignature:
 
   } catch (e) {
     console.error("Fallo al generar el PDF individual:", e);
-    alert("Ocurrió un error al generar el certificado. Por favor, revisa la consola para más detalles.");
+    showToast("Ocurrió un error al generar el certificado.", 'error');
   }
 };
 
@@ -360,12 +391,12 @@ const Spinner: React.FC<{ size?: number }> = ({ size = 8 }) => (
   <div className={`w-${size} h-${size} border-4 border-slate-500 border-t-slate-200 rounded-full animate-spin`}></div>
 );
 
-const Modal: React.FC<{ isOpen: boolean; onClose: () => void; title: string; children: React.ReactNode; size?: 'md' | 'xl' }> = ({ isOpen, onClose, title, children, size = 'md' }) => {
+const Modal: React.FC<{ isOpen: boolean; onClose: () => void; title: string; children: React.ReactNode; size?: 'md' | 'xl'; footer?: React.ReactNode; }> = ({ isOpen, onClose, title, children, size = 'md', footer }) => {
     if (!isOpen) return null;
 
     const sizeClasses = {
-        md: 'max-w-2xl',
-        xl: 'max-w-6xl h-[90vh]'
+        md: 'max-w-2xl max-h-[90vh]',
+        xl: 'max-w-6xl max-h-[90vh]'
     };
 
     return (
@@ -380,27 +411,79 @@ const Modal: React.FC<{ isOpen: boolean; onClose: () => void; title: string; chi
                 <div className="p-6 overflow-y-auto flex-grow">
                     {children}
                 </div>
+                {footer && (
+                    <div className="flex justify-end items-center gap-4 p-4 border-t border-slate-700 flex-shrink-0 bg-slate-800">
+                        {footer}
+                    </div>
+                )}
             </div>
         </div>
     );
 };
 
 
-const SignaturePad: React.FC<{ sigCanvasRef: React.RefObject<SignatureCanvas> }> = ({ sigCanvasRef }) => {
+const SignaturePad: React.FC<{ sigCanvasRef: React.RefObject<SignatureCanvas>; canvasClassName?: string; }> = ({ sigCanvasRef, canvasClassName = 'h-48' }) => {
+  const [isEmpty, setIsEmpty] = useState(true);
+  const canvasWrapperRef = useRef<HTMLDivElement>(null);
+  const AnySignatureCanvas = SignatureCanvas as any;
+
   const handleClear = () => {
     sigCanvasRef.current?.clear();
+    setIsEmpty(true);
+  };
+
+  const handleBeginStroke = () => {
+    setIsEmpty(false);
   };
   
-  const AnySignatureCanvas = SignatureCanvas as any;
+  const resizeCanvas = useCallback(() => {
+    const canvas = sigCanvasRef.current?.getCanvas();
+    const wrapper = canvasWrapperRef.current;
+    if (canvas && wrapper) {
+        const ratio = Math.max(window.devicePixelRatio || 1, 1);
+        const { width, height } = wrapper.getBoundingClientRect();
+        
+        if (canvas.width !== Math.floor(width * ratio) || canvas.height !== Math.floor(height * ratio)) {
+            canvas.width = Math.floor(width * ratio);
+            canvas.height = Math.floor(height * ratio);
+            canvas.getContext("2d")?.scale(ratio, ratio);
+            sigCanvasRef.current?.clear();
+            setIsEmpty(true);
+        }
+    }
+  }, [sigCanvasRef]);
+
+  useEffect(() => {
+    const timer = setTimeout(resizeCanvas, 150);
+    window.addEventListener('resize', resizeCanvas);
+    return () => {
+        clearTimeout(timer);
+        window.removeEventListener('resize', resizeCanvas);
+    };
+  }, [resizeCanvas]);
+
+  useEffect(() => {
+    if (sigCanvasRef.current) {
+        setIsEmpty(sigCanvasRef.current.isEmpty());
+    }
+  }, [sigCanvasRef]);
 
   return (
     <div className="w-full">
-      <div className="bg-white border-2 border-dashed border-slate-600 rounded-lg overflow-hidden">
-        <AnySignatureCanvas
-          ref={sigCanvasRef}
-          penColor='black'
-          canvasProps={{ className: 'w-full h-48' }}
-        />
+      <div className={`relative bg-white border-2 border-dashed border-slate-600 rounded-lg overflow-hidden touch-pan-y ${canvasClassName}`}>
+        {isEmpty && (
+          <div className="absolute inset-0 flex items-center justify-center text-slate-400 pointer-events-none select-none">
+            <p>Dibuja tu firma aquí</p>
+          </div>
+        )}
+        <div ref={canvasWrapperRef} className="w-full h-full">
+            <AnySignatureCanvas
+                ref={sigCanvasRef}
+                penColor='black'
+                canvasProps={{ className: `w-full h-full` }}
+                onBegin={handleBeginStroke}
+            />
+        </div>
       </div>
       <div className="flex justify-end mt-4">
         <button
@@ -454,17 +537,17 @@ const QRCodeDisplay: React.FC<{ shareKey: string | undefined }> = ({ shareKey })
     return <img src={qrCodeUrl} alt="Código QR de la capacitación" className="w-32 h-32 rounded-md border-4 border-slate-600"/>
 };
 
-const UserTrainingPortal: React.FC<{ training: Training; onBack: () => void; prefilledCompany?: string }> = ({ training, onBack, prefilledCompany }) => {
+const UserTrainingPortal: React.FC<{ training: Training; onBack: () => void; showToast: (message: string, type?: ToastType) => void; prefilledCompany?: string }> = ({ training, onBack, showToast, prefilledCompany }) => {
     const [viewedLinks, setViewedLinks] = useState<Set<string>>(new Set());
     const [stage, setStage] = useState<'training' | 'form' | 'completed'>('training');
     const [lastSubmission, setLastSubmission] = useState<UserSubmission | null>(null);
-    const [adminConfig, setAdminConfig] = useState<AdminConfig | null>(null);
+    const [publicConfig, setPublicConfig] = useState<PublicConfig | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const sigCanvasRef = useRef<SignatureCanvas>(null);
 
     useEffect(() => {
-      apiService.getAdminConfig().then(config => {
-        setAdminConfig(config);
+      apiService.getPublicConfig().then(config => {
+        setPublicConfig(config);
       }).finally(() => {
         setIsLoading(false);
       });
@@ -498,7 +581,7 @@ const UserTrainingPortal: React.FC<{ training: Training; onBack: () => void; pre
     const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
         if (sigCanvasRef.current?.isEmpty()) {
-            alert('Por favor, provea su firma para completar el registro.');
+            showToast('Por favor, provea su firma para completar el registro.', 'error');
             return;
         }
 
@@ -516,7 +599,7 @@ const UserTrainingPortal: React.FC<{ training: Training; onBack: () => void; pre
         };
 
         if (!submissionData.firstName || !submissionData.lastName || !submissionData.dni || !submissionData.company) {
-            alert("Por favor, complete todos los campos obligatorios.");
+            showToast("Por favor, complete todos los campos obligatorios.", 'error');
             return;
         }
 
@@ -534,7 +617,7 @@ const UserTrainingPortal: React.FC<{ training: Training; onBack: () => void; pre
             setLastSubmission(fullSubmission);
             setStage('completed');
         } catch (error: any) {
-            alert(`Error al enviar el registro: ${error.message}`);
+            showToast(`Error al enviar el registro: ${error.message}`, 'error');
         } finally {
             setIsLoading(false);
         }
@@ -552,9 +635,9 @@ const UserTrainingPortal: React.FC<{ training: Training; onBack: () => void; pre
                 <p className="text-slate-400 max-w-md mb-6">Gracias, {lastSubmission.firstName}. Tu asistencia a la capacitación "{lastSubmission.trainingName}" ha sido registrada con éxito.</p>
                 <div className="flex flex-col sm:flex-row gap-4">
                     <button
-                        onClick={() => generateSingleSubmissionPdf(lastSubmission, adminConfig?.signature || null, adminConfig?.clarification || '', adminConfig?.jobTitle || '')}
-                        disabled={!adminConfig?.signature}
-                        title={!adminConfig?.signature ? "El administrador debe configurar su firma para habilitar la descarga." : "Descargar Certificado"}
+                        onClick={() => generateSingleSubmissionPdf(lastSubmission, publicConfig?.adminConfig.signature || null, publicConfig?.adminConfig.clarification || '', publicConfig?.adminConfig.jobTitle || '', publicConfig?.companies, showToast)}
+                        disabled={!publicConfig?.adminConfig.signature}
+                        title={!publicConfig?.adminConfig.signature ? "El administrador debe configurar su firma para habilitar la descarga." : "Descargar Certificado"}
                         className="flex items-center justify-center gap-2 w-full sm:w-auto px-6 py-3 text-base font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-700 transition disabled:bg-slate-600 disabled:cursor-not-allowed"
                     >
                         <FileDown size={20} />
@@ -670,7 +753,7 @@ const UserTrainingPortal: React.FC<{ training: Training; onBack: () => void; pre
     );
 };
 
-const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
+const AdminDashboard: React.FC<{ onLogout: () => void, showToast: (message: string, type?: ToastType) => void }> = ({ onLogout, showToast }) => {
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [isSaving, setIsSaving] = useState(false);
@@ -686,13 +769,17 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     const [selectedCompany, setSelectedCompany] = useState<string>('');
     const [selectedTraining, setSelectedTraining] = useState<string>('');
     const [newCompanyName, setNewCompanyName] = useState('');
+    const [newCompanyCuit, setNewCompanyCuit] = useState('');
     const [selectedSubmissions, setSelectedSubmissions] = useState<Set<string>>(new Set());
+    const [viewingSubmission, setViewingSubmission] = useState<UserSubmission | null>(null);
 
     const [isConfigModalOpen, setConfigModalOpen] = useState(false);
     const [isTrainingModalOpen, setTrainingModalOpen] = useState(false);
     const [isShareModalOpen, setShareModalOpen] = useState(false);
+    const [isCompanyModalOpen, setCompanyModalOpen] = useState(false);
     
     const [currentTraining, setCurrentTraining] = useState<Training | null>(null);
+    const [editingCompany, setEditingCompany] = useState<Company | null>(null);
     const [selectedCompaniesForTraining, setSelectedCompaniesForTraining] = useState<string[]>([]);
     const [trainingToShare, setTrainingToShare] = useState<Training | null>(null);
     const [isGeneratingShareLink, setIsGeneratingShareLink] = useState<string | null>(null);
@@ -723,7 +810,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
 
     const saveData = async (newData: AppData) => {
         if (isFetching.current) {
-             alert("Otra operación ya está en progreso. Por favor, espere.");
+             showToast("Otra operación ya está en progreso. Por favor, espere.", "info");
              return;
         }
         isFetching.current = true;
@@ -733,8 +820,9 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
             await apiService._putData(newData);
             setData(newData);
         } catch (e: any) {
-            setError(`Error al guardar los datos: ${e.message}`);
-            alert(`Error al guardar los datos: ${e.message}`);
+            const errorMessage = `Error al guardar los datos: ${e.message}`;
+            setError(errorMessage);
+            showToast(errorMessage, "error");
         } finally {
             isFetching.current = false;
             setIsSaving(false);
@@ -746,7 +834,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         
         if (isUpdatingSignature) {
             if (adminSigCanvasRef.current?.isEmpty()) {
-                alert("Por favor, dibuje una nueva firma o cancele la actualización.");
+                showToast("Por favor, dibuje una nueva firma o cancele la actualización.", "error");
                 return;
             }
             signature = adminSigCanvasRef.current?.getTrimmedCanvas().toDataURL('image/png') || null;
@@ -763,7 +851,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
 
         const newData = { ...data, adminConfig: newConfig };
         saveData(newData).then(() => {
-            alert("Configuración del administrador guardada.");
+            showToast("Configuración del administrador guardada.", "success");
             setConfigModalOpen(false);
             setIsUpdatingSignature(false);
         });
@@ -777,7 +865,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
             };
             const newData = { ...data, adminConfig: newConfig };
             saveData(newData).then(() => {
-                alert("Firma eliminada.");
+                showToast("Firma eliminada.", "success");
             });
         }
     }
@@ -792,7 +880,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
             const companyMatch = selectedCompany === '' || sub.company === selectedCompany;
             const trainingMatch = selectedTraining === '' || sub.trainingId === selectedTraining;
             return searchMatch && companyMatch && trainingMatch;
-        }).sort((a, b) => a.lastName.localeCompare(b.lastName));
+        }).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
         
         setSelectedSubmissions(new Set());
 
@@ -827,11 +915,25 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         return filteredSubmissions;
     }, [selectedSubmissions, filteredSubmissions, data.submissions]);
 
+    const trainingNameForPdf = useMemo(() => {
+        if (selectedTraining) {
+            return data.trainings?.find(t => t.id === selectedTraining)?.name;
+        }
+        if (submissionsForPdf.length > 0) {
+            const firstTrainingId = submissionsForPdf[0].trainingId;
+            const allSameTraining = submissionsForPdf.every(s => s.trainingId === firstTrainingId);
+            if (allSameTraining) {
+                return data.trainings?.find(t => t.id === firstTrainingId)?.name || submissionsForPdf[0].trainingName;
+            }
+        }
+        return undefined;
+    }, [submissionsForPdf, selectedTraining, data.trainings]);
+
 
     const handleSaveTraining = () => {
         const name = (document.getElementById('trainingName') as HTMLInputElement).value;
         if (!name) {
-            alert('El nombre de la capacitación es obligatorio.');
+            showToast('El nombre de la capacitación es obligatorio.', 'error');
             return;
         }
     
@@ -843,7 +945,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         })).filter(link => link.url);
     
         if (links.length === 0) {
-            alert('Debe agregar al menos un enlace a la capacitación.');
+            showToast('Debe agregar al menos un enlace a la capacitación.', 'error');
             return;
         }
         
@@ -866,7 +968,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     
         const newData = { ...data, trainings: updatedTrainings };
         saveData(newData).then(() => {
-            alert('Capacitación guardada exitosamente.');
+            showToast('Capacitación guardada exitosamente.', 'success');
             setTrainingModalOpen(false);
             setCurrentTraining(null);
         });
@@ -894,23 +996,59 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     
     const handleAddCompany = () => {
         if (!newCompanyName.trim()) {
-            alert("El nombre de la empresa no puede estar vacío.");
+            showToast("El nombre de la empresa no puede estar vacío.", "error");
             return;
         }
         const normalizedNew = normalizeString(newCompanyName);
-        if ((data.companies || []).some(c => normalizeString(c) === normalizedNew)) {
-            alert("Esta empresa ya existe.");
+        if ((data.companies || []).some(c => normalizeString(c.name) === normalizedNew)) {
+            showToast("Esta empresa ya existe.", "error");
             setNewCompanyName('');
             return;
         }
-        const updatedCompanies = [...(data.companies || []), newCompanyName.trim()].sort();
+        const newCompany: Company = { name: newCompanyName.trim(), cuit: newCompanyCuit.trim() || undefined };
+        const updatedCompanies = [...(data.companies || []), newCompany].sort((a, b) => a.name.localeCompare(b.name));
         const newData = { ...data, companies: updatedCompanies };
-        saveData(newData).then(() => setNewCompanyName(''));
+        saveData(newData).then(() => {
+            setNewCompanyName('');
+            setNewCompanyCuit('');
+        });
+    };
+
+    const openEditCompanyModal = (company: Company) => {
+        setEditingCompany(company);
+        setCompanyModalOpen(true);
+    };
+
+    const handleUpdateCompany = () => {
+        if (!editingCompany) return;
+        const nameInput = document.getElementById('companyNameEdit') as HTMLInputElement;
+        const cuitInput = document.getElementById('companyCuitEdit') as HTMLInputElement;
+
+        const newName = nameInput.value.trim();
+        const newCuit = cuitInput.value.trim();
+
+        if (!newName) {
+            showToast("El nombre de la empresa no puede estar vacío.", "error");
+            return;
+        }
+
+        const updatedCompanies = (data.companies || []).map(c => 
+            c.name === editingCompany.name 
+                ? { ...c, name: newName, cuit: newCuit || undefined } 
+                : c
+        );
+
+        const newData = { ...data, companies: updatedCompanies };
+        saveData(newData).then(() => {
+            showToast("Empresa actualizada.", "success");
+            setCompanyModalOpen(false);
+            setEditingCompany(null);
+        });
     };
 
     const handleDeleteCompany = (companyNameToDelete: string) => {
         if (window.confirm(`¿Seguro que quieres eliminar la empresa "${companyNameToDelete}"? Se eliminará de todas las listas.`)) {
-            const updatedCompanies = (data.companies || []).filter(c => c !== companyNameToDelete);
+            const updatedCompanies = (data.companies || []).filter(c => c.name !== companyNameToDelete);
             const newData = { ...data, companies: updatedCompanies };
             saveData(newData);
         }
@@ -929,7 +1067,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
             if (window.confirm("CONFIRMACIÓN FINAL: Esta acción borrará permanentemente todos los registros de asistencia. ¿Desea continuar?")) {
                 const newData = { ...data, submissions: [] };
                 saveData(newData).then(() => {
-                    alert("Todos los registros han sido eliminados.");
+                    showToast("Todos los registros han sido eliminados.", "success");
                 });
             }
         }
@@ -983,14 +1121,14 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                         generatedQRs['general'] = await QRCode.toDataURL(baseUrl, { width: 256, margin: 2, color: { dark: '#FFFFFF', light: '#1E293B' } });
 
                         for (const company of data.companies || []) {
-                            const companyUrl = `${baseUrl}&company=${encodeURIComponent(company)}`;
-                            generatedQRs[company] = await QRCode.toDataURL(companyUrl, { width: 256, margin: 2, color: { dark: '#FFFFFF', light: '#1E293B' } });
+                            const companyUrl = `${baseUrl}&company=${encodeURIComponent(company.name)}`;
+                            generatedQRs[company.name] = await QRCode.toDataURL(companyUrl, { width: 256, margin: 2, color: { dark: '#FFFFFF', light: '#1E293B' } });
                         }
                         setQrCodes(generatedQRs);
 
                     } catch(e) {
                         console.error("Failed to generate QR codes:", e);
-                        alert("No se pudieron generar los códigos QR.");
+                        showToast("No se pudieron generar los códigos QR.", "error");
                     } finally {
                         setIsLoadingQRs(false);
                     }
@@ -1014,7 +1152,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                             {qrCodes['general'] && <img src={qrCodes['general']} alt="QR Code General" className="border-4 border-slate-600 rounded-lg w-24 h-24"/>}
                             <div className="flex-grow w-full flex items-center bg-slate-700 p-2 rounded-md border border-slate-600">
                                 <input type="text" value={baseUrl} readOnly className="flex-grow bg-transparent text-sm text-slate-300 outline-none w-full"/>
-                                <button onClick={() => { navigator.clipboard.writeText(baseUrl); alert('Enlace copiado!'); }} className="p-2 text-slate-400 hover:bg-slate-600 rounded-md"><Copy size={16}/></button>
+                                <button onClick={() => { navigator.clipboard.writeText(baseUrl); showToast('Enlace copiado!', 'success'); }} className="p-2 text-slate-400 hover:bg-slate-600 rounded-md"><Copy size={16}/></button>
                             </div>
                         </div>
                     </div>
@@ -1023,15 +1161,15 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                             <h4 className="font-bold text-slate-200 mb-2">Enlaces por Empresa</h4>
                             <div className="space-y-4">
                                 {(data.companies || []).map(company => {
-                                    const companyUrl = `${baseUrl}&company=${encodeURIComponent(company)}`;
+                                    const companyUrl = `${baseUrl}&company=${encodeURIComponent(company.name)}`;
                                     return (
-                                        <div key={company}>
-                                            <p className="text-sm font-semibold text-slate-300 mb-1">{company}</p>
+                                        <div key={company.name}>
+                                            <p className="text-sm font-semibold text-slate-300 mb-1">{company.name}</p>
                                             <div className="flex flex-col sm:flex-row items-center gap-4">
-                                                {qrCodes[company] && <img src={qrCodes[company]} alt={`QR Code ${company}`} className="border-4 border-slate-600 rounded-lg w-24 h-24"/>}
+                                                {qrCodes[company.name] && <img src={qrCodes[company.name]} alt={`QR Code ${company.name}`} className="border-4 border-slate-600 rounded-lg w-24 h-24"/>}
                                                 <div className="flex-grow w-full flex items-center bg-slate-700 p-2 rounded-md border border-slate-600">
                                                     <input type="text" value={companyUrl} readOnly className="flex-grow bg-transparent text-sm text-slate-300 outline-none w-full"/>
-                                                    <button onClick={() => { navigator.clipboard.writeText(companyUrl); alert(`Enlace para ${company} copiado!`); }} className="p-2 text-slate-400 hover:bg-slate-600 rounded-md"><Copy size={16}/></button>
+                                                    <button onClick={() => { navigator.clipboard.writeText(companyUrl); showToast(`Enlace para ${company.name} copiado!`, 'success'); }} className="p-2 text-slate-400 hover:bg-slate-600 rounded-md"><Copy size={16}/></button>
                                                 </div>
                                             </div>
                                         </div>
@@ -1079,7 +1217,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                          <ShieldCheck className="w-8 h-8 text-slate-200" />
                         <h1 className="text-2xl md:text-3xl font-bold text-slate-100">Panel de Administrador</h1>
                     </div>
-                    <div className="flex items-center space-x-2 sm:space-x-4">
+                    <div className="flex items-center flex-wrap justify-end gap-2 sm:gap-4">
                         <button onClick={fetchData} disabled={isFetching.current} className="p-2 text-slate-400 hover:text-slate-100 disabled:opacity-50 transition-colors">
                             <RefreshCw size={20} className={isFetching.current ? 'animate-spin' : ''}/>
                         </button>
@@ -1102,12 +1240,14 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                 <PlusCircle size={16}/><span>Nueva</span>
                                 </button>
                             </div>
-                            <div className="space-y-4 flex-grow overflow-y-auto pr-2 -mr-2">
+                            <div className="space-y-4 flex-grow overflow-y-auto pr-2 -mr-2 max-h-[60vh] xl:max-h-none">
                                 {(data.trainings || []).length > 0 ? (
                                     data.trainings?.map(training => (
-                                        <div key={training.id} className="p-4 bg-slate-900 rounded-lg border border-slate-700 group flex gap-4 items-start">
-                                            <QRCodeDisplay shareKey={training.shareKey} />
-                                            <div className="flex-grow flex flex-col h-full">
+                                        <div key={training.id} className="p-4 bg-slate-900 rounded-lg border border-slate-700 group flex flex-col sm:flex-row gap-4 items-start">
+                                            <div className="mx-auto sm:mx-0 flex-shrink-0">
+                                                <QRCodeDisplay shareKey={training.shareKey} />
+                                            </div>
+                                            <div className="flex-grow flex flex-col h-full w-full">
                                                 <p className="font-bold text-lg text-slate-100 leading-tight">{training.name}</p>
                                                 <div className="flex flex-wrap gap-1 mt-2">
                                                     {(training.companies && training.companies.length > 0) ? (
@@ -1116,7 +1256,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                                         <span className="text-xs italic text-slate-500">Capacitación general</span>
                                                     )}
                                                 </div>
-                                                <div className="mt-auto flex items-center justify-end space-x-1 pt-2">
+                                                <div className="mt-auto flex items-center justify-end gap-1 pt-2">
                                                     <button onClick={() => handleShareTraining(training)} disabled={isGeneratingShareLink === training.id} title="Compartir" className="p-1.5 text-slate-400 hover:bg-slate-700 rounded-md disabled:opacity-50">
                                                         {isGeneratingShareLink === training.id ? <Spinner size={4}/> : <Share2 size={16}/>}
                                                     </button>
@@ -1133,12 +1273,19 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                         </section>
                          <section className="bg-slate-800 p-6 rounded-xl shadow-lg border border-slate-700">
                             <h2 className="text-xl font-bold text-slate-100 flex items-center mb-4"><Building size={22} className="mr-2 text-blue-400"/>Empresas</h2>
-                            <div className="flex gap-2 mb-4">
+                            <div className="flex flex-col sm:flex-row gap-2 mb-4">
                                 <input 
                                     type="text"
                                     value={newCompanyName}
                                     onChange={(e) => setNewCompanyName(e.target.value)}
-                                    placeholder="Nombre de la nueva empresa"
+                                    placeholder="Nombre de la empresa"
+                                    className="flex-grow p-2 bg-slate-700 border border-slate-600 rounded-md text-sm text-slate-200 placeholder-slate-400"
+                                />
+                                 <input 
+                                    type="text"
+                                    value={newCompanyCuit}
+                                    onChange={(e) => setNewCompanyCuit(e.target.value)}
+                                    placeholder="CUIT (Opcional)"
                                     className="flex-grow p-2 bg-slate-700 border border-slate-600 rounded-md text-sm text-slate-200 placeholder-slate-400"
                                 />
                                 <button onClick={handleAddCompany} className="px-4 text-sm font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition">Añadir</button>
@@ -1146,9 +1293,15 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                              <div className="space-y-2 max-h-[250px] overflow-y-auto pr-2">
                                 {(data.companies || []).length > 0 ? (
                                     data.companies?.map(company => (
-                                        <div key={company} className="flex items-center justify-between p-2 bg-slate-900 rounded-lg border border-slate-700 group">
-                                            <p className="text-sm text-slate-300">{company}</p>
-                                            <button onClick={() => handleDeleteCompany(company)} title="Eliminar Empresa" className="p-1.5 text-red-400 hover:bg-red-900/50 rounded-md opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={16}/></button>
+                                        <div key={company.name} className="flex items-center justify-between p-2 bg-slate-900 rounded-lg border border-slate-700 group">
+                                            <div>
+                                                <p className="text-sm text-slate-300">{company.name}</p>
+                                                {company.cuit && <p className="text-xs text-slate-500">CUIT: {company.cuit}</p>}
+                                            </div>
+                                            <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                                 <button onClick={() => openEditCompanyModal(company)} title="Editar Empresa" className="p-1.5 text-slate-400 hover:bg-slate-700 rounded-md"><Edit size={16}/></button>
+                                                <button onClick={() => handleDeleteCompany(company.name)} title="Eliminar Empresa" className="p-1.5 text-red-400 hover:bg-red-900/50 rounded-md"><Trash2 size={16}/></button>
+                                            </div>
                                         </div>
                                     ))
                                 ) : (
@@ -1170,7 +1323,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                     <Trash2 size={16}/><span>Borrar Todos</span>
                                 </button>
                                 <button 
-                                    onClick={() => generateSubmissionsPdf(submissionsForPdf, data.adminConfig?.signature || null, data.adminConfig?.clarification || '', data.adminConfig?.jobTitle || '', selectedTraining ? data.trainings?.find(t=>t.id===selectedTraining)?.name : undefined)} 
+                                    onClick={() => generateSubmissionsPdf(submissionsForPdf, data.adminConfig?.signature || null, data.adminConfig?.clarification || '', data.adminConfig?.jobTitle || '', data.companies, showToast, trainingNameForPdf)} 
                                     disabled={submissionsForPdf.length === 0}
                                     className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-700 transition disabled:bg-slate-600 disabled:cursor-not-allowed"
                                 >
@@ -1193,7 +1346,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                             </select>
                             <select value={selectedCompany} onChange={e => setSelectedCompany(e.target.value)} className="p-2 border bg-slate-700 border-slate-600 rounded-md text-sm text-slate-200">
                                 <option value="">Todas las Empresas</option>
-                                {data.companies?.map(c => <option key={c} value={c}>{c}</option>)}
+                                {data.companies?.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
                             </select>
                         </div>
 
@@ -1235,7 +1388,10 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                             <td className="p-3 hidden lg:table-cell">{sub.trainingName}</td>
                                             <td className="p-3 hidden xl:table-cell">{new Date(sub.timestamp).toLocaleDateString()}</td>
                                             <td className="p-3 text-right">
-                                                 <button onClick={() => handleDeleteSubmission(sub.id)} title="Eliminar Registro" className="p-1.5 text-red-400 hover:bg-red-900/50 rounded-md"><Trash2 size={16}/></button>
+                                                <div className="flex items-center justify-end gap-1">
+                                                     <button onClick={() => setViewingSubmission(sub)} title="Ver Detalles" className="p-1.5 text-slate-400 hover:bg-slate-700 rounded-md"><Eye size={16}/></button>
+                                                     <button onClick={() => handleDeleteSubmission(sub.id)} title="Eliminar Registro" className="p-1.5 text-red-400 hover:bg-red-900/50 rounded-md"><Trash2 size={16}/></button>
+                                                </div>
                                             </td>
                                         </tr>
                                     )) : (
@@ -1247,8 +1403,54 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                     </section>
                 </main>
             </div>
+
+             <Modal 
+                isOpen={!!viewingSubmission} 
+                onClose={() => setViewingSubmission(null)} 
+                title="Detalles del Registro"
+                footer={
+                    <button onClick={() => setViewingSubmission(null)} className="px-6 py-2 font-semibold text-slate-200 bg-slate-600 rounded-md hover:bg-slate-500 transition">
+                        Cerrar
+                    </button>
+                }
+            >
+                {viewingSubmission && (
+                    <div className="space-y-4 text-slate-300">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div><strong className="text-slate-400 block">Nombre:</strong> {viewingSubmission.firstName}</div>
+                            <div><strong className="text-slate-400 block">Apellido:</strong> {viewingSubmission.lastName}</div>
+                            <div><strong className="text-slate-400 block">DNI:</strong> {viewingSubmission.dni}</div>
+                            <div><strong className="text-slate-400 block">Empresa:</strong> {viewingSubmission.company}</div>
+                            <div className="sm:col-span-2"><strong className="text-slate-400 block">Capacitación:</strong> {viewingSubmission.trainingName}</div>
+                             <div><strong className="text-slate-400 block">Email:</strong> {viewingSubmission.email || 'N/A'}</div>
+                            <div><strong className="text-slate-400 block">Teléfono:</strong> {viewingSubmission.phone || 'N/A'}</div>
+                            <div className="sm:col-span-2"><strong className="text-slate-400 block">Fecha de Registro:</strong> {new Date(viewingSubmission.timestamp).toLocaleString('es-ES')}</div>
+                        </div>
+                        <div>
+                            <strong className="text-slate-400 block mb-2">Firma:</strong>
+                             <div className="p-2 bg-white rounded-md border border-slate-300 overflow-hidden">
+                                <img src={viewingSubmission.signature} alt={`Firma de ${viewingSubmission.firstName}`} className="mx-auto" />
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </Modal>
             
-             <Modal isOpen={isConfigModalOpen} onClose={() => { setConfigModalOpen(false); setIsUpdatingSignature(false); }} title="Configuración de Administrador">
+             <Modal 
+                isOpen={isConfigModalOpen} 
+                onClose={() => { setConfigModalOpen(false); setIsUpdatingSignature(false); }} 
+                title="Configuración de Administrador"
+                footer={
+                    <>
+                        <button onClick={() => { setConfigModalOpen(false); setIsUpdatingSignature(false); }} className="px-6 py-2 font-semibold text-slate-200 bg-slate-600 rounded-md hover:bg-slate-500 transition">
+                            Cancelar
+                        </button>
+                        <button onClick={handleUpdateConfig} className="px-6 py-2 font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition">
+                            Guardar Configuración
+                        </button>
+                    </>
+                }
+            >
                 <div className="space-y-4">
                      <div>
                         <label htmlFor="adminClarification" className="block text-sm font-medium text-slate-300 mb-1">Aclaración de Firma (Nombre Completo)</label>
@@ -1286,22 +1488,60 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                             </div>
                         ) : (
                             <div>
-                                <SignaturePad sigCanvasRef={adminSigCanvasRef} />
+                                <SignaturePad sigCanvasRef={adminSigCanvasRef} canvasClassName="h-60" />
                                 <button onClick={() => setIsUpdatingSignature(false)} className="mt-2 text-sm text-blue-400 hover:underline">
                                     Cancelar
                                 </button>
                             </div>
                         )}
                     </div>
-                    <div className="flex justify-end pt-4 border-t border-slate-700">
-                        <button onClick={handleUpdateConfig} className="px-6 py-2 font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition">
-                            Guardar Configuración
-                        </button>
-                    </div>
                 </div>
             </Modal>
+
+            <Modal 
+                isOpen={isCompanyModalOpen} 
+                onClose={() => setCompanyModalOpen(false)} 
+                title="Editar Empresa"
+                footer={
+                    <>
+                        <button onClick={() => setCompanyModalOpen(false)} className="px-6 py-2 font-semibold text-slate-200 bg-slate-600 rounded-md hover:bg-slate-500 transition">
+                            Cancelar
+                        </button>
+                        <button onClick={handleUpdateCompany} className="px-6 py-2 font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition">
+                            Guardar Cambios
+                        </button>
+                    </>
+                }
+            >
+                {editingCompany && (
+                    <div className="space-y-4">
+                        <div>
+                            <label htmlFor="companyNameEdit" className="block text-sm font-medium text-slate-300 mb-1">Nombre de la Empresa</label>
+                            <input type="text" id="companyNameEdit" defaultValue={editingCompany.name} className="w-full p-2 bg-slate-700 border border-slate-600 rounded-md text-slate-200" />
+                        </div>
+                        <div>
+                            <label htmlFor="companyCuitEdit" className="block text-sm font-medium text-slate-300 mb-1">CUIT (Opcional)</label>
+                            <input type="text" id="companyCuitEdit" defaultValue={editingCompany.cuit} className="w-full p-2 bg-slate-700 border border-slate-600 rounded-md text-slate-200" />
+                        </div>
+                    </div>
+                )}
+            </Modal>
             
-            <Modal isOpen={isTrainingModalOpen} onClose={() => setTrainingModalOpen(false)} title={currentTraining?.id ? 'Editar Capacitación' : 'Nueva Capacitación'}>
+            <Modal 
+                isOpen={isTrainingModalOpen} 
+                onClose={() => setTrainingModalOpen(false)} 
+                title={currentTraining?.id ? 'Editar Capacitación' : 'Nueva Capacitación'}
+                footer={
+                     <>
+                        <button onClick={() => setTrainingModalOpen(false)} className="px-6 py-2 font-semibold text-slate-200 bg-slate-600 rounded-md hover:bg-slate-500 transition">
+                            Cancelar
+                        </button>
+                        <button onClick={handleSaveTraining} className="px-6 py-2 font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition">
+                            Guardar Capacitación
+                        </button>
+                    </>
+                }
+            >
                 {currentTraining && (
                     <div className="space-y-6">
                         {/* Section 1: Details */}
@@ -1370,32 +1610,26 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                 <h3 className="text-lg font-semibold text-slate-300 border-b border-slate-700 pb-2 mb-3">3. Asignar a Empresas</h3>
                                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                                     {(data.companies || []).map(company => (
-                                        <label key={company} className="flex items-center space-x-2 p-2 bg-slate-700 rounded-md cursor-pointer hover:bg-slate-600">
+                                        <label key={company.name} className="flex items-center space-x-2 p-2 bg-slate-700 rounded-md cursor-pointer hover:bg-slate-600">
                                             <input 
                                                 type="checkbox"
-                                                value={company}
-                                                checked={selectedCompaniesForTraining.includes(company)}
+                                                value={company.name}
+                                                checked={selectedCompaniesForTraining.includes(company.name)}
                                                 onChange={(e) => {
                                                     if(e.target.checked) {
-                                                        setSelectedCompaniesForTraining(prev => [...prev, company]);
+                                                        setSelectedCompaniesForTraining(prev => [...prev, company.name]);
                                                     } else {
-                                                        setSelectedCompaniesForTraining(prev => prev.filter(c => c !== company));
+                                                        setSelectedCompaniesForTraining(prev => prev.filter(c => c !== company.name));
                                                     }
                                                 }}
                                                 className="w-4 h-4 text-blue-600 bg-slate-600 border-slate-500 rounded focus:ring-blue-500"
                                             />
-                                            <span className="text-sm text-slate-200">{company}</span>
+                                            <span className="text-sm text-slate-200">{company.name}</span>
                                         </label>
                                     ))}
                                 </div>
                             </div>
                         }
-
-                        <div className="flex justify-end pt-4">
-                            <button onClick={handleSaveTraining} className="px-6 py-2 font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition">
-                                Guardar Capacitación
-                            </button>
-                        </div>
                     </div>
                 )}
             </Modal>
@@ -1417,10 +1651,26 @@ const AdminLogin: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     const [showPassword, setShowPassword] = useState(false);
+    const [rememberMe, setRememberMe] = useState(false);
+
+    useEffect(() => {
+        const isRemembered = localStorage.getItem('rememberAdmin') === 'true';
+        if (isRemembered) {
+            setPassword(localStorage.getItem('adminPassword') || '');
+            setRememberMe(true);
+        }
+    }, []);
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         if (password === 'admin2025') {
+            if (rememberMe) {
+                localStorage.setItem('adminPassword', password);
+                localStorage.setItem('rememberAdmin', 'true');
+            } else {
+                localStorage.removeItem('adminPassword');
+                localStorage.removeItem('rememberAdmin');
+            }
             onLogin();
         } else {
             setError('Contraseña incorrecta.');
@@ -1459,6 +1709,17 @@ const AdminLogin: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
                             </button>
                         </div>
                          {error && <p className="text-red-500 text-xs italic mt-2">{error}</p>}
+                    </div>
+                     <div className="mb-6">
+                        <label className="flex items-center text-slate-400 text-sm">
+                            <input
+                                type="checkbox"
+                                className="w-4 h-4 text-blue-600 bg-slate-700 border-slate-600 rounded focus:ring-blue-500 focus:ring-offset-slate-800"
+                                checked={rememberMe}
+                                onChange={(e) => setRememberMe(e.target.checked)}
+                            />
+                            <span className="ml-2">Recordar contraseña</span>
+                        </label>
                     </div>
                     <div className="flex items-center justify-between">
                         <button className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-md focus:outline-none focus:shadow-outline transition" type="submit">
@@ -1516,15 +1777,57 @@ const WelcomeScreen: React.FC<{ onAdminClick: () => void }> = ({ onAdminClick })
   );
 };
 
+const Toast: React.FC<{ message: string; type: ToastType; onDismiss: () => void }> = ({ message, type, onDismiss }) => {
+    const baseClasses = "fixed top-5 right-5 w-full max-w-sm p-4 rounded-lg shadow-lg text-white animate-fade-in-down z-[100]";
+    const typeClasses = {
+        success: "bg-green-600",
+        error: "bg-red-600",
+        info: "bg-blue-600"
+    };
+    const Icon = {
+      success: <CheckCircle size={20} />,
+      error: <XCircle size={20} />,
+      info: <Info size={20} />
+    }[type];
+
+    useEffect(() => {
+        const timer = setTimeout(onDismiss, 5000);
+        return () => clearTimeout(timer);
+    }, [onDismiss]);
+
+    return (
+        <div className={`${baseClasses} ${typeClasses[type]}`}>
+            <div className="flex items-start">
+                <div className="flex-shrink-0">{Icon}</div>
+                <div className="ml-3 w-0 flex-1">
+                    <p className="text-sm font-medium">{message}</p>
+                </div>
+                <div className="ml-4 flex-shrink-0 flex">
+                    <button onClick={onDismiss} className="inline-flex rounded-md p-1 text-white/80 hover:bg-white/20">
+                        <X size={20} />
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 
 const App: React.FC = () => {
     const [view, setView] = useState<'home' | 'adminLogin' | 'adminDashboard' | 'user' | 'loading'>('loading');
     const [currentTraining, setCurrentTraining] = useState<Training | null>(null);
     const [prefilledCompany, setPrefilledCompany] = useState<string | undefined>(undefined);
     const [error, setError] = useState<string | null>(null);
+    const [toast, setToast] = useState<{ message: string; type: ToastType; key: number } | null>(null);
 
-    // This useEffect hook runs only once on initial component mount.
-    // It's responsible for handling deep links to training sessions.
+    const showToast = (message: string, type: ToastType = 'info') => {
+        setToast({ message, type, key: Date.now() });
+    };
+
+    const dismissToast = () => {
+        setToast(null);
+    };
+
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
         const trainingKey = params.get('trainingKey');
@@ -1548,22 +1851,14 @@ const App: React.FC = () => {
                 setView('home');
             });
         } else {
-            // If there's no training key, start at the home screen.
             setView('home');
         }
-    }, []); // Empty dependency array ensures this runs only once.
+    }, []);
     
-    // Navigation is now handled by simple state changes.
-    const goToAdminLogin = () => {
-        setView('adminLogin');
-    };
-
-    const handleAdminLogin = () => {
-        setView('adminDashboard');
-    };
+    const goToAdminLogin = () => setView('adminLogin');
+    const handleAdminLogin = () => setView('adminDashboard');
     
     const goHome = () => {
-        // Clear the URL just in case it had params from a training link.
         history.pushState({}, '', window.location.pathname);
         setView('home');
         setCurrentTraining(null);
@@ -1571,34 +1866,42 @@ const App: React.FC = () => {
         setError(null);
     };
     
-    if(error) {
-        return (
-            <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 text-center">
-                 <h1 className="text-2xl font-bold text-red-400 mb-4">Error</h1>
-                 <p className="text-slate-300 mb-6">{error}</p>
-                 <button onClick={goHome} className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Volver al Inicio</button>
-            </div>
-        )
-    }
+    const renderContent = () => {
+        if(error) {
+            return (
+                <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 text-center">
+                     <h1 className="text-2xl font-bold text-red-400 mb-4">Error</h1>
+                     <p className="text-slate-300 mb-6">{error}</p>
+                     <button onClick={goHome} className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Volver al Inicio</button>
+                </div>
+            )
+        }
 
-    switch (view) {
-        case 'loading':
-            return <div className="min-h-screen bg-slate-900 flex items-center justify-center"><Spinner size={12} /></div>;
-        case 'home':
-            return <WelcomeScreen onAdminClick={goToAdminLogin} />;
-        case 'adminLogin':
-            return <AdminLogin onLogin={handleAdminLogin} />;
-        case 'adminDashboard':
-            return <AdminDashboard onLogout={goHome} />;
-        case 'user':
-             if (currentTraining) {
-                 return <UserTrainingPortal training={currentTraining} onBack={goHome} prefilledCompany={prefilledCompany} />;
-             }
-             // Fallback to home if state is inconsistent
-             return <WelcomeScreen onAdminClick={goToAdminLogin} />;
-        default:
-            return <WelcomeScreen onAdminClick={goToAdminLogin} />;
-    }
+        switch (view) {
+            case 'loading':
+                return <div className="min-h-screen bg-slate-900 flex items-center justify-center"><Spinner size={12} /></div>;
+            case 'home':
+                return <WelcomeScreen onAdminClick={goToAdminLogin} />;
+            case 'adminLogin':
+                return <AdminLogin onLogin={handleAdminLogin} />;
+            case 'adminDashboard':
+                return <AdminDashboard onLogout={goHome} showToast={showToast} />;
+            case 'user':
+                 if (currentTraining) {
+                     return <UserTrainingPortal training={currentTraining} onBack={goHome} prefilledCompany={prefilledCompany} showToast={showToast} />;
+                 }
+                 return <WelcomeScreen onAdminClick={goToAdminLogin} />;
+            default:
+                return <WelcomeScreen onAdminClick={goToAdminLogin} />;
+        }
+    };
+    
+    return (
+        <>
+            {toast && <Toast key={toast.key} message={toast.message} type={toast.type} onDismiss={dismissToast} />}
+            {renderContent()}
+        </>
+    );
 };
 
 const root = ReactDOM.createRoot(document.getElementById('root') as HTMLElement);
