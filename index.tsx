@@ -1,44 +1,42 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import ReactDOM from 'react-dom/client';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import SignatureCanvas from 'react-signature-canvas';
 import QRCode from 'qrcode';
-import { ShieldCheck, User, PlusCircle, Users, FileDown, LogOut, Trash2, Edit, X, Share2, Copy, Eye, EyeOff, FileText, CheckCircle, ArrowLeft, Send, LogIn, RefreshCw, Award, ClipboardList, GraduationCap, Building, ArrowRight, QrCode, Info, XCircle } from 'lucide-react';
+import { 
+  ShieldCheck, User, PlusCircle, Users, FileDown, LogOut, 
+  Trash2, Edit, X, Share2, Copy, Eye, FileText, 
+  CheckCircle, ArrowLeft, Send, GraduationCap, 
+  Building, ArrowRight, QrCode, Download, CopyPlus, 
+  Briefcase, History, Settings
+} from 'lucide-react';
 
-// --- CONFIGURACIÓN REQUERIDA ---
-// 1. Ve a https://jsonbin.io, crea una cuenta gratuita.
-// 2. Crea un nuevo "JSON Bin" vacío.
-// 3. Pega el ID de tu Bin aquí (de la URL).
-const JSONBIN_BIN_ID = '68fa221e43b1c97be97a84f2'; // Ejemplo: '667d7e3aad19ca34f881b2c3'
-
-// 4. Ve a la sección "API Keys" en tu perfil.
-// 5. Pega tu "Master Key" aquí.
-const JSONBIN_MASTER_KEY = '$2a$10$CGBmrjbO1PM5CPstFtwXN.PMvfkyYUpEb9rGtO5rJZBLuEtAfWQ7i'; // Ejemplo: '$2a$10$...'
+// --- CONFIGURACIÓN ---
+const JSONBIN_BIN_ID = '68fa221e43b1c97be97a84f2'; 
+const JSONBIN_MASTER_KEY = '$2a$10$CGBmrjbO1PM5CPstFtwXN.PMvfkyYUpEb9rGtO5rJZBLuEtAfWQ7i';
+const ADMIN_PASSWORD = 'admin2025';
 
 type ToastType = 'success' | 'error' | 'info';
-
-const normalizeString = (str: string): string => {
-    if (!str) return '';
-    return str.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-};
 
 // --- TYPES ---
 interface TrainingLink {
   id: string;
-  name?: string;
+  name: string;
   url: string;
 }
 
 interface Training {
-  id:string;
+  id: string;
   name: string;
   links: TrainingLink[];
-  shareKey?: string; // Clave permanente para compartir
-  companies?: string[]; // Nombres de empresas asociadas
+  shareKey: string;
+  companies?: string[]; 
 }
 
 interface Company {
+    id: string;
     name: string;
     cuit?: string;
 }
@@ -50,11 +48,9 @@ interface UserSubmission {
   firstName: string;
   lastName: string;
   dni: string;
-  company: string; // This is the company NAME
-  signature: string; // Base64 data URL from the signature pad
+  company: string; 
+  signature: string; 
   timestamp: string;
-  email?: string;
-  phone?: string;
 }
 
 interface AdminConfig {
@@ -65,50 +61,34 @@ interface AdminConfig {
 
 interface AppData {
   submissions: UserSubmission[];
-  adminConfig?: AdminConfig;
-  trainings?: Training[];
-  companies?: Company[];
-}
-
-interface PublicConfig {
   adminConfig: AdminConfig;
+  trainings: Training[];
   companies: Company[];
 }
 
-
-// --- CLOUD API SERVICE (JSONBIN.IO) ---
+// --- API SERVICE ---
 const apiService = {
-  // Fetches the entire data blob from jsonbin.io.
-  _getData: async (): Promise<AppData> => {
-    if (JSONBIN_BIN_ID.startsWith('REEMPLAZA') || JSONBIN_MASTER_KEY.startsWith('REEMPLAZA')) {
-      throw new Error("Configuración de API requerida. Por favor, edita index.tsx.");
+  getData: async (): Promise<AppData> => {
+    try {
+      const response = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}/latest`, {
+        method: 'GET',
+        headers: { 'X-Master-Key': JSONBIN_MASTER_KEY },
+      });
+      const json = await response.json();
+      const d = json.record;
+      return {
+          submissions: d.submissions || [],
+          adminConfig: d.adminConfig || { signature: null, clarification: '', jobTitle: '' },
+          trainings: d.trainings || [],
+          companies: d.companies || [],
+      };
+    } catch (e) {
+      console.error(e);
+      throw e;
     }
-    const response = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}/latest`, {
-      method: 'GET',
-      headers: {
-        'X-Master-Key': JSONBIN_MASTER_KEY,
-      },
-    });
-    if (!response.ok) {
-      throw new Error(`Failed to fetch data from jsonbin: ${response.statusText}`);
-    }
-    const jsonResponse = await response.json();
-    const data = jsonResponse.record;
-    // Ensure all keys exist to prevent runtime errors
-    return {
-        submissions: data.submissions || [],
-        adminConfig: data.adminConfig || { signature: null, clarification: '', jobTitle: '' },
-        trainings: data.trainings || [],
-        companies: data.companies || [],
-    };
   },
-
-  // Writes the entire data blob to jsonbin.io.
-  _putData: async (data: AppData): Promise<void> => {
-    if (JSONBIN_BIN_ID.startsWith('REEMPLAZA') || JSONBIN_MASTER_KEY.startsWith('REEMPLAZA')) {
-      throw new Error("Configuración de API requerida. Por favor, edita index.tsx.");
-    }
-    const response = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`, {
+  saveData: async (data: AppData): Promise<void> => {
+    await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
@@ -116,1877 +96,620 @@ const apiService = {
       },
       body: JSON.stringify(data),
     });
-    if (!response.ok) {
-      throw new Error(`Failed to save data to jsonbin: ${response.statusText}`);
-    }
-  },
-
-  getSharedTraining: async (key: string): Promise<Training | null> => {
-      const data = await apiService._getData();
-      // Find training by its permanent shareKey in the main trainings list
-      return data.trainings?.find(t => t.shareKey === key) || null;
-  },
-
-  getPublicConfig: async (): Promise<PublicConfig> => {
-      const data = await apiService._getData();
-      return {
-          adminConfig: data.adminConfig || { signature: null, clarification: '', jobTitle: '' },
-          companies: data.companies || [],
-      };
-  },
-};
-
-
-// --- SERVICES ---
-const generateSubmissionsPdf = (
-    submissions: UserSubmission[],
-    adminSignature: string | null,
-    adminSignatureClarification: string,
-    adminJobTitle: string,
-    companies: Company[] | undefined,
-    showToast: (message: string, type?: ToastType) => void,
-    trainingName?: string,
-    companyForPdf?: Company
-): void => {
-  if (!submissions || submissions.length === 0) {
-    showToast('No hay registros para generar el PDF.', 'info');
-    return;
-  }
-
-  try {
-    const doc = new jsPDF();
-    const pageHeight = doc.internal.pageSize.getHeight();
-    const pageWidth = doc.internal.pageSize.getWidth();
-    const margin = 15;
-
-    // --- Header ---
-    const headerHeight = 40;
-    doc.setFillColor(30, 41, 59); // slate-800
-    doc.rect(0, 0, pageWidth, headerHeight, 'F');
-    doc.setFontSize(22);
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Registro General de Asistencia', margin, 25);
-
-    // --- Sub-header Info ---
-    let subheaderY = headerHeight + 12;
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(11);
-    doc.setTextColor(51, 65, 85); // slate-700
-
-    const trainingText = `Capacitación: ${trainingName || 'Varias / No especificada'}`;
-    doc.text(trainingText, margin, subheaderY);
-    subheaderY += 6;
-    
-    if (companyForPdf) {
-      const companyText = `Empresa: ${companyForPdf.name}${companyForPdf.cuit ? ` (CUIT: ${companyForPdf.cuit})` : ''}`;
-      doc.text(companyText, margin, subheaderY);
-      subheaderY += 6;
-    }
-
-    const instructorText = `Dictada por: ${adminSignatureClarification || '[Aclaración no configurada]'} (${adminJobTitle || '[Cargo no configurado]'})`;
-    doc.text(instructorText, margin, subheaderY);
-    subheaderY += 6;
-
-    // --- Table Configuration ---
-    const isCompanySpecificReport = !!companyForPdf;
-    let tableColumns: string[];
-    let columnStyles: { [key: number]: any };
-    let signatureColumnIndex: number;
-
-    if (isCompanySpecificReport) {
-        // Report for a single company: Omit the company column from the table
-        tableColumns = ['#', 'Apellido y Nombre', 'DNI', 'Fecha y Hora', 'Firma'];
-        signatureColumnIndex = 4;
-        columnStyles = {
-            0: { cellWidth: 8, halign: 'center' },       // #
-            1: { cellWidth: 50 },                      // Apellido y Nombre
-            2: { cellWidth: 25 },                      // DNI
-            3: { cellWidth: 25 },                      // Fecha y Hora
-            4: { cellWidth: 72, minCellHeight: 18 },    // Firma (redistributed width)
-        };
-    } else {
-        // General report: Include the company column
-        tableColumns = ['#', 'Apellido y Nombre', 'DNI', 'Empresa / CUIT', 'Fecha y Hora', 'Firma'];
-        signatureColumnIndex = 5;
-        columnStyles = {
-            0: { cellWidth: 8, halign: 'center' },      // #
-            1: { cellWidth: 40 },                     // Apellido y Nombre
-            2: { cellWidth: 22 },                     // DNI
-            3: { cellWidth: 35 },                     // Empresa / CUIT
-            4: { cellWidth: 25 },                     // Fecha y Hora
-            5: { cellWidth: 40, minCellHeight: 18 },    // Firma
-        };
-    }
-
-    const tableRows = submissions.map((sub, index) => {
-        const date = new Date(sub.timestamp);
-        const formattedDateTime = date.toLocaleString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-        
-        const rowData = [
-          (index + 1).toString(),
-          `${sub.lastName}, ${sub.firstName}`,
-          sub.dni,
-        ];
-        
-        if (!isCompanySpecificReport) {
-          const company = companies?.find(c => c.name === sub.company);
-          const companyDisplay = company ? `${company.name}${company.cuit ? `\n${company.cuit}` : ''}` : sub.company;
-          rowData.push(companyDisplay);
-        }
-
-        rowData.push(formattedDateTime);
-        rowData.push(''); // Placeholder for signature
-        
-        return rowData;
-    });
-    
-    const startY = subheaderY + 2;
-    
-    autoTable(doc, {
-      head: [tableColumns],
-      body: tableRows,
-      startY: startY,
-      margin: { top: startY, bottom: 25 },
-      theme: 'grid',
-      headStyles: { fillColor: [30, 41, 59], textColor: 255, fontSize: 10 },
-      alternateRowStyles: { fillColor: [248, 250, 252] },
-      styles: { fontSize: 9, cellPadding: 2.5, valign: 'middle', textColor: [40, 40, 40] },
-      columnStyles: columnStyles,
-      didDrawPage: (data) => {
-          // FOOTER
-          const footerY = pageHeight - 18;
-          doc.setDrawColor(200, 200, 200);
-          doc.setLineWidth(0.2);
-          doc.line(margin, footerY, pageWidth - margin, footerY);
-
-          const pageNum = data.pageNumber;
-          const pageStr = "Página " + pageNum;
-          const dateStr = `Generado el: ${new Date().toLocaleString('es-ES')}`;
-          
-          doc.setFontSize(8);
-          doc.setTextColor(150);
-          
-          doc.text(dateStr, margin, footerY + 5);
-          const pageTextWidth = doc.getStringUnitWidth(pageStr) * doc.getFontSize() / doc.internal.scaleFactor;
-          doc.text(pageStr, pageWidth - margin - pageTextWidth, footerY + 5);
-      },
-      didDrawCell: (data) => {
-        if (data.column.index === signatureColumnIndex && data.cell.section === 'body') {
-          const submission = submissions[data.row.index];
-          if (submission && submission.signature) {
-            try {
-              const cellPadding = 2;
-              const cellHeight = data.cell.height - (cellPadding * 2);
-              const cellWidth = data.cell.width - (cellPadding * 2);
-              const imgProps = doc.getImageProperties(submission.signature);
-              const aspectRatio = imgProps.width / imgProps.height;
-              
-              let imgWidth = cellWidth;
-              let imgHeight = imgWidth / aspectRatio;
-
-              if (imgHeight > cellHeight) {
-                imgHeight = cellHeight;
-                imgWidth = imgHeight * aspectRatio;
-              }
-
-              const x = data.cell.x + (data.cell.width - imgWidth) / 2;
-              const y = data.cell.y + (data.cell.height - imgHeight) / 2;
-              
-              doc.addImage(submission.signature, 'PNG', x, y, imgWidth, imgHeight);
-            } catch (e) {
-              console.error(`Error adding signature for user ${submission.dni}:`, e);
-              doc.text("Error firma", data.cell.x + 2, data.cell.y + data.cell.height / 2);
-            }
-          }
-        }
-      },
-    });
-
-    const finalY = (doc as any).lastAutoTable.finalY;
-    let signatureY = finalY + 15;
-
-    // Add new page for signature if it doesn't fit
-    if (signatureY + 60 > pageHeight) {
-      doc.addPage();
-      signatureY = 35;
-    }
-    
-    if (adminSignature) {
-        try {
-            doc.addImage(adminSignature, 'PNG', margin, signatureY + 5, 60, 30);
-            doc.setDrawColor(0);
-            doc.line(margin, signatureY + 38, margin + 60, signatureY + 38);
-            doc.text(adminSignatureClarification, margin, signatureY + 43);
-            doc.setFontSize(9);
-            doc.text(adminJobTitle, margin, signatureY + 48);
-        } catch (imageError) {
-            console.error("Error al añadir la firma del administrador al PDF:", imageError);
-            doc.text("Error al cargar la firma.", margin, signatureY + 20);
-        }
-    } else {
-        doc.setFont('helvetica', 'italic');
-        doc.setTextColor(150, 0, 0);
-        doc.text('[Firma de administrador no configurada]', margin, signatureY + 20);
-    }
-    
-    let pdfFileNameBase = 'asistencia_general';
-    if(trainingName) {
-        pdfFileNameBase = `asistencia_${trainingName.replace(/\s+/g, '_')}`;
-    }
-    if (companyForPdf) {
-        pdfFileNameBase += `_${companyForPdf.name.replace(/\s+/g, '_')}`;
-    }
-
-    const pdfFileName = pdfFileNameBase.toLowerCase() + '.pdf';
-    
-    doc.save(pdfFileName);
-
-  } catch(e) {
-    console.error("Fallo al generar el PDF de registros:", e);
-    showToast("Ocurrió un error al generar el PDF. Revisa la consola.", 'error');
   }
 };
 
-
-const generateSingleSubmissionPdf = (submission: UserSubmission, adminSignature: string | null, adminSignatureClarification: string, adminJobTitle: string, companies: Company[] | undefined, showToast: (message: string, type?: ToastType) => void): void => {
-  try {
+// --- PDF GENERATOR ---
+const pdfService = {
+  generateCertificate: (sub: UserSubmission, config: AdminConfig) => {
     const doc = new jsPDF();
-    const pageWidth = doc.internal.pageSize.getWidth();
-    const pageHeight = doc.internal.pageSize.getHeight();
-    const margin = 15;
-
-    // --- Header ---
+    const width = doc.internal.pageSize.getWidth();
+    
+    // Header
     doc.setFillColor(30, 41, 59);
-    doc.rect(0, 0, pageWidth, 40, 'F');
-    doc.setFontSize(22);
+    doc.rect(0, 0, width, 45, 'F');
     doc.setTextColor(255, 255, 255);
+    doc.setFontSize(24);
     doc.setFont('helvetica', 'bold');
-    doc.text('Certificado de Capacitación', margin, 25);
+    doc.text('CERTIFICADO DE ASISTENCIA', width/2, 28, { align: 'center' });
 
-    // --- Body ---
-    doc.setFontSize(12);
-    doc.setTextColor(51, 65, 85);
+    // Body
+    doc.setTextColor(30, 41, 59);
+    doc.setFontSize(14);
     doc.setFont('helvetica', 'normal');
+    doc.text('Se deja constancia que:', width/2, 65, { align: 'center' });
     
-    const bodyY = 60;
-    doc.text(`Por medio de la presente, se certifica que`, margin, bodyY);
+    doc.setFontSize(26);
+    doc.setFont('helvetica', 'bold');
+    doc.text(`${sub.lastName.toUpperCase()}, ${sub.firstName}`, width/2, 80, { align: 'center' });
+    
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`DNI: ${sub.dni} | Empresa: ${sub.company}`, width/2, 90, { align: 'center' });
+
+    doc.setFontSize(14);
+    doc.text('Ha completado exitosamente la capacitación de:', width/2, 110, { align: 'center' });
     
     doc.setFontSize(18);
     doc.setFont('helvetica', 'bold');
-    doc.text(`${submission.firstName} ${submission.lastName}`, margin, bodyY + 10);
-    
-    doc.setFontSize(12);
-    doc.setFont('helvetica', 'normal');
+    doc.text(`"${sub.trainingName}"`, width/2, 125, { align: 'center' });
 
-    const company = companies?.find(c => c.name === submission.company);
-    const companyDisplay = company ? `${company.name}${company.cuit ? ` (CUIT: ${company.cuit})` : ''}` : submission.company;
-    
-    doc.text(`con DNI N° ${submission.dni}, de la empresa ${companyDisplay},`, margin, bodyY + 20);
-    
-    doc.text(`ha completado y aprobado la capacitación denominada:`, margin, bodyY + 30);
-
-    doc.setFontSize(16);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(30, 41, 59);
-    doc.text(`"${submission.trainingName}"`, margin, bodyY + 45);
-
-    doc.setFontSize(12);
-    doc.setTextColor(51, 65, 85);
-    doc.setFont('helvetica', 'normal');
-    doc.text(`Realizada en la fecha ${new Date(submission.timestamp).toLocaleDateString('es-ES')}.`, margin, bodyY + 55);
-
-    // --- Signatures ---
-    const signatureBlockY = pageHeight - 80;
-    const signatureWidth = 70;
-    const signatureHeight = 35;
-    const signatureLineY = signatureBlockY + signatureHeight + 5;
-
-    // User Signature
-    const userSignatureX = margin + 10;
-    doc.addImage(submission.signature, 'PNG', userSignatureX, signatureBlockY, signatureWidth, signatureHeight);
-    doc.setDrawColor(100, 100, 100);
-    doc.line(userSignatureX, signatureLineY, userSignatureX + signatureWidth, signatureLineY);
     doc.setFontSize(10);
-    doc.text('Firma del Asistente', userSignatureX + signatureWidth/2, signatureLineY + 5, { align: 'center' });
-    
-    // Admin Signature
-    const adminSignatureX = pageWidth - signatureWidth - margin - 10;
-    if (adminSignature) {
-        doc.addImage(adminSignature, 'PNG', adminSignatureX, signatureBlockY, signatureWidth, signatureHeight);
-        doc.line(adminSignatureX, signatureLineY, adminSignatureX + signatureWidth, signatureLineY);
-        doc.text(adminSignatureClarification, adminSignatureX + signatureWidth/2, signatureLineY + 5, { align: 'center' });
-        doc.setFontSize(9);
-        doc.text(adminJobTitle, adminSignatureX + signatureWidth/2, signatureLineY + 10, { align: 'center' });
-    } else {
-        doc.setFont('helvetica', 'italic');
-        doc.setTextColor(150, 0, 0);
-        doc.text('[Firma de administrador no configurada]', adminSignatureX + signatureWidth/2, signatureBlockY + signatureHeight/2, { align: 'center' });
-    }
-    
-    const pdfFileName = `certificado_${submission.dni}_${submission.trainingName.replace(/\s+/g, '_')}.pdf`.toLowerCase();
-    doc.save(pdfFileName);
+    doc.setFont('helvetica', 'italic');
+    doc.text(`Emitido el día: ${new Date(sub.timestamp).toLocaleDateString()}`, width/2, 140, { align: 'center' });
 
-  } catch (e) {
-    console.error("Fallo al generar el PDF individual:", e);
-    showToast("Ocurrió un error al generar el certificado.", 'error');
+    // Signatures
+    if (config.signature) {
+      doc.addImage(config.signature, 'PNG', 40, 165, 40, 20);
+      doc.line(30, 185, 90, 185);
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'bold');
+      doc.text(config.clarification, 60, 192, { align: 'center' });
+      doc.setFontSize(8);
+      doc.text(config.jobTitle, 60, 197, { align: 'center' });
+    }
+
+    if (sub.signature) {
+      doc.addImage(sub.signature, 'PNG', 130, 165, 40, 20);
+      doc.line(120, 185, 180, 185);
+      doc.setFontSize(10);
+      doc.text('Firma del Asistente', 150, 192, { align: 'center' });
+    }
+
+    doc.save(`Certificado_${sub.dni}_${sub.trainingId}.pdf`);
+  },
+
+  generateGeneralReport: (submissions: UserSubmission[], trainingName: string, config: AdminConfig) => {
+    const doc = new jsPDF();
+    doc.setFontSize(18);
+    doc.text(`Planilla de Asistencia: ${trainingName}`, 14, 20);
+    doc.setFontSize(10);
+    doc.text(`Instructor: ${config.clarification} - ${new Date().toLocaleDateString()}`, 14, 28);
+
+    const body = submissions.map((s, i) => [
+      i + 1,
+      `${s.lastName}, ${s.firstName}`,
+      s.dni,
+      s.company,
+      new Date(s.timestamp).toLocaleString(),
+      ''
+    ]);
+
+    autoTable(doc, {
+      startY: 35,
+      head: [['#', 'Apellido y Nombre', 'DNI', 'Empresa', 'Fecha/Hora', 'Firma']],
+      body: body,
+      theme: 'grid',
+      headStyles: { fillColor: [30, 41, 59] },
+      didDrawCell: (data) => {
+        if (data.column.index === 5 && data.cell.section === 'body') {
+          const s = submissions[data.row.index];
+          if (s.signature) {
+            doc.addImage(s.signature, 'PNG', data.cell.x + 2, data.cell.y + 1, 15, 8);
+          }
+        }
+      }
+    });
+
+    doc.save(`Reporte_Asistencia_${trainingName.replace(/\s/g, '_')}.pdf`);
   }
 };
 
+// --- COMPONENTS ---
 
-// --- UI COMPONENTS ---
+const Spinner = () => <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>;
 
-const Spinner: React.FC<{ size?: number }> = ({ size = 8 }) => (
-  <div className={`w-${size} h-${size} border-4 border-slate-500 border-t-slate-200 rounded-full animate-spin`}></div>
-);
+const Modal = ({ isOpen, onClose, title, children }: any) => {
+  if (!isOpen) return null;
+  return (
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-slate-900 border border-slate-700 w-full max-w-2xl rounded-2xl shadow-2xl flex flex-col max-h-[90vh]">
+        <div className="flex justify-between items-center p-6 border-b border-slate-800">
+          <h3 className="text-xl font-bold text-white">{title}</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors"><X/></button>
+        </div>
+        <div className="p-6 overflow-y-auto">{children}</div>
+      </div>
+    </div>
+  );
+};
 
-const Modal: React.FC<{ isOpen: boolean; onClose: () => void; title: string; children: React.ReactNode; size?: 'md' | 'xl'; footer?: React.ReactNode; }> = ({ isOpen, onClose, title, children, size = 'md', footer }) => {
-    if (!isOpen) return null;
+const Toast = ({ message, type, onDismiss }: any) => {
+  useEffect(() => { const t = setTimeout(onDismiss, 3000); return () => clearTimeout(t); }, []);
+  const bg = type === 'error' ? 'bg-red-600' : type === 'success' ? 'bg-green-600' : 'bg-blue-600';
+  return <div className={`fixed bottom-6 right-6 ${bg} text-white px-6 py-3 rounded-full shadow-xl z-[100] animate-bounce`}>{message}</div>;
+};
 
-    const sizeClasses = {
-        md: 'max-w-2xl max-h-[90vh]',
-        xl: 'max-w-6xl max-h-[90vh]'
+// --- MAIN APP ---
+
+const App = () => {
+  const [view, setView] = useState<'home' | 'login' | 'admin' | 'user' | 'loading'>('loading');
+  const [data, setData] = useState<AppData | null>(null);
+  const [toast, setToast] = useState<any>(null);
+  const [currentTraining, setCurrentTraining] = useState<Training | null>(null);
+  const [activeTab, setActiveTab] = useState<'trainings' | 'submissions' | 'companies' | 'settings'>('trainings');
+  
+  const showToast = (message: string, type: ToastType = 'info') => setToast({ message, type });
+
+  const loadData = async () => {
+    try {
+      const d = await apiService.getData();
+      setData(d);
+    } catch (e) { showToast("Error al conectar con la base de datos", "error"); }
+    finally { setView('home'); }
+  };
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const key = params.get('key');
+    if (key) {
+      apiService.getData().then(d => {
+        const t = d.trainings.find(x => x.shareKey === key);
+        if (t) {
+          setData(d);
+          setCurrentTraining(t);
+          setView('user');
+        } else {
+          loadData();
+        }
+      });
+    } else {
+      loadData();
+    }
+  }, []);
+
+  if (view === 'loading') return <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-white gap-4"><Spinner/><p>Cargando Trainer App...</p></div>;
+
+  const handleSave = async (newData: AppData) => {
+    setData(newData);
+    try {
+      await apiService.saveData(newData);
+      showToast("Cambios guardados con éxito", "success");
+    } catch (e) { showToast("Error al guardar", "error"); }
+  };
+
+  const AdminDashboard = () => {
+    const [isEditModalOpen, setEditModalOpen] = useState(false);
+    const [editingTraining, setEditingTraining] = useState<Training | null>(null);
+    const [editingCompany, setEditingCompany] = useState<Company | null>(null);
+
+    const deleteTraining = (id: string) => {
+      if (!confirm("¿Eliminar esta capacitación?")) return;
+      handleSave({ ...data!, trainings: data!.trainings.filter(t => t.id !== id) });
+    };
+
+    const duplicateTraining = (t: Training) => {
+      const newT = { ...t, id: `t-${Date.now()}`, name: `${t.name} (Copia)`, shareKey: Math.random().toString(36).substr(2, 9) };
+      handleSave({ ...data!, trainings: [...data!.trainings, newT] });
+    };
+
+    const saveTraining = (e: React.FormEvent) => {
+      e.preventDefault();
+      const formData = new FormData(e.target as HTMLFormElement);
+      const name = formData.get('name') as string;
+      
+      const newT: Training = {
+        ...editingTraining!,
+        name,
+        id: editingTraining?.id || `t-${Date.now()}`,
+        shareKey: editingTraining?.shareKey || Math.random().toString(36).substr(2, 9)
+      };
+
+      const newList = editingTraining?.id 
+        ? data!.trainings.map(x => x.id === newT.id ? newT : x)
+        : [...data!.trainings, newT];
+      
+      handleSave({ ...data!, trainings: newList });
+      setEditModalOpen(false);
+    };
+
+    const updateCompanyGlobal = (e: React.FormEvent) => {
+      e.preventDefault();
+      const newName = (e.target as any).companyName.value;
+      const oldName = editingCompany!.name;
+      
+      const updatedCompanies = data!.companies.map(c => c.id === editingCompany!.id ? { ...c, name: newName } : c);
+      const updatedSubmissions = data!.submissions.map(s => s.company === oldName ? { ...s, company: newName } : s);
+      
+      handleSave({ ...data!, companies: updatedCompanies, submissions: updatedSubmissions });
+      setEditingCompany(null);
+      showToast("Empresa actualizada en todos los registros", "success");
     };
 
     return (
-        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4" onClick={onClose}>
-            <div className={`bg-slate-800 border border-slate-700 rounded-xl shadow-2xl w-full flex flex-col relative animate-fade-in-up ${sizeClasses[size]}`} onClick={(e) => e.stopPropagation()}>
-                <div className="flex items-center justify-between p-4 border-b border-slate-700 flex-shrink-0">
-                    <h3 className="text-xl font-bold text-slate-100 truncate pr-4">{title}</h3>
-                    <button onClick={onClose} className="p-1 rounded-full text-slate-400 hover:bg-slate-700 hover:text-slate-200 transition-all">
-                        <X size={24} />
-                    </button>
-                </div>
-                <div className="p-6 overflow-y-auto flex-grow">
-                    {children}
-                </div>
-                {footer && (
-                    <div className="flex justify-end items-center gap-4 p-4 border-t border-slate-700 flex-shrink-0 bg-slate-800 sticky bottom-0">
-                        {footer}
-                    </div>
-                )}
+      <div className="min-h-screen bg-slate-950 text-slate-200">
+        <nav className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-md sticky top-0 z-10">
+          <div className="max-w-7xl mx-auto px-4 py-4 flex justify-between items-center">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-blue-600 rounded-lg"><ShieldCheck className="text-white"/></div>
+              <h1 className="text-xl font-bold tracking-tight">Admin <span className="text-blue-500">Panel</span></h1>
             </div>
-        </div>
-    );
-};
-
-
-const SignaturePad: React.FC<{ sigCanvasRef: React.RefObject<SignatureCanvas>; canvasClassName?: string; }> = ({ sigCanvasRef, canvasClassName = 'h-48' }) => {
-  const [isEmpty, setIsEmpty] = useState(true);
-  const canvasWrapperRef = useRef<HTMLDivElement>(null);
-  const AnySignatureCanvas = SignatureCanvas as any;
-
-  const handleClear = () => {
-    sigCanvasRef.current?.clear();
-    setIsEmpty(true);
-  };
-
-  const handleBeginStroke = (event: MouseEvent | TouchEvent) => {
-    // Check if it's a touch event and prevent default page scroll
-    if (event.type === 'touchstart') {
-        event.preventDefault();
-    }
-    setIsEmpty(false);
-  };
-  
-  const resizeCanvas = useCallback(() => {
-    const canvas = sigCanvasRef.current?.getCanvas();
-    const wrapper = canvasWrapperRef.current;
-    if (canvas && wrapper) {
-        const { width, height } = wrapper.getBoundingClientRect();
-        const ratio = Math.max(window.devicePixelRatio || 1, 1);
-        
-        if (canvas.width !== Math.floor(width * ratio) || canvas.height !== Math.floor(height * ratio)) {
-            const signatureData = sigCanvasRef.current?.toDataURL();
-            canvas.width = Math.floor(width * ratio);
-            canvas.height = Math.floor(height * ratio);
-            canvas.getContext("2d")?.scale(ratio, ratio);
-            
-            if (signatureData) {
-                sigCanvasRef.current?.fromDataURL(signatureData);
-            } else {
-                sigCanvasRef.current?.clear();
-            }
-        }
-    }
-  }, [sigCanvasRef]);
-
-  useEffect(() => {
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
-    
-    const wrapper = canvasWrapperRef.current;
-    // Add touch event listener to prevent scrolling on the canvas
-    wrapper?.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
-
-    return () => {
-        window.removeEventListener('resize', resizeCanvas);
-        wrapper?.removeEventListener('touchstart', (e) => e.preventDefault());
-    };
-  }, [resizeCanvas]);
-
-  useEffect(() => {
-    if (sigCanvasRef.current) {
-        setIsEmpty(sigCanvasRef.current.isEmpty());
-    }
-  }, [sigCanvasRef]);
-
-  return (
-    <div className="w-full">
-      <div className={`relative bg-white border-2 border-dashed border-slate-600 rounded-lg overflow-hidden touch-none ${canvasClassName}`}>
-        {isEmpty && (
-          <div className="absolute inset-0 flex items-center justify-center text-slate-400 pointer-events-none select-none">
-            <p>Dibuja tu firma aquí</p>
+            <div className="flex gap-4">
+              <button onClick={() => setView('home')} className="p-2 hover:bg-slate-800 rounded-lg transition-colors"><LogOut size={20}/></button>
+            </div>
           </div>
-        )}
-        <div ref={canvasWrapperRef} className="w-full h-full">
-            <AnySignatureCanvas
-                ref={sigCanvasRef}
-                penColor='black'
-                canvasProps={{ className: `w-full h-full` }}
-                onBegin={handleBeginStroke}
-            />
+        </nav>
+
+        <main className="max-w-7xl mx-auto p-4 lg:p-8">
+          <div className="flex flex-wrap gap-2 mb-8 bg-slate-900 p-1.5 rounded-xl border border-slate-800 w-fit">
+            <button onClick={() => setActiveTab('trainings')} className={`px-6 py-2 rounded-lg font-medium transition-all ${activeTab === 'trainings' ? 'bg-blue-600 text-white shadow-lg' : 'hover:bg-slate-800 text-slate-400'}`}>Capacitaciones</button>
+            <button onClick={() => setActiveTab('submissions')} className={`px-6 py-2 rounded-lg font-medium transition-all ${activeTab === 'submissions' ? 'bg-blue-600 text-white shadow-lg' : 'hover:bg-slate-800 text-slate-400'}`}>Asistencias</button>
+            <button onClick={() => setActiveTab('companies')} className={`px-6 py-2 rounded-lg font-medium transition-all ${activeTab === 'companies' ? 'bg-blue-600 text-white shadow-lg' : 'hover:bg-slate-800 text-slate-400'}`}>Empresas</button>
+            <button onClick={() => setActiveTab('settings')} className={`px-6 py-2 rounded-lg font-medium transition-all ${activeTab === 'settings' ? 'bg-blue-600 text-white shadow-lg' : 'hover:bg-slate-800 text-slate-400'}`}>Instructor</button>
+          </div>
+
+          {activeTab === 'trainings' && (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-fade-in">
+              <button 
+                onClick={() => { setEditingTraining({ id: '', name: '', links: [], shareKey: '' }); setEditModalOpen(true); }}
+                className="group flex flex-col items-center justify-center p-8 border-2 border-dashed border-slate-800 hover:border-blue-500 hover:bg-blue-500/5 rounded-2xl transition-all gap-4"
+              >
+                <div className="p-4 bg-slate-900 group-hover:bg-blue-600 rounded-full transition-colors"><PlusCircle size={32}/></div>
+                <span className="font-bold text-slate-400 group-hover:text-blue-400 text-lg">Nueva Plantilla</span>
+              </button>
+              {data?.trainings.map(t => (
+                <div key={t.id} className="bg-slate-900 border border-slate-800 p-6 rounded-2xl flex flex-col hover:border-slate-600 transition-all shadow-xl group">
+                  <div className="flex justify-between items-start mb-4">
+                    <h4 className="font-bold text-lg text-white group-hover:text-blue-400 transition-colors">{t.name}</h4>
+                    <div className="flex gap-2">
+                      <button onClick={() => duplicateTraining(t)} title="Clonar" className="p-1.5 text-slate-400 hover:text-green-400"><CopyPlus size={18}/></button>
+                      <button onClick={() => { setEditingTraining(t); setEditModalOpen(true); }} className="p-1.5 text-slate-400 hover:text-blue-400"><Edit size={18}/></button>
+                      <button onClick={() => deleteTraining(t.id)} className="p-1.5 text-slate-400 hover:text-red-400"><Trash2 size={18}/></button>
+                    </div>
+                  </div>
+                  <div className="mt-auto pt-6 flex items-center justify-between border-t border-slate-800">
+                    <div className="flex flex-col">
+                      <span className="text-xs text-slate-500 uppercase tracking-wider font-bold">Enlace Público</span>
+                      <code className="text-blue-400 text-sm">{t.shareKey}</code>
+                    </div>
+                    <button 
+                      onClick={() => {
+                        const url = `${window.location.origin}${window.location.pathname}?key=${t.shareKey}`;
+                        navigator.clipboard.writeText(url);
+                        showToast("Link copiado al portapapeles", "success");
+                      }}
+                      className="p-2 bg-slate-800 rounded-lg hover:bg-blue-600 transition-colors"
+                    ><Copy size={18}/></button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {activeTab === 'submissions' && (
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl animate-fade-in">
+              <div className="p-6 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
+                <h3 className="font-bold text-xl">Registros de Asistencia</h3>
+                <div className="flex gap-2">
+                  <span className="text-sm bg-blue-600/20 text-blue-400 px-3 py-1 rounded-full font-bold">{data?.submissions.length} Total</span>
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead className="bg-slate-800/50 text-slate-400 text-xs uppercase tracking-widest font-bold">
+                    <tr>
+                      <th className="p-4">Persona</th>
+                      <th className="p-4">DNI</th>
+                      <th className="p-4">Capacitación</th>
+                      <th className="p-4">Empresa</th>
+                      <th className="p-4 text-center">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800">
+                    {data?.submissions.slice().reverse().map(s => (
+                      <tr key={s.id} className="hover:bg-slate-800/30 transition-colors">
+                        <td className="p-4 font-medium text-white">{s.lastName}, {s.firstName}</td>
+                        <td className="p-4 text-slate-400">{s.dni}</td>
+                        <td className="p-4"><span className="text-xs bg-slate-800 px-2 py-1 rounded">{s.trainingName}</span></td>
+                        <td className="p-4 text-blue-400 font-medium">{s.company}</td>
+                        <td className="p-4 flex justify-center gap-2">
+                          <button onClick={() => pdfService.generateCertificate(s, data!.adminConfig)} className="p-2 bg-slate-800 hover:bg-blue-600 rounded-lg transition-colors" title="Certificado"><FileDown size={16}/></button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'companies' && (
+             <div className="max-w-4xl animate-fade-in">
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl mb-6">
+                  <h3 className="font-bold text-xl mb-6 flex items-center gap-2"><Building className="text-blue-500"/> Gestionar Empresas</h3>
+                  <form className="flex gap-4 mb-8" onSubmit={(e) => {
+                    e.preventDefault();
+                    const name = (e.target as any).comp.value;
+                    if (!name) return;
+                    handleSave({ ...data!, companies: [...data!.companies, { id: `c-${Date.now()}`, name }] });
+                    (e.target as any).reset();
+                  }}>
+                    <input name="comp" placeholder="Nombre de la nueva empresa..." className="flex-grow bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+                    <button className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 transition-all"><PlusCircle size={20}/> Añadir</button>
+                  </form>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {data?.companies.map(c => (
+                      <div key={c.id} className="bg-slate-800/50 border border-slate-700 p-4 rounded-xl flex justify-between items-center group">
+                        <span className="font-medium">{c.name}</span>
+                        <div className="flex gap-2">
+                          <button onClick={() => setEditingCompany(c)} className="p-2 text-slate-400 hover:text-blue-400 transition-colors"><Edit size={16}/></button>
+                          <button onClick={() => {
+                            if(confirm("¿Eliminar empresa? No afectará registros históricos.")) {
+                              handleSave({ ...data!, companies: data!.companies.filter(x => x.id !== c.id) });
+                            }
+                          }} className="p-2 text-slate-400 hover:text-red-400 transition-colors"><Trash2 size={16}/></button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+             </div>
+          )}
+
+          {activeTab === 'settings' && (
+            <div className="max-w-2xl bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-2xl animate-fade-in">
+              <h3 className="font-bold text-xl mb-6 flex items-center gap-2"><Settings className="text-blue-500"/> Firma del Instructor</h3>
+              <form onSubmit={(e) => {
+                e.preventDefault();
+                const fd = new FormData(e.target as any);
+                handleSave({
+                  ...data!,
+                  adminConfig: {
+                    ...data!.adminConfig,
+                    clarification: fd.get('clar') as string,
+                    jobTitle: fd.get('job') as string
+                  }
+                });
+              }} className="space-y-6">
+                <div>
+                  <label className="block text-sm font-bold text-slate-400 mb-2 uppercase tracking-widest">Nombre Completo (Aclaración)</label>
+                  <input name="clar" defaultValue={data?.adminConfig.clarification} className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-slate-400 mb-2 uppercase tracking-widest">Cargo / Puesto</label>
+                  <input name="job" defaultValue={data?.adminConfig.jobTitle} className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-slate-400 mb-2 uppercase tracking-widest">Firma Actual</label>
+                  <div className="bg-white p-4 rounded-xl mb-4 h-32 flex items-center justify-center border-4 border-slate-800">
+                    {data?.adminConfig.signature ? <img src={data.adminConfig.signature} className="max-h-full"/> : <span className="text-slate-400 italic text-sm">Sin firma configurada</span>}
+                  </div>
+                  <button type="button" onClick={() => {
+                    const canvas = document.createElement('canvas');
+                    // Simulación de carga de firma para brevedad, en un caso real usaríamos un SignaturePad aquí también
+                    const sig = prompt("Por favor cargue o firme en el Panel de Firma (Usa el modo usuario para generar una firma temporal si es necesario)");
+                    if(sig) handleSave({ ...data!, adminConfig: { ...data!.adminConfig, signature: sig } });
+                  }} className="text-blue-500 text-sm font-bold hover:underline">Cambiar Firma</button>
+                </div>
+                <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white py-4 rounded-xl font-bold text-lg shadow-lg transition-all">Guardar Configuración</button>
+              </form>
+            </div>
+          )}
+        </main>
+
+        {/* MODAL EDITAR CAPACITACION */}
+        <Modal isOpen={isEditModalOpen} onClose={() => setEditModalOpen(false)} title={editingTraining?.id ? "Editar Plantilla" : "Nueva Plantilla"}>
+          <form onSubmit={saveTraining} className="space-y-6">
+            <div>
+              <label className="block text-sm font-bold text-slate-500 mb-2">NOMBRE DEL CURSO</label>
+              <input name="name" defaultValue={editingTraining?.name} placeholder="Ejem: Seguridad en Altura" required className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3"/>
+            </div>
+            <div>
+              <div className="flex justify-between items-center mb-4">
+                <label className="text-sm font-bold text-slate-500">MATERIALES / ENLACES</label>
+                <button type="button" onClick={() => setEditingTraining({...editingTraining!, links: [...editingTraining!.links, { id: `l-${Date.now()}`, name: '', url: '' }]})} className="text-blue-500 text-sm font-bold">+ Añadir Link</button>
+              </div>
+              <div className="space-y-3">
+                {editingTraining?.links.map((l, idx) => (
+                  <div key={l.id} className="flex gap-2 items-center animate-fade-in">
+                    <input placeholder="Nombre (Video, PDF...)" value={l.name} onChange={e => {
+                      const n = [...editingTraining.links];
+                      n[idx].name = e.target.value;
+                      setEditingTraining({...editingTraining, links: n});
+                    }} className="w-1/3 bg-slate-800 border border-slate-700 rounded-lg p-2 text-sm"/>
+                    <input placeholder="https://..." value={l.url} onChange={e => {
+                      const n = [...editingTraining.links];
+                      n[idx].url = e.target.value;
+                      setEditingTraining({...editingTraining, links: n});
+                    }} className="flex-grow bg-slate-800 border border-slate-700 rounded-lg p-2 text-sm"/>
+                    <button type="button" onClick={() => setEditingTraining({...editingTraining, links: editingTraining.links.filter(x => x.id !== l.id)})} className="text-red-500 p-2"><X size={16}/></button>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <button className="w-full bg-blue-600 hover:bg-blue-500 text-white py-4 rounded-xl font-bold shadow-xl">Guardar Plantilla</button>
+          </form>
+        </Modal>
+
+        {/* MODAL EDITAR EMPRESA (GLOBAL) */}
+        <Modal isOpen={!!editingCompany} onClose={() => setEditingCompany(null)} title="Reemplazar Nombre de Empresa">
+          <form onSubmit={updateCompanyGlobal} className="space-y-6">
+             <p className="text-sm text-yellow-500 font-medium">⚠️ ¡Atención! Cambiar el nombre aquí actualizará automáticamente todas las asistencias históricas vinculadas a "{editingCompany?.name}".</p>
+             <input name="companyName" defaultValue={editingCompany?.name} required className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3"/>
+             <button className="w-full bg-blue-600 py-3 rounded-xl font-bold">Actualizar Globalmente</button>
+          </form>
+        </Modal>
+      </div>
+    );
+  };
+
+  const UserPortal = () => {
+    const [step, setStep] = useState<'content' | 'form' | 'success'>('content');
+    const [viewed, setViewed] = useState<Set<string>>(new Set());
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const sigRef = useRef<any>(null);
+
+    const progress = currentTraining!.links.length > 0 ? (viewed.size / currentTraining!.links.length) * 100 : 100;
+
+    const handleForm = async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (sigRef.current.isEmpty()) return showToast("Firma requerida", "error");
+      
+      setIsSubmitting(true);
+      const fd = new FormData(e.target as any);
+      const sub: UserSubmission = {
+        id: `s-${Date.now()}`,
+        trainingId: currentTraining!.id,
+        trainingName: currentTraining!.name,
+        firstName: fd.get('fn') as string,
+        lastName: fd.get('ln') as string,
+        dni: fd.get('dni') as string,
+        company: fd.get('comp') as string,
+        signature: sigRef.current.getTrimmedCanvas().toDataURL('image/png'),
+        timestamp: new Date().toISOString()
+      };
+
+      try {
+        const d = await apiService.getData();
+        await apiService.saveData({ ...d, submissions: [...d.submissions, sub] });
+        setStep('success');
+      } catch (e) { showToast("Error al enviar registro", "error"); }
+      finally { setIsSubmitting(false); }
+    };
+
+    if (step === 'success') {
+      return (
+        <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 text-center animate-fade-in">
+          <div className="w-20 h-20 bg-green-500 rounded-full flex items-center justify-center mb-6 shadow-lg shadow-green-500/20"><CheckCircle size={40} className="text-white"/></div>
+          <h2 className="text-3xl font-bold text-white mb-2">¡Registro Exitoso!</h2>
+          <p className="text-slate-400 mb-8 max-w-sm">Has completado la capacitación y tu asistencia ha sido registrada correctamente.</p>
+          <button onClick={() => window.location.reload()} className="bg-slate-800 px-8 py-3 rounded-xl font-bold text-white">Finalizar</button>
+        </div>
+      );
+    }
+
+    return (
+      <div className="min-h-screen bg-slate-950 text-white p-4">
+        <div className="max-w-2xl mx-auto py-8">
+          <header className="text-center mb-10">
+            <span className="text-blue-500 font-bold uppercase tracking-widest text-xs mb-2 block">Capacitación Digital</span>
+            <h1 className="text-3xl font-extrabold">{currentTraining!.name}</h1>
+          </header>
+
+          {step === 'content' ? (
+            <div className="bg-slate-900 border border-slate-800 p-6 rounded-3xl shadow-2xl animate-fade-in-up">
+              <div className="mb-8">
+                <div className="flex justify-between items-end mb-2">
+                  <span className="text-sm font-bold text-slate-400">Progreso del curso</span>
+                  <span className="text-xl font-black text-blue-500">{Math.round(progress)}%</span>
+                </div>
+                <div className="h-3 w-full bg-slate-800 rounded-full overflow-hidden">
+                  <div className="h-full bg-blue-600 transition-all duration-500" style={{ width: `${progress}%` }}></div>
+                </div>
+              </div>
+
+              <div className="space-y-4 mb-8">
+                {currentTraining!.links.length > 0 ? currentTraining!.links.map(l => (
+                  <button key={l.id} onClick={() => { window.open(l.url, '_blank'); setViewed(prev => new Set(prev).add(l.id)); }} className="w-full flex items-center justify-between p-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-2xl transition-all group">
+                    <div className="flex items-center gap-4">
+                      <div className={`p-2 rounded-lg ${viewed.has(l.id) ? 'bg-green-600/20 text-green-400' : 'bg-blue-600/20 text-blue-400'}`}>
+                        <FileText size={20}/>
+                      </div>
+                      <span className="font-bold">{l.name}</span>
+                    </div>
+                    <ArrowRight size={18} className="text-slate-500 group-hover:translate-x-1 transition-transform"/>
+                  </button>
+                )) : (
+                  <p className="text-center text-slate-500 py-10 italic">No hay material adjunto para esta capacitación.</p>
+                )}
+              </div>
+
+              <button 
+                disabled={progress < 100 && currentTraining!.links.length > 0} 
+                onClick={() => setStep('form')}
+                className="w-full bg-blue-600 disabled:bg-slate-800 disabled:text-slate-600 py-5 rounded-2xl font-black text-lg shadow-xl hover:bg-blue-500 transition-all"
+              >
+                IR AL REGISTRO
+              </button>
+            </div>
+          ) : (
+            <form onSubmit={handleForm} className="bg-slate-900 border border-slate-800 p-8 rounded-3xl shadow-2xl animate-fade-in-up space-y-6">
+              <button type="button" onClick={() => setStep('content')} className="text-slate-400 flex items-center gap-2 text-sm hover:text-white"><ArrowLeft size={16}/> Volver al curso</button>
+              <h3 className="text-2xl font-bold">Datos del Asistente</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <input name="ln" placeholder="Apellidos" required className="bg-slate-800 border border-slate-700 rounded-xl p-4"/>
+                <input name="fn" placeholder="Nombres" required className="bg-slate-800 border border-slate-700 rounded-xl p-4"/>
+              </div>
+              <input name="dni" placeholder="DNI / Cédula" required className="w-full bg-slate-800 border border-slate-700 rounded-xl p-4"/>
+              <select name="comp" required className="w-full bg-slate-800 border border-slate-700 rounded-xl p-4 text-slate-400">
+                <option value="">Selecciona tu Empresa...</option>
+                {data?.companies.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+              </select>
+              
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Firma Digital</label>
+                <div className="bg-white rounded-2xl border-4 border-slate-800 h-48 overflow-hidden">
+                  <SignatureCanvas ref={sigRef} penColor='black' canvasProps={{className: 'w-full h-full'}} />
+                </div>
+                <button type="button" onClick={() => sigRef.current.clear()} className="text-xs text-red-400 hover:underline">Limpiar firma</button>
+              </div>
+
+              <button disabled={isSubmitting} className="w-full bg-green-600 hover:bg-green-500 py-5 rounded-2xl font-black text-lg shadow-xl transition-all flex items-center justify-center gap-3">
+                {isSubmitting ? <Spinner/> : <><Send size={20}/> ENVIAR REGISTRO</>}
+              </button>
+            </form>
+          )}
         </div>
       </div>
-      <div className="flex justify-end mt-4">
-        <button
-          type="button"
-          onClick={handleClear}
-          className="px-4 py-2 text-sm font-semibold text-slate-200 bg-slate-600 rounded-md hover:bg-slate-500 transition-colors"
-        >
-          Limpiar Firma
+    );
+  };
+
+  const Welcome = () => (
+    <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 text-center text-white">
+      <div className="w-24 h-24 bg-blue-600 rounded-[2rem] flex items-center justify-center mb-8 rotate-12 shadow-2xl shadow-blue-500/20"><GraduationCap size={48}/></div>
+      <h1 className="text-5xl font-black mb-4 tracking-tighter">Trainer<span className="text-blue-600">App</span></h1>
+      <p className="text-slate-400 max-w-sm mb-12 text-lg">Plataforma profesional para gestión de capacitaciones, asistencia y certificaciones digitales.</p>
+      
+      <div className="flex flex-col gap-4 w-full max-w-xs">
+        <button onClick={() => setView('login')} className="bg-blue-600 hover:bg-blue-500 py-4 rounded-2xl font-bold flex items-center justify-center gap-2 transition-all shadow-xl">
+          <ShieldCheck size={20}/> Acceso Administrador
         </button>
       </div>
     </div>
   );
-};
 
-const QRCodeDisplay: React.FC<{ shareKey: string | undefined }> = ({ shareKey }) => {
-    const [qrCodeUrl, setQrCodeUrl] = useState<string | null>(null);
-    const [error, setError] = useState(false);
-
-    useEffect(() => {
-        if (shareKey) {
-            setError(false);
-            setQrCodeUrl(null); // Reset for loading state
-            const baseUrl = `${window.location.origin}${window.location.pathname}?trainingKey=${shareKey}`;
-            QRCode.toDataURL(baseUrl, { width: 128, margin: 1, color: { dark: '#FFFFFF', light: '#1E293B' } })
-                .then(url => setQrCodeUrl(url))
-                .catch(err => {
-                    console.error("QR generation failed:", err);
-                    setError(true);
-                });
-        } else {
-            setQrCodeUrl(null);
-        }
-    }, [shareKey]);
-
-    if (!shareKey) {
-        return (
-            <div className="w-32 h-32 bg-slate-800 rounded-md flex items-center justify-center text-center text-xs text-slate-500 p-2">
-                Comparta la capacitación para generar el QR.
-            </div>
-        );
-    }
-
-    if (error) {
-        return <div className="w-32 h-32 bg-red-900/50 rounded-md flex items-center justify-center text-center text-xs text-red-300 p-2">Error al generar QR.</div>
-    }
-
-    if (!qrCodeUrl) {
-        return <div className="w-32 h-32 bg-slate-800 rounded-md flex items-center justify-center"><Spinner size={6} /></div>;
-    }
-
-    return <img src={qrCodeUrl} alt="Código QR de la capacitación" className="w-32 h-32 rounded-md border-4 border-slate-600"/>
-};
-
-const UserTrainingPortal: React.FC<{ training: Training; onBack: () => void; showToast: (message: string, type?: ToastType) => void; prefilledCompany?: string }> = ({ training, onBack, showToast, prefilledCompany }) => {
-    const [viewedLinks, setViewedLinks] = useState<Set<string>>(new Set());
-    const [stage, setStage] = useState<'training' | 'form' | 'completed'>('training');
-    const [lastSubmission, setLastSubmission] = useState<UserSubmission | null>(null);
-    const [publicConfig, setPublicConfig] = useState<PublicConfig | null>(null);
-    const [isLoading, setIsLoading] = useState(true);
-    const sigCanvasRef = useRef<SignatureCanvas>(null);
-
-    useEffect(() => {
-      apiService.getPublicConfig().then(config => {
-        setPublicConfig(config);
-      }).finally(() => {
-        setIsLoading(false);
-      });
-    }, []);
-
-    const handleOpenLink = (link: TrainingLink) => {
-        // Marcado instantáneo: la forma más fiable de registrar el progreso.
-        setViewedLinks(prev => {
-            if (prev.has(link.id)) return prev; // Evita re-render si ya está visto
-            const newSet = new Set(prev);
-            newSet.add(link.id);
-            return newSet;
-        });
-        
-        // Abrir el enlace en una nueva pestaña.
-        window.open(link.url, '_blank', 'noopener,noreferrer');
+  const Login = () => {
+    const [pass, setPass] = useState('');
+    const handleLogin = (e: React.FormEvent) => {
+      e.preventDefault();
+      if (pass === ADMIN_PASSWORD) setView('admin');
+      else showToast("Contraseña incorrecta", "error");
     };
-
-    const progress = training.links.length > 0 ? (viewedLinks.size / training.links.length) * 100 : 100;
-    const allLinksViewed = progress >= 100;
-
-    const autoFilledCompany = useMemo(() => {
-        if (prefilledCompany) return prefilledCompany;
-        if (training.companies && training.companies.length === 1) {
-            return training.companies[0];
-        }
-        return '';
-    }, [prefilledCompany, training.companies]);
-
-
-    const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-        e.preventDefault();
-        if (sigCanvasRef.current?.isEmpty()) {
-            showToast('Por favor, provea su firma para completar el registro.', 'error');
-            return;
-        }
-
-        const formData = new FormData(e.currentTarget);
-        const submissionData: Omit<UserSubmission, 'id' | 'timestamp'> = {
-            trainingId: training.id,
-            trainingName: training.name,
-            firstName: formData.get('firstName') as string,
-            lastName: formData.get('lastName') as string,
-            dni: formData.get('dni') as string,
-            company: formData.get('company') as string,
-            signature: sigCanvasRef.current?.getTrimmedCanvas().toDataURL('image/png') || '',
-            email: formData.get('email') as string,
-            phone: formData.get('phone') as string,
-        };
-
-        if (!submissionData.firstName || !submissionData.lastName || !submissionData.dni || !submissionData.company) {
-            showToast("Por favor, complete todos los campos obligatorios.", 'error');
-            return;
-        }
-
-        const fullSubmission: UserSubmission = {
-            ...submissionData,
-            id: `sub-${Date.now()}`,
-            timestamp: new Date().toISOString(),
-        };
-
-        try {
-            setIsLoading(true);
-            const currentData = await apiService._getData();
-            const newData = { ...currentData, submissions: [...currentData.submissions, fullSubmission] };
-            await apiService._putData(newData);
-            setLastSubmission(fullSubmission);
-            setStage('completed');
-        } catch (error: any) {
-            showToast(`Error al enviar el registro: ${error.message}`, 'error');
-        } finally {
-            setIsLoading(false);
-        }
-    };
-    
-    if (isLoading) {
-        return <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4"><Spinner size={12} /></div>;
-    }
-
-    if (stage === 'completed' && lastSubmission) {
-        return (
-            <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 text-center animate-fade-in-up">
-                <CheckCircle size={64} className="text-green-400 mb-4" />
-                <h1 className="text-3xl font-bold text-slate-100 mb-2">¡Registro Completado!</h1>
-                <p className="text-slate-400 max-w-md mb-6">Gracias, {lastSubmission.firstName}. Tu asistencia a la capacitación "{lastSubmission.trainingName}" ha sido registrada con éxito.</p>
-                <div className="flex flex-col sm:flex-row gap-4">
-                    <button
-                        onClick={() => generateSingleSubmissionPdf(lastSubmission, publicConfig?.adminConfig.signature || null, publicConfig?.adminConfig.clarification || '', publicConfig?.adminConfig.jobTitle || '', publicConfig?.companies, showToast)}
-                        disabled={!publicConfig?.adminConfig.signature}
-                        title={!publicConfig?.adminConfig.signature ? "El administrador debe configurar su firma para habilitar la descarga." : "Descargar Certificado"}
-                        className="flex items-center justify-center gap-2 w-full sm:w-auto px-6 py-3 text-base font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-700 transition disabled:bg-slate-600 disabled:cursor-not-allowed"
-                    >
-                        <FileDown size={20} />
-                        Descargar Certificado
-                    </button>
-                    <button onClick={onBack} className="flex items-center justify-center gap-2 w-full sm:w-auto px-6 py-3 text-base font-semibold text-slate-200 bg-slate-700 rounded-md hover:bg-slate-600 transition">
-                        <ArrowLeft size={20} />
-                        Volver al Inicio
-                    </button>
-                </div>
-            </div>
-        );
-    }
-
     return (
-        <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-start p-4 sm:p-6 lg:p-8">
-            <div className="w-full max-w-3xl">
-                <header className="text-center mb-8">
-                    <h1 className="text-3xl sm:text-4xl font-bold text-slate-100">{training.name}</h1>
-                    <p className="text-slate-400 mt-2">Siga los pasos a continuación para completar la capacitación.</p>
-                </header>
-
-                {stage === 'training' && (
-                    <div className="w-full bg-slate-800 border border-slate-700 rounded-xl p-6 shadow-lg animate-fade-in-up">
-                        <div className="mb-6">
-                            <div className="flex justify-between items-center mb-2">
-                                <h2 className="text-lg font-semibold text-slate-200">Progreso</h2>
-                                <span className="text-lg font-bold text-blue-400">{Math.round(progress)}%</span>
-                            </div>
-                            <div className="w-full bg-slate-700 rounded-full h-3">
-                                <div className="bg-blue-500 h-3 rounded-full transition-all duration-500" style={{ width: `${progress}%` }}></div>
-                            </div>
-                        </div>
-                        <div className="space-y-3">
-                            {training.links.map((link, index) => (
-                                <div key={link.id} className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3 bg-slate-700 rounded-md">
-                                    <div className="flex items-center gap-3 w-full sm:w-auto">
-                                        {viewedLinks.has(link.id) ? <CheckCircle size={20} className="text-green-400 flex-shrink-0" /> : <FileText size={20} className="text-slate-400 flex-shrink-0" />}
-                                        <span className="text-slate-200 truncate">{link.name || `Material de Estudio #${index + 1}`}</span>
-                                    </div>
-                                    <button
-                                        onClick={() => handleOpenLink(link)}
-                                        disabled={viewedLinks.has(link.id)}
-                                        className="w-full sm:w-auto flex-shrink-0 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition disabled:bg-slate-600 disabled:text-slate-400"
-                                    >
-                                        {viewedLinks.has(link.id) ? 'Visto' : 'Abrir Material'}
-                                    </button>
-                                </div>
-                            ))}
-                        </div>
-                        <div className="mt-8 text-center">
-                            <button
-                                onClick={() => setStage('form')}
-                                disabled={!allLinksViewed}
-                                className="w-full sm:w-auto flex items-center justify-center gap-2 px-8 py-3 text-lg font-bold text-white bg-green-600 rounded-md hover:bg-green-500 transition disabled:bg-slate-600 disabled:cursor-not-allowed"
-                                title={!allLinksViewed ? 'Debe ver todo el material para continuar' : ''}
-                            >
-                                Registrar Asistencia <ArrowRight size={22} />
-                            </button>
-                        </div>
-                    </div>
-                )}
-                
-                {stage === 'form' && (
-                    <form onSubmit={handleSubmit} className="w-full bg-slate-800 border border-slate-700 rounded-xl p-6 shadow-lg space-y-6 animate-fade-in-up">
-                        <div>
-                            <button onClick={() => setStage('training')} className="flex items-center gap-2 text-sm text-blue-400 hover:underline mb-4">
-                                <ArrowLeft size={16} /> Volver al material
-                            </button>
-                            <h2 className="text-2xl font-bold text-slate-100">Formulario de Registro</h2>
-                            <p className="text-slate-400">Complete sus datos para registrar su asistencia.</p>
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div>
-                                <label htmlFor="firstName" className="block text-sm font-medium text-slate-300 mb-1">Nombre</label>
-                                <input type="text" name="firstName" id="firstName" required className="w-full p-2 bg-slate-700 border border-slate-600 rounded-md text-slate-200" />
-                            </div>
-                             <div>
-                                <label htmlFor="lastName" className="block text-sm font-medium text-slate-300 mb-1">Apellido</label>
-                                <input type="text" name="lastName" id="lastName" required className="w-full p-2 bg-slate-700 border border-slate-600 rounded-md text-slate-200" />
-                            </div>
-                             <div>
-                                <label htmlFor="dni" className="block text-sm font-medium text-slate-300 mb-1">DNI</label>
-                                <input type="text" name="dni" id="dni" required className="w-full p-2 bg-slate-700 border border-slate-600 rounded-md text-slate-200" />
-                            </div>
-                            <div>
-                                <label htmlFor="company" className="block text-sm font-medium text-slate-300 mb-1">Empresa</label>
-                                <input type="text" name="company" id="company" defaultValue={autoFilledCompany} required className="w-full p-2 bg-slate-700 border border-slate-600 rounded-md text-slate-200" />
-                            </div>
-                             <div>
-                                <label htmlFor="email" className="block text-sm font-medium text-slate-300 mb-1">Email (Opcional)</label>
-                                <input type="email" name="email" id="email" className="w-full p-2 bg-slate-700 border border-slate-600 rounded-md text-slate-200" />
-                            </div>
-                             <div>
-                                <label htmlFor="phone" className="block text-sm font-medium text-slate-300 mb-1">Teléfono (Opcional)</label>
-                                <input type="tel" name="phone" id="phone" className="w-full p-2 bg-slate-700 border border-slate-600 rounded-md text-slate-200" />
-                            </div>
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-slate-300 mb-2">Firma Digital</label>
-                            <SignaturePad sigCanvasRef={sigCanvasRef} />
-                        </div>
-                        <div className="pt-4">
-                            <button type="submit" className="w-full flex items-center justify-center gap-2 px-6 py-3 text-lg font-bold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition disabled:bg-slate-600">
-                                {isLoading ? <Spinner size={6} /> : <Send size={20} />}
-                                Finalizar y Enviar Registro
-                            </button>
-                        </div>
-                    </form>
-                )}
-            </div>
-        </div>
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 text-white animate-fade-in">
+        <form onSubmit={handleLogin} className="bg-slate-900 border border-slate-800 p-8 rounded-3xl shadow-2xl w-full max-w-sm space-y-6">
+          <h2 className="text-2xl font-bold text-center">Inicia Sesión</h2>
+          <input 
+            type="password" 
+            autoFocus 
+            value={pass} 
+            onChange={e => setPass(e.target.value)} 
+            placeholder="Contraseña Maestra" 
+            className="w-full bg-slate-800 border border-slate-700 rounded-xl p-4 text-center text-xl font-mono tracking-widest"
+          />
+          <button className="w-full bg-blue-600 hover:bg-blue-500 py-4 rounded-xl font-bold transition-all shadow-lg">Entrar al Panel</button>
+          <button type="button" onClick={() => setView('home')} className="w-full text-slate-500 text-sm hover:underline">Volver</button>
+        </form>
+      </div>
     );
-};
+  };
 
-const AdminDashboard: React.FC<{ onLogout: () => void, showToast: (message: string, type?: ToastType) => void }> = ({ onLogout, showToast }) => {
-    const [isLoading, setIsLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
-    const [isSaving, setIsSaving] = useState(false);
-    
-    const [data, setData] = useState<AppData>({
-        submissions: [],
-        trainings: [],
-        companies: [],
-        adminConfig: { signature: null, clarification: '', jobTitle: '' },
-    });
-
-    const [filter, setFilter] = useState('');
-    const [selectedCompany, setSelectedCompany] = useState<string>('');
-    const [selectedTraining, setSelectedTraining] = useState<string>('');
-    const [newCompanyName, setNewCompanyName] = useState('');
-    const [newCompanyCuit, setNewCompanyCuit] = useState('');
-    const [selectedSubmissions, setSelectedSubmissions] = useState<Set<string>>(new Set());
-    const [viewingSubmission, setViewingSubmission] = useState<UserSubmission | null>(null);
-
-    const [isConfigModalOpen, setConfigModalOpen] = useState(false);
-    const [isTrainingModalOpen, setTrainingModalOpen] = useState(false);
-    const [isShareModalOpen, setShareModalOpen] = useState(false);
-    const [isCompanyModalOpen, setCompanyModalOpen] = useState(false);
-    
-    const [currentTraining, setCurrentTraining] = useState<Training | null>(null);
-    const [editingCompany, setEditingCompany] = useState<Company | null>(null);
-    const [selectedCompaniesForTraining, setSelectedCompaniesForTraining] = useState<string[]>([]);
-    const [trainingToShare, setTrainingToShare] = useState<Training | null>(null);
-    const [isGeneratingShareLink, setIsGeneratingShareLink] = useState<string | null>(null);
-    const [isUpdatingSignature, setIsUpdatingSignature] = useState(false);
-
-    const adminSigCanvasRef = useRef<SignatureCanvas>(null);
-    const isFetching = useRef(false);
-
-    const fetchData = async () => {
-        if (isFetching.current) return;
-        isFetching.current = true;
-        setError(null);
-        try {
-            const fetchedData = await apiService._getData();
-            setData(fetchedData);
-        } catch (e: any) {
-            setError(`Error al cargar los datos: ${e.message}`);
-            console.error(e);
-        } finally {
-            isFetching.current = false;
-            setIsLoading(false);
-        }
-    };
-    
-    useEffect(() => {
-        fetchData();
-    }, []);
-
-    const saveData = async (newData: AppData) => {
-        if (isFetching.current) {
-             showToast("Otra operación ya está en progreso. Por favor, espere.", "info");
-             return;
-        }
-        isFetching.current = true;
-        setIsSaving(true);
-        setError(null);
-        try {
-            await apiService._putData(newData);
-            setData(newData);
-        } catch (e: any) {
-            const errorMessage = `Error al guardar los datos: ${e.message}`;
-            setError(errorMessage);
-            showToast(errorMessage, "error");
-        } finally {
-            isFetching.current = false;
-            setIsSaving(false);
-        }
-    };
-
-    const handleUpdateConfig = () => {
-        let signature = data.adminConfig?.signature;
-        
-        if (isUpdatingSignature) {
-            if (adminSigCanvasRef.current?.isEmpty()) {
-                showToast("Por favor, dibuje una nueva firma o cancele la actualización.", "error");
-                return;
-            }
-            signature = adminSigCanvasRef.current?.getTrimmedCanvas().toDataURL('image/png') || null;
-        }
-        
-        const newClarification = (document.getElementById('adminClarification') as HTMLInputElement).value;
-        const newJobTitle = (document.getElementById('adminJobTitle') as HTMLInputElement).value;
-
-        const newConfig: AdminConfig = {
-            signature,
-            clarification: newClarification,
-            jobTitle: newJobTitle
-        };
-
-        const newData = { ...data, adminConfig: newConfig };
-        saveData(newData).then(() => {
-            showToast("Configuración del administrador guardada.", "success");
-            setConfigModalOpen(false);
-            setIsUpdatingSignature(false);
-        });
-    };
-    
-    const handleDeleteSignature = () => {
-        if (window.confirm("¿Está seguro de que desea eliminar su firma guardada?")) {
-            const newConfig = {
-                ...(data.adminConfig as AdminConfig),
-                signature: null,
-            };
-            const newData = { ...data, adminConfig: newConfig };
-            saveData(newData).then(() => {
-                showToast("Firma eliminada.", "success");
-            });
-        }
-    }
-
-
-    const filteredSubmissions = useMemo(() => {
-        const subs = (data.submissions || []).filter(sub => {
-            const searchMatch = filter === '' || 
-                normalizeString(sub.firstName).includes(normalizeString(filter)) ||
-                normalizeString(sub.lastName).includes(normalizeString(filter)) ||
-                normalizeString(sub.dni).includes(normalizeString(filter));
-            const companyMatch = selectedCompany === '' || sub.company === selectedCompany;
-            const trainingMatch = selectedTraining === '' || sub.trainingId === selectedTraining;
-            return searchMatch && companyMatch && trainingMatch;
-        }).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-        
-        setSelectedSubmissions(new Set());
-
-        return subs;
-    }, [data.submissions, filter, selectedCompany, selectedTraining]);
-    
-    const handleToggleSelection = (id: string) => {
-        setSelectedSubmissions(prev => {
-            const newSet = new Set(prev);
-            if (newSet.has(id)) {
-                newSet.delete(id);
-            } else {
-                newSet.add(id);
-            }
-            return newSet;
-        });
-    };
-
-    const handleToggleSelectAll = () => {
-        if (selectedSubmissions.size === filteredSubmissions.length) {
-            setSelectedSubmissions(new Set());
-        } else {
-            setSelectedSubmissions(new Set(filteredSubmissions.map(s => s.id)));
-        }
-    };
-
-    const submissionsForPdf = useMemo(() => {
-        if (selectedSubmissions.size > 0) {
-            return (data.submissions || []).filter(s => selectedSubmissions.has(s.id))
-                .sort((a,b) => a.lastName.localeCompare(b.lastName));
-        }
-        return filteredSubmissions;
-    }, [selectedSubmissions, filteredSubmissions, data.submissions]);
-
-    const trainingNameForPdf = useMemo(() => {
-        if (selectedTraining) {
-            return data.trainings?.find(t => t.id === selectedTraining)?.name;
-        }
-        if (submissionsForPdf.length > 0) {
-            const firstTrainingId = submissionsForPdf[0].trainingId;
-            const allSameTraining = submissionsForPdf.every(s => s.trainingId === firstTrainingId);
-            if (allSameTraining) {
-                return data.trainings?.find(t => t.id === firstTrainingId)?.name || submissionsForPdf[0].trainingName;
-            }
-        }
-        return undefined;
-    }, [submissionsForPdf, selectedTraining, data.trainings]);
-
-    const companyForPdf = useMemo(() => {
-        if (submissionsForPdf.length > 0) {
-            const firstCompanyName = submissionsForPdf[0].company;
-            const allSameCompany = submissionsForPdf.every(s => s.company === firstCompanyName);
-            if (allSameCompany) {
-                return data.companies?.find(c => c.name === firstCompanyName);
-            }
-        }
-        return undefined;
-    }, [submissionsForPdf, data.companies]);
-
-
-    const handleSaveTraining = () => {
-        const name = (document.getElementById('trainingName') as HTMLInputElement).value;
-        if (!name) {
-            showToast('El nombre de la capacitación es obligatorio.', 'error');
-            return;
-        }
-    
-        const linkElements = document.querySelectorAll('.training-link-group');
-        const links: TrainingLink[] = Array.from(linkElements).map((el, index) => ({
-            id: `link-${Date.now()}-${index}`,
-            name: (el.querySelector('.training-link-name') as HTMLInputElement)?.value || '',
-            url: (el.querySelector('.training-link-url') as HTMLInputElement).value,
-        })).filter(link => link.url);
-    
-        if (links.length === 0) {
-            showToast('Debe agregar al menos un enlace a la capacitación.', 'error');
-            return;
-        }
-        
-        let updatedTrainings;
-        if (currentTraining && currentTraining.id) {
-            // Editing existing training
-            updatedTrainings = data.trainings?.map(t => 
-                t.id === currentTraining.id ? { ...currentTraining, name, links, companies: selectedCompaniesForTraining } : t
-            ) || [];
-        } else {
-            // Creating new training
-            const newTraining: Training = { 
-                id: `train-${Date.now()}`, 
-                name, 
-                links, 
-                companies: selectedCompaniesForTraining 
-            };
-            updatedTrainings = [...(data.trainings || []), newTraining];
-        }
-    
-        const newData = { ...data, trainings: updatedTrainings };
-        saveData(newData).then(() => {
-            showToast('Capacitación guardada exitosamente.', 'success');
-            setTrainingModalOpen(false);
-            setCurrentTraining(null);
-        });
-    };
-    
-    const openNewTrainingModal = () => {
-        setCurrentTraining({ id: '', name: '', links: [{id: 'new-1', url: '', name: ''}], companies: [] });
-        setSelectedCompaniesForTraining([]);
-        setTrainingModalOpen(true);
-    };
-    
-    const openEditTrainingModal = (training: Training) => {
-        setCurrentTraining(JSON.parse(JSON.stringify(training)));
-        setSelectedCompaniesForTraining(training.companies || []);
-        setTrainingModalOpen(true);
-    };
-
-    const handleDeleteTraining = (trainingId: string) => {
-        if (window.confirm("¿Está seguro de que desea eliminar esta capacitación? Esta acción no se puede deshacer.")) {
-            const updatedTrainings = data.trainings?.filter(t => t.id !== trainingId);
-            const newData = { ...data, trainings: updatedTrainings };
-            saveData(newData);
-        }
-    };
-    
-    const handleAddCompany = () => {
-        if (!newCompanyName.trim()) {
-            showToast("El nombre de la empresa no puede estar vacío.", "error");
-            return;
-        }
-        const normalizedNew = normalizeString(newCompanyName);
-        if ((data.companies || []).some(c => normalizeString(c.name) === normalizedNew)) {
-            showToast("Esta empresa ya existe.", "error");
-            setNewCompanyName('');
-            return;
-        }
-        const newCompany: Company = { name: newCompanyName.trim(), cuit: newCompanyCuit.trim() || undefined };
-        const updatedCompanies = [...(data.companies || []), newCompany].sort((a, b) => a.name.localeCompare(b.name));
-        const newData = { ...data, companies: updatedCompanies };
-        saveData(newData).then(() => {
-            setNewCompanyName('');
-            setNewCompanyCuit('');
-        });
-    };
-
-    const openEditCompanyModal = (company: Company) => {
-        setEditingCompany(company);
-        setCompanyModalOpen(true);
-    };
-
-    const handleUpdateCompany = () => {
-        if (!editingCompany) return;
-        const nameInput = document.getElementById('companyNameEdit') as HTMLInputElement;
-        const cuitInput = document.getElementById('companyCuitEdit') as HTMLInputElement;
-
-        const newName = nameInput.value.trim();
-        const newCuit = cuitInput.value.trim();
-
-        if (!newName) {
-            showToast("El nombre de la empresa no puede estar vacío.", "error");
-            return;
-        }
-
-        const updatedCompanies = (data.companies || []).map(c => 
-            c.name === editingCompany.name 
-                ? { ...c, name: newName, cuit: newCuit || undefined } 
-                : c
-        );
-
-        const newData = { ...data, companies: updatedCompanies };
-        saveData(newData).then(() => {
-            showToast("Empresa actualizada.", "success");
-            setCompanyModalOpen(false);
-            setEditingCompany(null);
-        });
-    };
-
-    const handleDeleteCompany = (companyNameToDelete: string) => {
-        if (window.confirm(`¿Seguro que quieres eliminar la empresa "${companyNameToDelete}"? Se eliminará de todas las listas.`)) {
-            const updatedCompanies = (data.companies || []).filter(c => c.name !== companyNameToDelete);
-            const newData = { ...data, companies: updatedCompanies };
-            saveData(newData);
-        }
-    };
-
-    const handleDeleteSubmission = (submissionId: string) => {
-         if (window.confirm("¿Está seguro de que desea eliminar este registro? Esta acción no se puede deshacer.")) {
-            const updatedSubmissions = data.submissions?.filter(s => s.id !== submissionId);
-            const newData = { ...data, submissions: updatedSubmissions };
-            saveData(newData);
-        }
-    };
-    
-    const handleDeleteAllSubmissions = () => {
-        if (window.confirm(`¿Está SEGURO de que desea eliminar TODOS los ${data.submissions.length} registros? Esta acción es irreversible.`)) {
-            if (window.confirm("CONFIRMACIÓN FINAL: Esta acción borrará permanentemente todos los registros de asistencia. ¿Desea continuar?")) {
-                const newData = { ...data, submissions: [] };
-                saveData(newData).then(() => {
-                    showToast("Todos los registros han sido eliminados.", "success");
-                });
-            }
-        }
-    };
-    
-    const handleShareTraining = async (training: Training) => {
-        let trainingToOpen = training;
-
-        if (!training.shareKey) {
-            setIsGeneratingShareLink(training.id);
-            setError(null);
-            try {
-                const newShareKey = `st-${training.id}-${Date.now()}`;
-                const updatedTraining = { ...training, shareKey: newShareKey };
-                
-                const newTrainings = (data.trainings || []).map(t =>
-                    t.id === training.id ? updatedTraining : t
-                );
-                const newData = { ...data, trainings: newTrainings };
-
-                await apiService._putData(newData);
-                
-                setData(newData); 
-                trainingToOpen = updatedTraining;
-
-            } catch (e: any) {
-                setError(`Error al generar el enlace permanente: ${e.message}`);
-                setIsGeneratingShareLink(null);
-                return;
-            } finally {
-                setIsGeneratingShareLink(null);
-            }
-        }
-        
-        setTrainingToShare(trainingToOpen);
-        setShareModalOpen(true);
-    };
-    
-    const ShareModalContent: React.FC<{ training: Training | null }> = ({ training }) => {
-        const [qrCodes, setQrCodes] = useState<{[key: string]: string}>({});
-        const [isLoadingQRs, setIsLoadingQRs] = useState(true);
-        
-        useEffect(() => {
-            const generateQRs = async () => {
-                if(training && training.shareKey) {
-                    setIsLoadingQRs(true);
-                    try {
-                        const generatedQRs: {[key: string]: string} = {};
-                        const baseUrl = `${window.location.origin}${window.location.pathname}?trainingKey=${training.shareKey}`;
-
-                        generatedQRs['general'] = await QRCode.toDataURL(baseUrl, { width: 256, margin: 2, color: { dark: '#FFFFFF', light: '#1E293B' } });
-
-                        for (const company of data.companies || []) {
-                            const companyUrl = `${baseUrl}&company=${encodeURIComponent(company.name)}`;
-                            generatedQRs[company.name] = await QRCode.toDataURL(companyUrl, { width: 256, margin: 2, color: { dark: '#FFFFFF', light: '#1E293B' } });
-                        }
-                        setQrCodes(generatedQRs);
-
-                    } catch(e) {
-                        console.error("Failed to generate QR codes:", e);
-                        showToast("No se pudieron generar los códigos QR.", "error");
-                    } finally {
-                        setIsLoadingQRs(false);
-                    }
-                }
-            };
-            generateQRs();
-        }, [training]);
-
-        if (isLoadingQRs) return <div className="flex justify-center p-8"><Spinner /></div>;
-        if (!training || !training.shareKey) return <p className="text-red-400">Error: No se pudo encontrar la clave para compartir de esta capacitación.</p>;
-
-        const baseUrl = `${window.location.origin}${window.location.pathname}?trainingKey=${training.shareKey}`;
-
-        return (
-            <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
-                <p className="text-slate-400 text-center">Usa los siguientes enlaces o códigos QR para que los asistentes se registren. <strong className="text-slate-200">Estos enlaces son permanentes.</strong></p>
-                <div className="space-y-6">
-                    <div>
-                        <h4 className="font-bold text-slate-200 mb-2">Enlace General</h4>
-                        <div className="flex flex-col sm:flex-row items-center gap-4">
-                            {qrCodes['general'] && <img src={qrCodes['general']} alt="QR Code General" className="border-4 border-slate-600 rounded-lg w-24 h-24"/>}
-                            <div className="flex-grow w-full flex items-center bg-slate-700 p-2 rounded-md border border-slate-600">
-                                <input type="text" value={baseUrl} readOnly className="flex-grow bg-transparent text-sm text-slate-300 outline-none w-full"/>
-                                <button onClick={() => { navigator.clipboard.writeText(baseUrl); showToast('Enlace copiado!', 'success'); }} className="p-2 text-slate-400 hover:bg-slate-600 rounded-md"><Copy size={16}/></button>
-                            </div>
-                        </div>
-                    </div>
-                    {(data.companies || []).length > 0 && (
-                        <div className="border-t border-slate-700 pt-4">
-                            <h4 className="font-bold text-slate-200 mb-2">Enlaces por Empresa</h4>
-                            <div className="space-y-4">
-                                {(data.companies || []).map(company => {
-                                    const companyUrl = `${baseUrl}&company=${encodeURIComponent(company.name)}`;
-                                    return (
-                                        <div key={company.name}>
-                                            <p className="text-sm font-semibold text-slate-300 mb-1">{company.name}</p>
-                                            <div className="flex flex-col sm:flex-row items-center gap-4">
-                                                {qrCodes[company.name] && <img src={qrCodes[company.name]} alt={`QR Code ${company.name}`} className="border-4 border-slate-600 rounded-lg w-24 h-24"/>}
-                                                <div className="flex-grow w-full flex items-center bg-slate-700 p-2 rounded-md border border-slate-600">
-                                                    <input type="text" value={companyUrl} readOnly className="flex-grow bg-transparent text-sm text-slate-300 outline-none w-full"/>
-                                                    <button onClick={() => { navigator.clipboard.writeText(companyUrl); showToast(`Enlace para ${company.name} copiado!`, 'success'); }} className="p-2 text-slate-400 hover:bg-slate-600 rounded-md"><Copy size={16}/></button>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    )
-                                })}
-                            </div>
-                        </div>
-                    )}
-                </div>
-            </div>
-        );
-    };
-
-    if (isLoading) {
-        return <div className="min-h-screen bg-slate-900 flex items-center justify-center"><Spinner size={12} /></div>;
-    }
-    
-    const configCheck = () => {
-        if (JSONBIN_BIN_ID.startsWith('REEMPLAZA') || JSONBIN_MASTER_KEY.startsWith('REEMPLAZA')) {
-             return (
-                <div className="min-h-screen bg-red-900 bg-opacity-50 flex items-center justify-center p-4">
-                    <div className="bg-slate-800 border border-red-500 p-8 rounded-lg shadow-md max-w-2xl text-center">
-                        <ShieldCheck size={48} className="mx-auto text-red-500 mb-4" />
-                        <h1 className="text-2xl font-bold text-red-300 mb-2">Configuración Requerida</h1>
-                        <p className="text-slate-400">
-                            Para utilizar la aplicación, primero debe configurar las credenciales de la API de 
-                            <a href="https://jsonbin.io" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline font-semibold"> jsonbin.io</a>.
-                            Siga las instrucciones en la parte superior del archivo <code>index.tsx</code> para obtener y establecer su <code>JSONBIN_BIN_ID</code> y <code>JSONBIN_MASTER_KEY</code>.
-                        </p>
-                    </div>
-                </div>
-             );
-        }
-        return null;
-    }
-
-    const configError = configCheck();
-    if(configError) return configError;
-
-    return (
-        <div className="min-h-screen bg-slate-900 text-slate-200 p-4 sm:p-6 lg:p-8">
-            <div className="max-w-7xl mx-auto">
-                <header className="flex flex-wrap items-center justify-between gap-4 pb-6 border-b border-slate-700">
-                    <div className="flex items-center space-x-3">
-                         <ShieldCheck className="w-8 h-8 text-slate-200" />
-                        <h1 className="text-2xl md:text-3xl font-bold text-slate-100">Panel de Administrador</h1>
-                    </div>
-                    <div className="flex items-center flex-wrap justify-end gap-2 sm:gap-4">
-                        <button onClick={fetchData} disabled={isFetching.current} className="p-2 text-slate-400 hover:text-slate-100 disabled:opacity-50 transition-colors">
-                            <RefreshCw size={20} className={isFetching.current ? 'animate-spin' : ''}/>
-                        </button>
-                        <button onClick={() => setConfigModalOpen(true)} className="flex items-center space-x-2 px-3 py-2 text-sm font-semibold text-slate-200 bg-slate-700 border border-slate-600 rounded-md hover:bg-slate-600 transition">
-                           <User size={16}/><span>Firma</span>
-                        </button>
-                        <button onClick={onLogout} className="flex items-center space-x-2 px-3 py-2 text-sm font-semibold text-red-300 bg-red-900 bg-opacity-50 border border-red-800 rounded-md hover:bg-red-800 hover:text-red-200 transition">
-                            <LogOut size={16}/><span>Salir</span>
-                        </button>
-                    </div>
-                </header>
-                 {error && <div className="mt-4 bg-red-900 bg-opacity-50 border border-red-500 text-red-300 px-4 py-3 rounded-md" role="alert">{error}</div>}
-
-                <main className="grid grid-cols-1 xl:grid-cols-3 gap-8 mt-6">
-                    <div className="xl:col-span-1 flex flex-col gap-8">
-                        <section className="bg-slate-800 p-6 rounded-xl shadow-lg border border-slate-700 flex flex-col">
-                            <div className="flex items-center justify-between mb-4">
-                                <h2 className="text-xl font-bold text-slate-100 flex items-center"><Award size={22} className="mr-2 text-blue-400"/>Capacitaciones</h2>
-                                <button onClick={openNewTrainingModal} className="flex items-center space-x-2 px-3 py-1.5 text-sm font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition">
-                                <PlusCircle size={16}/><span>Nueva</span>
-                                </button>
-                            </div>
-                            <div className="space-y-4 flex-grow overflow-y-auto pr-2 -mr-2 max-h-[60vh] xl:max-h-none">
-                                {(data.trainings || []).length > 0 ? (
-                                    data.trainings?.map(training => (
-                                        <div key={training.id} className="p-4 bg-slate-900 rounded-lg border border-slate-700 group flex flex-col sm:flex-row gap-4 items-start">
-                                            <div className="mx-auto sm:mx-0 flex-shrink-0">
-                                                <QRCodeDisplay shareKey={training.shareKey} />
-                                            </div>
-                                            <div className="flex-grow flex flex-col h-full w-full">
-                                                <p className="font-bold text-lg text-slate-100 leading-tight">{training.name}</p>
-                                                <div className="flex flex-wrap gap-1 mt-2">
-                                                    {(training.companies && training.companies.length > 0) ? (
-                                                        training.companies.map(c => <span key={c} className="text-xs font-semibold bg-slate-700 text-slate-300 px-2 py-0.5 rounded-full">{c}</span>)
-                                                    ) : (
-                                                        <span className="text-xs italic text-slate-500">Capacitación general</span>
-                                                    )}
-                                                </div>
-                                                <div className="mt-auto flex items-center justify-end gap-1 pt-2">
-                                                    <button onClick={() => handleShareTraining(training)} disabled={isGeneratingShareLink === training.id} title="Compartir" className="p-1.5 text-slate-400 hover:bg-slate-700 rounded-md disabled:opacity-50">
-                                                        {isGeneratingShareLink === training.id ? <Spinner size={4}/> : <Share2 size={16}/>}
-                                                    </button>
-                                                    <button onClick={() => openEditTrainingModal(training)} title="Editar" className="p-1.5 text-slate-400 hover:bg-slate-700 rounded-md"><Edit size={16}/></button>
-                                                    <button onClick={() => handleDeleteTraining(training.id)} title="Eliminar" className="p-1.5 text-red-400 hover:bg-red-900/50 rounded-md"><Trash2 size={16}/></button>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    ))
-                                ) : (
-                                    <p className="text-sm text-slate-500 text-center py-8">No hay capacitaciones creadas.</p>
-                                )}
-                            </div>
-                        </section>
-                         <section className="bg-slate-800 p-6 rounded-xl shadow-lg border border-slate-700">
-                            <h2 className="text-xl font-bold text-slate-100 flex items-center mb-4"><Building size={22} className="mr-2 text-blue-400"/>Empresas</h2>
-                            <form
-                                onSubmit={(e) => {
-                                    e.preventDefault();
-                                    handleAddCompany();
-                                }}
-                                className="grid grid-cols-1 sm:grid-cols-5 gap-2 mb-4"
-                            >
-                                <input
-                                    type="text"
-                                    value={newCompanyName}
-                                    onChange={(e) => setNewCompanyName(e.target.value)}
-                                    placeholder="Nombre de la empresa"
-                                    className="w-full sm:col-span-2 p-2 bg-slate-700 border border-slate-600 rounded-md text-sm text-slate-200 placeholder-slate-400"
-                                />
-                                 <input
-                                    type="text"
-                                    value={newCompanyCuit}
-                                    onChange={(e) => setNewCompanyCuit(e.target.value)}
-                                    placeholder="CUIT (Opcional)"
-                                    className="w-full sm:col-span-2 p-2 bg-slate-700 border border-slate-600 rounded-md text-sm text-slate-200 placeholder-slate-400"
-                                />
-                                <button
-                                    type="submit"
-                                    className="w-full sm:col-span-1 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition"
-                                >
-                                    Añadir
-                                </button>
-                            </form>
-                             <div className="space-y-2 max-h-[250px] overflow-y-auto pr-2">
-                                {(data.companies || []).length > 0 ? (
-                                    data.companies?.map(company => (
-                                        <div key={company.name} className="flex items-center justify-between p-2 bg-slate-900 rounded-lg border border-slate-700 group">
-                                            <div>
-                                                <p className="text-sm text-slate-300">{company.name}</p>
-                                                {company.cuit && <p className="text-xs text-slate-500">CUIT: {company.cuit}</p>}
-                                            </div>
-                                            <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
-                                                 <button onClick={() => openEditCompanyModal(company)} title="Editar Empresa" className="p-1.5 text-slate-400 hover:bg-slate-700 rounded-md"><Edit size={16}/></button>
-                                                <button onClick={() => handleDeleteCompany(company.name)} title="Eliminar Empresa" className="p-1.5 text-red-400 hover:bg-red-900/50 rounded-md"><Trash2 size={16}/></button>
-                                            </div>
-                                        </div>
-                                    ))
-                                ) : (
-                                    <p className="text-sm text-slate-500 text-center py-8">No hay empresas añadidas.</p>
-                                )}
-                            </div>
-                        </section>
-                    </div>
-                    
-                    <section className="xl:col-span-2 bg-slate-800 p-6 rounded-xl shadow-lg border border-slate-700">
-                        <div className="flex flex-col sm:flex-row items-start justify-between gap-4 mb-4">
-                            <h2 className="text-xl font-bold text-slate-100 flex items-center"><Users size={22} className="mr-2 text-blue-400"/>Registros de Asistentes</h2>
-                            <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
-                                <button 
-                                    onClick={handleDeleteAllSubmissions} 
-                                    disabled={filteredSubmissions.length === 0}
-                                    className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2 text-sm font-semibold text-red-300 bg-red-900/50 border border-red-800 rounded-md hover:bg-red-800 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                                >
-                                    <Trash2 size={16}/><span>Borrar Todos</span>
-                                </button>
-                                <button 
-                                    onClick={() => generateSubmissionsPdf(submissionsForPdf, data.adminConfig?.signature || null, data.adminConfig?.clarification || '', data.adminConfig?.jobTitle || '', data.companies, showToast, trainingNameForPdf, companyForPdf)} 
-                                    disabled={submissionsForPdf.length === 0}
-                                    className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-700 transition disabled:bg-slate-600 disabled:cursor-not-allowed"
-                                >
-                                    <FileDown size={16}/><span>Descargar PDF ({submissionsForPdf.length})</span>
-                                </button>
-                            </div>
-                        </div>
-
-                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                            <input
-                                type="text"
-                                placeholder="Buscar por nombre, apellido o DNI..."
-                                value={filter}
-                                onChange={(e) => setFilter(e.target.value)}
-                                className="p-2 bg-slate-700 border border-slate-600 rounded-md text-sm text-slate-200 placeholder-slate-400"
-                            />
-                            <select value={selectedTraining} onChange={e => setSelectedTraining(e.target.value)} className="p-2 border bg-slate-700 border-slate-600 rounded-md text-sm text-slate-200">
-                                <option value="">Todas las Capacitaciones</option>
-                                {data.trainings?.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                            </select>
-                            <select value={selectedCompany} onChange={e => setSelectedCompany(e.target.value)} className="p-2 border bg-slate-700 border-slate-600 rounded-md text-sm text-slate-200">
-                                <option value="">Todas las Empresas</option>
-                                {data.companies?.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
-                            </select>
-                        </div>
-
-                        <div className="overflow-x-auto">
-                           <table className="w-full text-sm text-left text-slate-300">
-                                <thead className="text-xs text-slate-400 uppercase bg-slate-700">
-                                    <tr>
-                                        <th scope="col" className="p-3 w-10 text-center">
-                                            <input type="checkbox"
-                                                className="w-4 h-4 text-blue-600 bg-slate-600 border-slate-500 rounded focus:ring-blue-500"
-                                                checked={filteredSubmissions.length > 0 && selectedSubmissions.size === filteredSubmissions.length}
-                                                onChange={handleToggleSelectAll}
-                                                disabled={filteredSubmissions.length === 0}
-                                            />
-                                        </th>
-                                        <th scope="col" className="p-3 w-10">#</th>
-                                        <th scope="col" className="p-3">Apellido y Nombre</th>
-                                        <th scope="col" className="p-3">DNI</th>
-                                        <th scope="col" className="p-3 hidden md:table-cell">Empresa</th>
-                                        <th scope="col" className="p-3 hidden lg:table-cell">Capacitación</th>
-                                        <th scope="col" className="p-3 hidden xl:table-cell">Fecha</th>
-                                        <th scope="col" className="p-3"></th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {filteredSubmissions.length > 0 ? filteredSubmissions.map((sub, index) => (
-                                        <tr key={sub.id} className="bg-slate-800 border-b border-slate-700 hover:bg-slate-700/50">
-                                            <td className="p-3 text-center">
-                                                <input type="checkbox"
-                                                    className="w-4 h-4 text-blue-600 bg-slate-600 border-slate-500 rounded focus:ring-blue-500"
-                                                    checked={selectedSubmissions.has(sub.id)}
-                                                    onChange={() => handleToggleSelection(sub.id)}
-                                                />
-                                            </td>
-                                            <td className="p-3 font-medium text-slate-400">{index + 1}</td>
-                                            <td className="p-3 font-semibold text-slate-100">{sub.lastName}, {sub.firstName}</td>
-                                            <td className="p-3">{sub.dni}</td>
-                                            <td className="p-3 hidden md:table-cell">{sub.company}</td>
-                                            <td className="p-3 hidden lg:table-cell">{sub.trainingName}</td>
-                                            <td className="p-3 hidden xl:table-cell">{new Date(sub.timestamp).toLocaleDateString()}</td>
-                                            <td className="p-3 text-right">
-                                                <div className="flex items-center justify-end gap-1">
-                                                     <button onClick={() => setViewingSubmission(sub)} title="Ver Detalles" className="p-1.5 text-slate-400 hover:bg-slate-700 rounded-md"><Eye size={16}/></button>
-                                                     <button onClick={() => handleDeleteSubmission(sub.id)} title="Eliminar Registro" className="p-1.5 text-red-400 hover:bg-red-900/50 rounded-md"><Trash2 size={16}/></button>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    )) : (
-                                        <tr><td colSpan={8} className="text-center p-8 text-slate-500">No se encontraron registros.</td></tr>
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
-                    </section>
-                </main>
-            </div>
-
-             <Modal 
-                isOpen={!!viewingSubmission} 
-                onClose={() => setViewingSubmission(null)} 
-                title="Detalles del Registro"
-                footer={
-                    <button onClick={() => setViewingSubmission(null)} className="px-6 py-2 font-semibold text-slate-200 bg-slate-600 rounded-md hover:bg-slate-500 transition">
-                        Cerrar
-                    </button>
-                }
-            >
-                {viewingSubmission && (
-                    <div className="space-y-4 text-slate-300">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <div><strong className="text-slate-400 block">Nombre:</strong> {viewingSubmission.firstName}</div>
-                            <div><strong className="text-slate-400 block">Apellido:</strong> {viewingSubmission.lastName}</div>
-                            <div><strong className="text-slate-400 block">DNI:</strong> {viewingSubmission.dni}</div>
-                            <div><strong className="text-slate-400 block">Empresa:</strong> {viewingSubmission.company}</div>
-                            <div className="sm:col-span-2"><strong className="text-slate-400 block">Capacitación:</strong> {viewingSubmission.trainingName}</div>
-                             <div><strong className="text-slate-400 block">Email:</strong> {viewingSubmission.email || 'N/A'}</div>
-                            <div><strong className="text-slate-400 block">Teléfono:</strong> {viewingSubmission.phone || 'N/A'}</div>
-                            <div className="sm:col-span-2"><strong className="text-slate-400 block">Fecha de Registro:</strong> {new Date(viewingSubmission.timestamp).toLocaleString('es-ES')}</div>
-                        </div>
-                        <div>
-                            <strong className="text-slate-400 block mb-2">Firma:</strong>
-                             <div className="p-2 bg-white rounded-md border border-slate-300 overflow-hidden">
-                                <img src={viewingSubmission.signature} alt={`Firma de ${viewingSubmission.firstName}`} className="mx-auto" />
-                            </div>
-                        </div>
-                    </div>
-                )}
-            </Modal>
-            
-             <Modal 
-                isOpen={isConfigModalOpen} 
-                onClose={() => { setConfigModalOpen(false); setIsUpdatingSignature(false); }} 
-                title="Configuración de Administrador"
-                footer={
-                    <>
-                        <button onClick={() => { setConfigModalOpen(false); setIsUpdatingSignature(false); }} className="px-6 py-2 font-semibold text-slate-200 bg-slate-600 rounded-md hover:bg-slate-500 transition">
-                            Cancelar
-                        </button>
-                        <button onClick={handleUpdateConfig} className="px-6 py-2 font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition">
-                            Guardar Configuración
-                        </button>
-                    </>
-                }
-            >
-                <div className="space-y-4">
-                     <div>
-                        <label htmlFor="adminClarification" className="block text-sm font-medium text-slate-300 mb-1">Aclaración de Firma (Nombre Completo)</label>
-                        <input type="text" id="adminClarification" defaultValue={data.adminConfig?.clarification} className="w-full p-2 bg-slate-700 border border-slate-600 rounded-md text-slate-200" />
-                    </div>
-                    <div>
-                        <label htmlFor="adminJobTitle" className="block text-sm font-medium text-slate-300 mb-1">Cargo</label>
-                        <input type="text" id="adminJobTitle" defaultValue={data.adminConfig?.jobTitle} className="w-full p-2 bg-slate-700 border border-slate-600 rounded-md text-slate-200" />
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-slate-300 mb-2">Firma Digital</label>
-                        {!isUpdatingSignature ? (
-                            <div className="p-4 bg-slate-900 rounded-md border border-slate-700">
-                                {data.adminConfig?.signature ? (
-                                    <div className="text-center">
-                                        <p className="text-xs text-slate-400 mb-2">Firma actual:</p>
-                                        <img src={data.adminConfig.signature} alt="Firma guardada" className="h-24 bg-white p-1 rounded mx-auto border border-slate-300" />
-                                        <div className="flex justify-center gap-2 mt-4">
-                                            <button onClick={() => setIsUpdatingSignature(true)} className="px-4 py-2 text-sm font-semibold text-slate-200 bg-slate-600 rounded-md hover:bg-slate-500 transition">
-                                                Actualizar Firma
-                                            </button>
-                                            <button onClick={handleDeleteSignature} className="px-4 py-2 text-sm font-semibold text-red-300 bg-red-900/50 rounded-md hover:bg-red-800/70 transition">
-                                                Eliminar Firma
-                                            </button>
-                                        </div>
-                                    </div>
-                                ) : (
-                                    <div className="text-center py-4">
-                                        <p className="text-slate-500 mb-3">No hay firma guardada.</p>
-                                        <button onClick={() => setIsUpdatingSignature(true)} className="px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition">
-                                            Añadir Firma
-                                        </button>
-                                    </div>
-                                )}
-                            </div>
-                        ) : (
-                            <div>
-                                <SignaturePad sigCanvasRef={adminSigCanvasRef} canvasClassName="h-60" />
-                                <button onClick={() => setIsUpdatingSignature(false)} className="mt-2 text-sm text-blue-400 hover:underline">
-                                    Cancelar
-                                </button>
-                            </div>
-                        )}
-                    </div>
-                </div>
-            </Modal>
-
-            <Modal 
-                isOpen={isCompanyModalOpen} 
-                onClose={() => setCompanyModalOpen(false)} 
-                title="Editar Empresa"
-                footer={
-                    <>
-                        <button onClick={() => setCompanyModalOpen(false)} className="px-6 py-2 font-semibold text-slate-200 bg-slate-600 rounded-md hover:bg-slate-500 transition">
-                            Cancelar
-                        </button>
-                        <button onClick={handleUpdateCompany} className="px-6 py-2 font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition">
-                            Guardar Cambios
-                        </button>
-                    </>
-                }
-            >
-                {editingCompany && (
-                    <div className="space-y-4">
-                        <div>
-                            <label htmlFor="companyNameEdit" className="block text-sm font-medium text-slate-300 mb-1">Nombre de la Empresa</label>
-                            <input type="text" id="companyNameEdit" defaultValue={editingCompany.name} className="w-full p-2 bg-slate-700 border border-slate-600 rounded-md text-slate-200" />
-                        </div>
-                        <div>
-                            <label htmlFor="companyCuitEdit" className="block text-sm font-medium text-slate-300 mb-1">CUIT (Opcional)</label>
-                            <input type="text" id="companyCuitEdit" defaultValue={editingCompany.cuit} className="w-full p-2 bg-slate-700 border border-slate-600 rounded-md text-slate-200" />
-                        </div>
-                    </div>
-                )}
-            </Modal>
-            
-            <Modal 
-                isOpen={isTrainingModalOpen} 
-                onClose={() => setTrainingModalOpen(false)} 
-                title={currentTraining?.id ? 'Editar Capacitación' : 'Nueva Capacitación'}
-                footer={
-                     <>
-                        <button onClick={() => setTrainingModalOpen(false)} className="px-6 py-2 font-semibold text-slate-200 bg-slate-600 rounded-md hover:bg-slate-500 transition">
-                            Cancelar
-                        </button>
-                        <button onClick={handleSaveTraining} className="px-6 py-2 font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-500 transition">
-                            Guardar Capacitación
-                        </button>
-                    </>
-                }
-            >
-                {currentTraining && (
-                    <div className="space-y-6">
-                        {/* Section 1: Details */}
-                        <div>
-                            <h3 className="text-lg font-semibold text-slate-300 border-b border-slate-700 pb-2 mb-3">1. Detalles de la Capacitación</h3>
-                            <label htmlFor="trainingName" className="block text-sm font-medium text-slate-300 mb-1">Nombre de la Capacitación</label>
-                            <input
-                                type="text"
-                                id="trainingName"
-                                defaultValue={currentTraining.name}
-                                className="w-full p-2 bg-slate-700 border border-slate-600 rounded-md text-slate-200"
-                                required
-                            />
-                        </div>
-
-                        {/* Section 2: Links */}
-                        <div>
-                            <h3 className="text-lg font-semibold text-slate-300 border-b border-slate-700 pb-2 mb-3">2. Material de Estudio (Enlaces)</h3>
-                            <div id="trainingLinksContainer" className="space-y-3">
-                                {currentTraining.links.map((link, index) => (
-                                    <div key={link.id} className="p-3 bg-slate-900/50 border border-slate-700 rounded-lg space-y-2 training-link-group">
-                                        <div className="flex items-center justify-between">
-                                            <label className="text-sm font-medium text-slate-400">Enlace #{index + 1}</label>
-                                            <button
-                                                type="button"
-                                                onClick={() => {
-                                                    const newLinks = currentTraining.links.filter(l => l.id !== link.id);
-                                                    setCurrentTraining({ ...currentTraining, links: newLinks });
-                                                }}
-                                                className="p-1 text-red-400 hover:bg-red-900/50 rounded-md"
-                                            >
-                                                <Trash2 size={16} />
-                                            </button>
-                                        </div>
-                                        <input
-                                            type="text"
-                                            placeholder="Nombre del material (ej: Video de seguridad)"
-                                            defaultValue={link.name}
-                                            className="w-full p-2 bg-slate-700 border border-slate-600 rounded-md text-sm text-slate-200 training-link-name"
-                                        />
-                                        <input
-                                            type="url"
-                                            placeholder="https://ejemplo.com/recurso"
-                                            defaultValue={link.url}
-                                            className="w-full p-2 bg-slate-700 border border-slate-600 rounded-md text-sm text-slate-200 training-link-url"
-                                            required
-                                        />
-                                    </div>
-                                ))}
-                            </div>
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    const newLinks = [...currentTraining.links, { id: `new-${Date.now()}`, url: '', name: '' }];
-                                    setCurrentTraining({ ...currentTraining, links: newLinks });
-                                }}
-                                className="mt-3 flex items-center gap-2 text-sm font-semibold text-blue-400 hover:text-blue-300"
-                            >
-                                <PlusCircle size={16} /> Añadir otro enlace
-                            </button>
-                        </div>
-                        
-                        {/* Section 3: Companies */}
-                        {(data.companies || []).length > 0 && 
-                            <div>
-                                <h3 className="text-lg font-semibold text-slate-300 border-b border-slate-700 pb-2 mb-3">3. Asignar a Empresas</h3>
-                                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                                    {(data.companies || []).map(company => (
-                                        <label key={company.name} className="flex items-center space-x-2 p-2 bg-slate-700 rounded-md cursor-pointer hover:bg-slate-600">
-                                            <input 
-                                                type="checkbox"
-                                                value={company.name}
-                                                checked={selectedCompaniesForTraining.includes(company.name)}
-                                                onChange={(e) => {
-                                                    if(e.target.checked) {
-                                                        setSelectedCompaniesForTraining(prev => [...prev, company.name]);
-                                                    } else {
-                                                        setSelectedCompaniesForTraining(prev => prev.filter(c => c !== company.name));
-                                                    }
-                                                }}
-                                                className="w-4 h-4 text-blue-600 bg-slate-600 border-slate-500 rounded focus:ring-blue-500"
-                                            />
-                                            <span className="text-sm text-slate-200">{company.name}</span>
-                                        </label>
-                                    ))}
-                                </div>
-                            </div>
-                        }
-                    </div>
-                )}
-            </Modal>
-            
-            <Modal isOpen={isShareModalOpen} onClose={() => setShareModalOpen(false)} title={`Compartir Capacitación: "${trainingToShare?.name}"`}>
-                <ShareModalContent training={trainingToShare} />
-            </Modal>
-
-            {isSaving && (
-                <div className="fixed bottom-4 right-4 bg-slate-700 text-slate-200 px-4 py-2 rounded-lg flex items-center space-x-2 shadow-lg">
-                    <Spinner size={5}/><span>Guardando...</span>
-                </div>
-            )}
-        </div>
-    );
-};
-
-const AdminLogin: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
-    const [password, setPassword] = useState('');
-    const [error, setError] = useState('');
-    const [showPassword, setShowPassword] = useState(false);
-    const [rememberMe, setRememberMe] = useState(false);
-
-    useEffect(() => {
-        const isRemembered = localStorage.getItem('rememberAdmin') === 'true';
-        if (isRemembered) {
-            setPassword(localStorage.getItem('adminPassword') || '');
-            setRememberMe(true);
-        }
-    }, []);
-
-    const handleSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        if (password === 'admin2025') {
-            if (rememberMe) {
-                localStorage.setItem('adminPassword', password);
-                localStorage.setItem('rememberAdmin', 'true');
-            } else {
-                localStorage.removeItem('adminPassword');
-                localStorage.removeItem('rememberAdmin');
-            }
-            onLogin();
-        } else {
-            setError('Contraseña incorrecta.');
-            setPassword('');
-        }
-    };
-
-    return (
-        <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
-            <div className="w-full max-w-sm mx-auto">
-                <form onSubmit={handleSubmit} className="bg-slate-800 shadow-2xl rounded-xl px-8 pt-6 pb-8 mb-4 border border-slate-700 animate-fade-in-up">
-                     <div className="text-center mb-6">
-                        <ShieldCheck className="w-12 h-12 text-blue-400 mx-auto mb-3" />
-                        <h1 className="text-2xl font-bold text-slate-100">Acceso de Administrador</h1>
-                    </div>
-                    <div className="mb-4">
-                        <label className="block text-slate-300 text-sm font-bold mb-2" htmlFor="password">
-                            Contraseña
-                        </label>
-                        <div className="relative">
-                            <input
-                                className={`w-full p-3 bg-slate-700 border ${error ? 'border-red-500' : 'border-slate-600'} rounded-md text-slate-100 pr-10`}
-                                id="password"
-                                type={showPassword ? 'text' : 'password'}
-                                value={password}
-                                onChange={(e) => { setPassword(e.target.value); setError(''); }}
-                                placeholder="******************"
-                            />
-                            <button
-                                type="button"
-                                onClick={() => setShowPassword(!showPassword)}
-                                className="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 hover:text-slate-200"
-                                aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
-                            >
-                                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                            </button>
-                        </div>
-                         {error && <p className="text-red-500 text-xs italic mt-2">{error}</p>}
-                    </div>
-                     <div className="mb-6">
-                        <label className="flex items-center text-slate-400 text-sm">
-                            <input
-                                type="checkbox"
-                                className="w-4 h-4 text-blue-600 bg-slate-700 border-slate-600 rounded focus:ring-blue-500 focus:ring-offset-slate-800"
-                                checked={rememberMe}
-                                onChange={(e) => setRememberMe(e.target.checked)}
-                            />
-                            <span className="ml-2">Recordar contraseña</span>
-                        </label>
-                    </div>
-                    <div className="flex items-center justify-between">
-                        <button className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-md focus:outline-none focus:shadow-outline transition" type="submit">
-                            <LogIn size={18}/> Ingresar
-                        </button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    );
-};
-
-
-const WelcomeScreen: React.FC<{ onAdminClick: () => void }> = ({ onAdminClick }) => {
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-200 flex flex-col items-center justify-center p-6 text-center">
-        <div className="max-w-2xl w-full">
-            <GraduationCap size={64} className="mx-auto text-blue-400 mb-6" />
-            <h1 className="text-4xl md:text-5xl font-extrabold text-slate-100 mb-4 animate-fade-in-down">
-                Portal de Capacitaciones
-            </h1>
-            <p className="text-lg text-slate-400 mb-10 animate-fade-in-up">
-                Bienvenido. Seleccione su rol para continuar.
-            </p>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-fade-in-up" style={{ animationDelay: '0.3s' }}>
-                <div className="bg-slate-800 p-8 rounded-xl border border-slate-700 text-left">
-                    <div className="flex items-center gap-4 mb-3">
-                        <Users size={28} className="text-slate-300" />
-                        <h2 className="text-2xl font-bold text-slate-100">Asistente</h2>
-                    </div>
-                    <p className="text-slate-400">
-                        Si recibió un enlace o un código QR para una capacitación, ábralo para comenzar su registro.
-                    </p>
-                </div>
-                
-                <div className="bg-slate-800 p-8 rounded-xl border border-slate-700 text-left flex flex-col justify-center">
-                     <div className="flex items-center gap-4 mb-3">
-                        <ShieldCheck size={28} className="text-slate-300" />
-                        <h2 className="text-2xl font-bold text-slate-100">Administrador</h2>
-                    </div>
-                    <p className="text-slate-400 mb-5">
-                       Gestione capacitaciones, empresas y registros de asistentes.
-                    </p>
-                    <button 
-                        onClick={onAdminClick} 
-                        className="w-full mt-auto flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-md transition"
-                    >
-                        Acceder al Panel <ArrowRight size={18}/>
-                    </button>
-                </div>
-            </div>
-        </div>
+    <div className="selection:bg-blue-500 selection:text-white">
+      {toast && <Toast {...toast} onDismiss={() => setToast(null)} />}
+      {view === 'home' && <Welcome/>}
+      {view === 'login' && <Login/>}
+      {view === 'admin' && <AdminDashboard/>}
+      {view === 'user' && <UserPortal/>}
+      
+      <style>{`
+        @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes fade-in-up { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fade-in { animation: fade-in 0.5s ease-out; }
+        .animate-fade-in-up { animation: fade-in-up 0.5s ease-out; }
+      `}</style>
     </div>
   );
-};
-
-const Toast: React.FC<{ message: string; type: ToastType; onDismiss: () => void }> = ({ message, type, onDismiss }) => {
-    const baseClasses = "fixed top-5 right-5 w-full max-w-sm p-4 rounded-lg shadow-lg text-white animate-fade-in-down z-[100]";
-    const typeClasses = {
-        success: "bg-green-600",
-        error: "bg-red-600",
-        info: "bg-blue-600"
-    };
-    const Icon = {
-      success: <CheckCircle size={20} />,
-      error: <XCircle size={20} />,
-      info: <Info size={20} />
-    }[type];
-
-    useEffect(() => {
-        const timer = setTimeout(onDismiss, 5000);
-        return () => clearTimeout(timer);
-    }, [onDismiss]);
-
-    return (
-        <div className={`${baseClasses} ${typeClasses[type]}`}>
-            <div className="flex items-start">
-                <div className="flex-shrink-0">{Icon}</div>
-                <div className="ml-3 w-0 flex-1">
-                    <p className="text-sm font-medium">{message}</p>
-                </div>
-                <div className="ml-4 flex-shrink-0 flex">
-                    <button onClick={onDismiss} className="inline-flex rounded-md p-1 text-white/80 hover:bg-white/20">
-                        <X size={20} />
-                    </button>
-                </div>
-            </div>
-        </div>
-    );
-};
-
-
-const App: React.FC = () => {
-    const [view, setView] = useState<'home' | 'adminLogin' | 'adminDashboard' | 'user' | 'loading'>('loading');
-    const [currentTraining, setCurrentTraining] = useState<Training | null>(null);
-    const [prefilledCompany, setPrefilledCompany] = useState<string | undefined>(undefined);
-    const [error, setError] = useState<string | null>(null);
-    const [toast, setToast] = useState<{ message: string; type: ToastType; key: number } | null>(null);
-
-    const showToast = (message: string, type: ToastType = 'info') => {
-        setToast({ message, type, key: Date.now() });
-    };
-
-    const dismissToast = () => {
-        setToast(null);
-    };
-
-    useEffect(() => {
-        const params = new URLSearchParams(window.location.search);
-        const trainingKey = params.get('trainingKey');
-        const companyParam = params.get('company');
-
-        if (trainingKey) {
-            setView('loading');
-            setError(null);
-            apiService.getSharedTraining(trainingKey).then(training => {
-                if (training) {
-                    setCurrentTraining(training);
-                    setPrefilledCompany(companyParam || undefined);
-                    setView('user');
-                } else {
-                    setError("La capacitación solicitada no fue encontrada o el enlace es inválido.");
-                    setView('home');
-                }
-            }).catch(e => {
-                console.error("Error fetching training:", e);
-                setError("Ocurrió un error al cargar la capacitación. Por favor, intente de nuevo.");
-                setView('home');
-            });
-        } else {
-            setView('home');
-        }
-    }, []);
-    
-    const goToAdminLogin = () => setView('adminLogin');
-    const handleAdminLogin = () => setView('adminDashboard');
-    
-    const goHome = () => {
-        history.pushState({}, '', window.location.pathname);
-        setView('home');
-        setCurrentTraining(null);
-        setPrefilledCompany(undefined);
-        setError(null);
-    };
-    
-    const renderContent = () => {
-        if(error) {
-            return (
-                <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 text-center">
-                     <h1 className="text-2xl font-bold text-red-400 mb-4">Error</h1>
-                     <p className="text-slate-300 mb-6">{error}</p>
-                     <button onClick={goHome} className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Volver al Inicio</button>
-                </div>
-            )
-        }
-
-        switch (view) {
-            case 'loading':
-                return <div className="min-h-screen bg-slate-900 flex items-center justify-center"><Spinner size={12} /></div>;
-            case 'home':
-                return <WelcomeScreen onAdminClick={goToAdminLogin} />;
-            case 'adminLogin':
-                return <AdminLogin onLogin={handleAdminLogin} />;
-            case 'adminDashboard':
-                return <AdminDashboard onLogout={goHome} showToast={showToast} />;
-            case 'user':
-                 if (currentTraining) {
-                     return <UserTrainingPortal training={currentTraining} onBack={goHome} prefilledCompany={prefilledCompany} showToast={showToast} />;
-                 }
-                 return <WelcomeScreen onAdminClick={goToAdminLogin} />;
-            default:
-                return <WelcomeScreen onAdminClick={goToAdminLogin} />;
-        }
-    };
-    
-    return (
-        <>
-            {toast && <Toast key={toast.key} message={toast.message} type={toast.type} onDismiss={dismissToast} />}
-            {renderContent()}
-        </>
-    );
 };
 
 const root = ReactDOM.createRoot(document.getElementById('root') as HTMLElement);
