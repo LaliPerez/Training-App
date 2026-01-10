@@ -23,7 +23,10 @@ import {
   Upload,
   Database,
   Eye,
-  EyeOff
+  EyeOff,
+  CloudLightning,
+  RefreshCw,
+  Cloud
 } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 import QRCode from 'qrcode';
@@ -80,7 +83,8 @@ const STORAGE_KEYS = {
   RECORDS: 'trainer_app_records_v3',
   INSTRUCTOR: 'trainer_app_instructor_v3',
   AUTH: 'trainer_app_auth_v3',
-  REMEMBER_ME: 'trainer_app_remember_v3'
+  REMEMBER_ME: 'trainer_app_remember_v3',
+  SYNC_ID: 'trainer_app_sync_id_v3'
 };
 
 const getStorage = (key: string, defaultValue: any) => {
@@ -169,13 +173,14 @@ const App = () => {
   const [activeParams, setActiveParams] = useState<{cid: string | null, mid: string | null}>({ cid: null, mid: null });
   const [isAdminAuthenticated, setIsAdminAuthenticated] = useState<boolean>(() => getStorage(STORAGE_KEYS.AUTH, false));
   const [rememberMe, setRememberMe] = useState<boolean>(() => getStorage(STORAGE_KEYS.REMEMBER_ME, false));
-  const [adminTab, setAdminTab] = useState<'asistencias' | 'asignaciones' | 'modulos' | 'clientes' | 'instructor'>('asistencias');
+  const [adminTab, setAdminTab] = useState<'asistencias' | 'asignaciones' | 'modulos' | 'clientes' | 'instructor' | 'sync'>('asistencias');
 
   const [clients, setClients] = useState<Client[]>(() => getStorage(STORAGE_KEYS.CLIENTS, []));
   const [modules, setModules] = useState<Module[]>(() => getStorage(STORAGE_KEYS.MODULES, []));
   const [assignments, setAssignments] = useState<Assignment[]>(() => getStorage(STORAGE_KEYS.ASSIGNMENTS, []));
   const [records, setRecords] = useState<AttendanceRecord[]>(() => getStorage(STORAGE_KEYS.RECORDS, []));
   const [instructor, setInstructor] = useState<Instructor>(() => getStorage(STORAGE_KEYS.INSTRUCTOR, { name: "", role: "", signature: "" }));
+  const [syncId, setSyncId] = useState<string>(() => getStorage(STORAGE_KEYS.SYNC_ID, ""));
 
   const getBaseUrl = () => {
     return window.location.origin + window.location.pathname;
@@ -212,14 +217,15 @@ const App = () => {
     return () => window.removeEventListener('popstate', syncFromUrl);
   }, []);
 
+  // Sync state to LocalStorage
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.CLIENTS, JSON.stringify(clients));
     localStorage.setItem(STORAGE_KEYS.MODULES, JSON.stringify(modules));
     localStorage.setItem(STORAGE_KEYS.ASSIGNMENTS, JSON.stringify(assignments));
     localStorage.setItem(STORAGE_KEYS.RECORDS, JSON.stringify(records));
     localStorage.setItem(STORAGE_KEYS.INSTRUCTOR, JSON.stringify(instructor));
+    localStorage.setItem(STORAGE_KEYS.SYNC_ID, JSON.stringify(syncId));
     
-    // Auth persistence logic based on rememberMe
     if (rememberMe) {
       localStorage.setItem(STORAGE_KEYS.AUTH, JSON.stringify(isAdminAuthenticated));
       localStorage.setItem(STORAGE_KEYS.REMEMBER_ME, JSON.stringify(true));
@@ -227,7 +233,7 @@ const App = () => {
       localStorage.removeItem(STORAGE_KEYS.AUTH);
       localStorage.setItem(STORAGE_KEYS.REMEMBER_ME, JSON.stringify(false));
     }
-  }, [clients, modules, assignments, records, instructor, isAdminAuthenticated, rememberMe]);
+  }, [clients, modules, assignments, records, instructor, isAdminAuthenticated, rememberMe, syncId]);
 
   const [loginPassword, setLoginPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -238,6 +244,58 @@ const App = () => {
       setView('adminDashboard');
     } else {
       alert("Contraseña incorrecta");
+    }
+  };
+
+  // --- Sync Functions (Using public object storage API) ---
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  const handleCloudUpload = async () => {
+    setIsSyncing(true);
+    try {
+      const payload = { clients, modules, assignments, records, instructor };
+      // Using a public storage mock API (simulate real backend)
+      const response = await fetch('https://api.restful-api.dev/objects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: "TrainerAppData_" + (syncId || Date.now().toString()),
+          data: payload
+        })
+      });
+      const result = await response.json();
+      const newSyncId = result.id;
+      setSyncId(newSyncId);
+      alert(`Sincronización exitosa. Código de enlace: ${newSyncId}. Use este código en otro dispositivo para recuperar sus datos.`);
+    } catch (error) {
+      alert("Error en la sincronización de subida.");
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleCloudDownload = async (targetId: string) => {
+    if (!targetId) return alert("Ingrese un código de enlace.");
+    setIsSyncing(true);
+    try {
+      const response = await fetch(`https://api.restful-api.dev/objects/${targetId}`);
+      if (!response.ok) throw new Error("Objeto no encontrado");
+      const result = await response.json();
+      const data = result.data;
+      
+      if (data) {
+        if (data.clients) setClients(data.clients);
+        if (data.modules) setModules(data.modules);
+        if (data.assignments) setAssignments(data.assignments);
+        if (data.records) setRecords(data.records);
+        if (data.instructor) setInstructor(data.instructor);
+        setSyncId(targetId);
+        alert("¡Datos sincronizados correctamente desde la nube!");
+      }
+    } catch (error) {
+      alert("Error al descargar: Código no válido o expirado.");
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -317,7 +375,8 @@ const App = () => {
                   { id: 'asignaciones', label: 'QR', icon: Layers },
                   { id: 'modulos', label: 'Módulos', icon: BookOpen },
                   { id: 'clientes', label: 'Clientes', icon: FileText },
-                  { id: 'instructor', label: 'Instructor', icon: UserCircle }
+                  { id: 'instructor', label: 'Instructor', icon: UserCircle },
+                  { id: 'sync', label: 'Sync', icon: CloudLightning }
                 ].map(t => (
                   <button key={t.id} onClick={() => setAdminTab(t.id as any)} className={`flex items-center gap-2 px-5 py-3 rounded-xl font-black uppercase tracking-widest text-[10px] transition-all whitespace-nowrap ${adminTab === t.id ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}>
                     <t.icon size={14} /> {t.label}
@@ -332,6 +391,7 @@ const App = () => {
                {adminTab === 'modulos' && <ModulosView modules={modules} setModules={setModules} />}
                {adminTab === 'clientes' && <ClientesView clients={clients} setClients={setClients} />}
                {adminTab === 'instructor' && <InstructorView instructor={instructor} setInstructor={setInstructor} />}
+               {adminTab === 'sync' && <SyncView syncId={syncId} onUpload={handleCloudUpload} onDownload={handleCloudDownload} isSyncing={isSyncing} />}
             </div>
           </div>
         )}
@@ -442,9 +502,9 @@ const AsistenciasView = ({ records, setRecords, clients, modules, instructor }: 
   };
 
   const handleIndividualDelete = (id: string) => {
-    if (confirm("¿Seguro que desea eliminar esta fila de asistencia?")) {
+    if (confirm("¿Seguro que desea eliminar este registro de asistencia? No aparecerá en los reportes.")) {
       setRecords(records.filter((r: any) => r.id !== id));
-      setSel(sel.filter(i => i !== id));
+      setSel(prev => prev.filter(i => i !== id));
     }
   };
 
@@ -487,7 +547,7 @@ const AsistenciasView = ({ records, setRecords, clients, modules, instructor }: 
               <th className="px-6 py-5">Colaborador</th>
               <th className="px-6 py-5">Capacitación</th>
               <th className="px-6 py-5 text-center">Firma</th>
-              <th className="px-6 py-5 text-center w-16">Acciones</th>
+              <th className="px-6 py-5 text-center w-24">Acciones</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800/50">
@@ -500,14 +560,94 @@ const AsistenciasView = ({ records, setRecords, clients, modules, instructor }: 
                 <td className="px-6 py-6 text-[10px] uppercase font-black text-blue-500">{modules.find((m: any) => m.id === r.moduleId)?.name}<div className="text-slate-500 font-bold mt-1">{clients.find((c: any) => c.id === r.companyId)?.name}</div></td>
                 <td className="px-6 py-6 text-center"><div className="bg-white p-1 rounded-xl h-10 w-28 overflow-hidden inline-block shadow-inner"><img src={r.signature} className="h-full w-full object-contain" /></div></td>
                 <td className="px-6 py-6 text-center" onClick={e => e.stopPropagation()}>
-                  <button onClick={() => handleIndividualDelete(r.id)} className="text-slate-700 hover:text-red-500 transition-colors p-2 rounded-lg hover:bg-red-500/10">
-                    <Trash2 size={16} />
-                  </button>
+                  <div className="flex items-center justify-center gap-2">
+                    <button 
+                      onClick={() => handleIndividualDelete(r.id)}
+                      className="p-3 text-slate-500 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all"
+                      title="Eliminar registro"
+                    >
+                      <Trash2 size={18} />
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+};
+
+const SyncView = ({ syncId, onUpload, onDownload, isSyncing }: any) => {
+  const [inputCode, setInputCode] = useState("");
+
+  return (
+    <div className="animate-in fade-in max-w-2xl mx-auto py-10 space-y-12">
+      <div className="text-center space-y-4">
+        <CloudLightning size={64} className="text-blue-500 mx-auto" />
+        <h2 className="text-white text-3xl font-black uppercase italic">Sincronización en la Nube</h2>
+        <p className="text-slate-500 text-sm font-bold uppercase tracking-widest leading-relaxed">
+          Permite transferir su base de datos completa a otros dispositivos.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+        {/* Upload Card */}
+        <div className="bg-[#0d111c] p-8 rounded-[2.5rem] border border-gray-800 flex flex-col items-center space-y-6 shadow-xl relative overflow-hidden group">
+          <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity">
+            <Cloud size={80} />
+          </div>
+          <h3 className="text-white font-black uppercase italic tracking-widest text-lg">Subir Datos</h3>
+          <p className="text-slate-500 text-[10px] font-bold text-center leading-relaxed">
+            Guarda la configuración actual y los registros en la nube para compartirlos.
+          </p>
+          {syncId && (
+            <div className="bg-blue-600/10 px-4 py-3 rounded-xl border border-blue-500/20 w-full text-center">
+              <div className="text-[9px] text-blue-500 font-black uppercase mb-1">Código Actual</div>
+              <div className="text-white font-mono font-bold text-lg">{syncId}</div>
+            </div>
+          )}
+          <button 
+            onClick={onUpload}
+            disabled={isSyncing}
+            className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-2xl uppercase text-[10px] tracking-widest shadow-xl flex items-center justify-center gap-2 disabled:opacity-50 transition-all"
+          >
+            {isSyncing ? <RefreshCw className="animate-spin" size={16} /> : <Upload size={16} />}
+            Subir a la Nube
+          </button>
+        </div>
+
+        {/* Download Card */}
+        <div className="bg-[#0d111c] p-8 rounded-[2.5rem] border border-gray-800 flex flex-col items-center space-y-6 shadow-xl">
+          <h3 className="text-white font-black uppercase italic tracking-widest text-lg">Vincular Dispositivo</h3>
+          <p className="text-slate-500 text-[10px] font-bold text-center leading-relaxed">
+            Ingrese un código de enlace generado previamente para descargar los datos.
+          </p>
+          <input 
+            value={inputCode}
+            onChange={e => setInputCode(e.target.value)}
+            placeholder="CÓDIGO DE ENLACE"
+            className="w-full bg-[#111827] border border-gray-800 text-white p-4 rounded-xl font-mono text-center font-bold uppercase focus:border-blue-500 outline-none"
+          />
+          <button 
+            onClick={() => onDownload(inputCode)}
+            disabled={isSyncing || !inputCode}
+            className="w-full bg-slate-800 hover:bg-slate-700 text-white font-black py-4 rounded-2xl uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 disabled:opacity-50 transition-all"
+          >
+            {isSyncing ? <RefreshCw className="animate-spin" size={16} /> : <RefreshCw size={16} />}
+            Descargar Datos
+          </button>
+        </div>
+      </div>
+
+      <div className="bg-amber-500/10 p-6 rounded-[2rem] border border-amber-500/20 text-center">
+        <div className="flex items-center justify-center gap-2 text-amber-500 font-black uppercase text-[10px] mb-2">
+          <AlertCircle size={14} /> Importante
+        </div>
+        <p className="text-slate-400 text-[10px] font-bold leading-relaxed">
+          La descarga de datos reemplazará toda la información actual de este dispositivo. Asegúrese de haber respaldado si es necesario. Los registros se almacenan temporalmente para facilitar la migración.
+        </p>
       </div>
     </div>
   );
