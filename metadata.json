@@ -1,5 +1,7 @@
 {
   "name": "Trainer App",
-  "description": "An application for administrators to create training modules with links and for users to complete them, provide their information including a digital signature, and have that data available for download.",
-  "requestFramePermissions": []
+  "description": "Professional training management platform with QR registration, digital signatures, and administrative dashboard.",
+  "requestFramePermissions": [
+    "camera"
+  ]
 }

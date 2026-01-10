@@ -1,945 +1,918 @@
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import ReactDOM from 'react-dom/client';
-import { jsPDF } from 'jspdf';
-import autoTable from 'jspdf-autotable';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { createRoot } from 'react-dom/client';
+import { 
+  Users, 
+  BookOpen, 
+  QrCode, 
+  UserCircle, 
+  LogOut, 
+  Trash2, 
+  Download, 
+  Plus, 
+  Copy, 
+  FileText, 
+  CheckCircle2, 
+  ShieldCheck,
+  ExternalLink,
+  X,
+  AlertCircle,
+  ChevronRight,
+  Layers,
+  ScanLine,
+  Upload,
+  Database
+} from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 import QRCode from 'qrcode';
-import { 
-  ShieldCheck, PlusCircle, Users, LogOut, 
-  Trash2, CheckCircle, ArrowLeft, GraduationCap, 
-  Download, Settings, Save, AlertCircle, Link as LinkIcon,
-  Copy, QrCode, ExternalLink, Building, Info, FileText, FilterX, Hash,
-  CheckSquare, Square
-} from 'lucide-react';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
-// --- CONFIGURATION ---
-const JSONBIN_BIN_ID = '68fa221e43b1c97be97a84f2'; 
-const JSONBIN_MASTER_KEY = '$2a$10$CGBmrjbO1PM5CPstFtwXN.PMvfkyYUpEb9rGtO5rJZBLuEtAfWQ7i';
-const ADMIN_PASSWORD = 'admin2025';
-
-// --- TYPES ---
-interface Training {
+// --- Types ---
+interface Client {
   id: string;
   name: string;
+  cuit: string;
 }
 
-interface Company {
-    id: string;
-    name: string;
-    cuit: string; 
+interface ModuleDocument {
+  name: string;
+  url: string;
 }
 
-interface UserSubmission {
+interface Module {
   id: string;
-  trainingId: string;
-  trainingName: string;
-  firstName: string;
-  lastName: string;
+  name: string;
+  documents: ModuleDocument[];
+}
+
+interface Assignment {
+  id: string;
+  clientId: string;
+  moduleId: string;
+  createdAt: string;
+}
+
+interface AttendanceRecord {
+  id: string;
+  name: string;
   dni: string;
   companyId: string;
-  companyName: string; 
-  companyCuit: string; 
-  signature: string; 
+  moduleId: string;
   timestamp: string;
+  signature: string;
 }
 
-interface AdminConfig {
-  signature: string | null;
-  clarification: string;
-  jobTitle: string;
+interface Instructor {
+  name: string;
+  role: string;
+  signature: string;
 }
 
-interface AppData {
-  submissions: UserSubmission[];
-  adminConfig: AdminConfig;
-  trainings: Training[];
-  companies: Company[];
-}
+// --- Constants ---
+const ADMIN_PASSWORD = "admin2025";
+const STORAGE_KEYS = {
+  CLIENTS: 'trainer_app_clients_v3',
+  MODULES: 'trainer_app_modules_v3',
+  ASSIGNMENTS: 'trainer_app_assignments_v3',
+  RECORDS: 'trainer_app_records_v3',
+  INSTRUCTOR: 'trainer_app_instructor_v3',
+  AUTH: 'trainer_app_auth_v3'
+};
 
-// --- API SERVICE ---
-const apiService = {
-  getData: async (): Promise<AppData> => {
-    try {
-      const response = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}/latest`, {
-        method: 'GET',
-        headers: { 'X-Master-Key': JSONBIN_MASTER_KEY },
-      });
-      if (!response.ok) throw new Error('Error fetching data');
-      const json = await response.json();
-      const d = json.record;
-      return {
-          submissions: d.submissions || [],
-          adminConfig: d.adminConfig || { signature: null, clarification: '', jobTitle: '' },
-          trainings: d.trainings || [],
-          companies: (d.companies || []).map((c: any) => ({ 
-              id: c.id, 
-              name: c.name, 
-              cuit: c.cuit || 'S/N' 
-          })),
-      };
-    } catch (e) {
-      console.error('Fetch error:', e);
-      return {
-        submissions: [],
-        adminConfig: { signature: null, clarification: '', jobTitle: '' },
-        trainings: [],
-        companies: [],
-      };
-    }
-  },
-  saveData: async (data: AppData): Promise<void> => {
-    await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Master-Key': JSONBIN_MASTER_KEY,
-      },
-      body: JSON.stringify(data),
-    });
+const getStorage = (key: string, defaultValue: any) => {
+  const saved = localStorage.getItem(key);
+  if (!saved) return defaultValue;
+  try {
+    const parsed = JSON.parse(saved);
+    return parsed ?? defaultValue;
+  } catch (e) {
+    return defaultValue;
   }
 };
 
-// --- COMPONENTS ---
+// --- PDF Generation Helpers ---
 
-const Toast = ({ message, type }: { message: string, type: 'success' | 'error' }) => (
-  <div className={`fixed bottom-4 right-4 p-5 rounded-2xl shadow-2xl z-50 flex items-center space-x-4 animate-in fade-in slide-in-from-bottom-5 duration-300 border ${type === 'success' ? 'bg-emerald-900/90 text-emerald-100 border-emerald-500/50' : 'bg-rose-900/90 text-rose-100 border-rose-500/50'} backdrop-blur-xl`}>
-    {type === 'success' ? <CheckCircle size={24} className="text-emerald-400" /> : <AlertCircle size={24} className="text-rose-400" />}
-    <span className="font-semibold text-lg text-white">{message}</span>
-  </div>
-);
+const isValidBase64 = (str: string) => {
+  if (!str || typeof str !== 'string' || str.length < 10) return false;
+  return str.startsWith('data:image');
+};
+
+const generateIndividualCertificate = (record: AttendanceRecord, client: Client, module: Module, instructor: Instructor) => {
+  try {
+    const doc = new jsPDF();
+    doc.setFillColor(31, 41, 55); 
+    doc.rect(0, 0, 210, 45, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(26);
+    doc.setFont("helvetica", "bold");
+    doc.text("Certificado de Capacitación", 15, 28);
+
+    doc.setTextColor(50, 50, 50);
+    doc.setFontSize(12);
+    doc.setFont("helvetica", "normal");
+    doc.text("Por medio de la presente, se certifica que", 15, 65);
+    
+    doc.setFontSize(22);
+    doc.setFont("helvetica", "bold");
+    doc.text(record.name, 15, 80);
+    
+    doc.setFontSize(12);
+    doc.setFont("helvetica", "normal");
+    doc.text(`con DNI N° ${record.dni}, de la empresa ${client.name} (CUIT: ${client.cuit}),`, 15, 92);
+    doc.text("ha completado y aprobado la capacitación denominada:", 15, 100);
+    
+    doc.setFontSize(16);
+    doc.setFont("helvetica", "bold");
+    doc.text(`"${module.name}"`, 15, 115);
+    
+    doc.setFontSize(12);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Realizada en la fecha ${new Date(record.timestamp).toLocaleDateString()}.`, 15, 128);
+
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const pageWidth = doc.internal.pageSize.getWidth();
+
+    if (isValidBase64(record.signature)) {
+      doc.addImage(record.signature, 'PNG', 15, pageHeight - 60, 60, 20);
+    }
+    doc.setDrawColor(200, 200, 200);
+    doc.line(15, pageHeight - 40, 75, pageHeight - 40);
+    doc.setFontSize(10);
+    doc.text("Firma del Asistente", 45, pageHeight - 34, { align: "center" });
+
+    if (isValidBase64(instructor.signature)) {
+      doc.addImage(instructor.signature, 'PNG', pageWidth - 75, pageHeight - 60, 60, 20);
+    }
+    doc.line(pageWidth - 75, pageHeight - 40, pageWidth - 15, pageHeight - 40);
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "bold");
+    doc.text(instructor.name || "N/A", pageWidth - 45, pageHeight - 34, { align: "center" });
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "normal");
+    doc.text(instructor.role || "Instructor", pageWidth - 45, pageHeight - 28, { align: "center" });
+
+    doc.save(`Certificado_${record.name.replace(/\s+/g, '_')}.pdf`);
+  } catch (err) {
+    console.error(err);
+    alert("Error al generar certificado.");
+  }
+};
+
+// --- Main App Component ---
 
 const App = () => {
-  const [view, setView] = useState<'user' | 'admin-login' | 'admin-dashboard'>('user');
-  const [data, setData] = useState<AppData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [password, setPassword] = useState('');
-  const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
+  const [view, setView] = useState<'landing' | 'userForm' | 'adminLogin' | 'adminDashboard'>('landing');
+  const [activeParams, setActiveParams] = useState<{cid: string | null, mid: string | null}>({ cid: null, mid: null });
+  const [isAdminAuthenticated, setIsAdminAuthenticated] = useState<boolean>(() => getStorage(STORAGE_KEYS.AUTH, false));
+  const [adminTab, setAdminTab] = useState<'asistencias' | 'asignaciones' | 'modulos' | 'clientes' | 'instructor' | 'datos'>('asistencias');
 
-  // User Form State
-  const [selectedTrainingId, setSelectedTrainingId] = useState('');
-  const [autoCompany, setAutoCompany] = useState<Company | null>(null);
-  const [userForm, setUserForm] = useState({ firstName: '', lastName: '', dni: '' });
-  const sigCanvasRef = useRef<SignatureCanvas>(null);
+  const [clients, setClients] = useState<Client[]>(() => getStorage(STORAGE_KEYS.CLIENTS, []));
+  const [modules, setModules] = useState<Module[]>(() => getStorage(STORAGE_KEYS.MODULES, []));
+  const [assignments, setAssignments] = useState<Assignment[]>(() => getStorage(STORAGE_KEYS.ASSIGNMENTS, []));
+  const [records, setRecords] = useState<AttendanceRecord[]>(() => getStorage(STORAGE_KEYS.RECORDS, []));
+  const [instructor, setInstructor] = useState<Instructor>(() => getStorage(STORAGE_KEYS.INSTRUCTOR, { name: "", role: "", signature: "" }));
+
+  const getBaseUrl = () => {
+    return window.location.href.split('?')[0].split('#')[0];
+  };
+
+  const handleScanSimulation = useCallback((cid: string, mid: string) => {
+    const baseUrl = getBaseUrl();
+    const newUrl = `${baseUrl}?cid=${cid}&mid=${mid}`;
+    setActiveParams({ cid, mid });
+    setView('userForm');
+    window.history.pushState({ cid, mid }, '', newUrl);
+    window.scrollTo(0, 0);
+  }, []);
+
+  const handleGoHome = useCallback(() => {
+    const baseUrl = getBaseUrl();
+    window.history.pushState({}, '', baseUrl);
+    setActiveParams({ cid: null, mid: null });
+    setView(isAdminAuthenticated ? 'adminDashboard' : 'landing');
+  }, [isAdminAuthenticated]);
 
   useEffect(() => {
-    loadData();
+    const syncFromUrl = () => {
+      const p = new URLSearchParams(window.location.search);
+      const cid = p.get('cid');
+      const mid = p.get('mid');
+      if (cid && mid) {
+        setActiveParams({ cid, mid });
+        setView('userForm');
+      }
+    };
+    syncFromUrl();
+    window.addEventListener('popstate', syncFromUrl);
+    return () => window.removeEventListener('popstate', syncFromUrl);
   }, []);
 
   useEffect(() => {
-    if (!data) return;
-    const params = new URLSearchParams(window.location.search);
-    const companyId = params.get('companyId');
-    const trainingId = params.get('trainingId');
-    
-    if (companyId) {
-      const company = data.companies.find(c => c.id === companyId);
-      if (company) setAutoCompany(company);
-    }
-    if (trainingId) setSelectedTrainingId(trainingId);
-  }, [data]);
+    localStorage.setItem(STORAGE_KEYS.CLIENTS, JSON.stringify(clients));
+    localStorage.setItem(STORAGE_KEYS.MODULES, JSON.stringify(modules));
+    localStorage.setItem(STORAGE_KEYS.ASSIGNMENTS, JSON.stringify(assignments));
+    localStorage.setItem(STORAGE_KEYS.RECORDS, JSON.stringify(records));
+    localStorage.setItem(STORAGE_KEYS.INSTRUCTOR, JSON.stringify(instructor));
+    localStorage.setItem(STORAGE_KEYS.AUTH, JSON.stringify(isAdminAuthenticated));
+  }, [clients, modules, assignments, records, instructor, isAdminAuthenticated]);
 
-  const loadData = async () => {
-    setLoading(true);
-    try {
-      const result = await apiService.getData();
-      setData(result);
-    } catch (e) {
-      showToast('Error de conexión', 'error');
-    } finally {
-      setLoading(false);
-    }
+  const handleExportData = () => {
+    const data = { clients, modules, assignments, records, instructor };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `trainer_app_backup_${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
   };
 
-  const showToast = (message: string, type: 'success' | 'error') => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 4000);
-  };
-
-  const handleAdminLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (password === ADMIN_PASSWORD) {
-      setView('admin-dashboard');
-      setPassword('');
-    } else {
-      showToast('Credenciales incorrectas', 'error');
-    }
-  };
-
-  const handleUserSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!data || !autoCompany) return;
-    if (!sigCanvasRef.current || sigCanvasRef.current.isEmpty()) {
-      showToast('Se requiere su firma manuscrita', 'error');
-      return;
-    }
-    if (!selectedTrainingId) {
-      showToast('Seleccione una capacitación', 'error');
-      return;
-    }
-
-    const training = data.trainings.find(t => t.id === selectedTrainingId);
-
-    const newSubmission: UserSubmission = {
-      id: crypto.randomUUID(),
-      trainingId: selectedTrainingId,
-      trainingName: training?.name || 'Capacitación',
-      companyId: autoCompany.id,
-      companyName: autoCompany.name,
-      companyCuit: autoCompany.cuit,
-      ...userForm,
-      signature: sigCanvasRef.current.getTrimmedCanvas().toDataURL('image/png'),
-      timestamp: new Date().toISOString()
+  const handleImportData = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const data = JSON.parse(event.target?.result as string);
+        if (data.clients) setClients(data.clients);
+        if (data.modules) setModules(data.modules);
+        if (data.assignments) setAssignments(data.assignments);
+        if (data.records) setRecords(data.records);
+        if (data.instructor) setInstructor(data.instructor);
+        alert("Datos importados con éxito.");
+      } catch (err) {
+        alert("Archivo inválido.");
+      }
     };
-
-    const updatedData = {
-      ...data,
-      submissions: [newSubmission, ...data.submissions]
-    };
-
-    setData(updatedData);
-    await apiService.saveData(updatedData);
-    showToast('¡Registro completado!', 'success');
-    generateCertificate(newSubmission, data.adminConfig);
-    
-    setUserForm({ firstName: '', lastName: '', dni: '' });
-    sigCanvasRef.current?.clear();
+    reader.readAsText(file);
   };
-
-  const generateCertificate = (sub: UserSubmission, config: AdminConfig) => {
-    const doc = new jsPDF();
-    const width = doc.internal.pageSize.getWidth();
-    
-    doc.setFillColor(15, 23, 42); 
-    doc.rect(0, 0, width, 50, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(24);
-    doc.setFont('helvetica', 'bold');
-    doc.text('CERTIFICADO DE ASISTENCIA', width/2, 30, { align: 'center' });
-
-    doc.setTextColor(30, 41, 59);
-    doc.setFontSize(14);
-    doc.text('Se certifica la participación de:', width/2, 70, { align: 'center' });
-    
-    doc.setFontSize(28);
-    doc.setFont('helvetica', 'bold');
-    doc.text(`${sub.lastName.toUpperCase()}, ${sub.firstName}`, width/2, 85, { align: 'center' });
-    
-    doc.setFontSize(12);
-    doc.setFont('helvetica', 'normal');
-    doc.text(`DNI: ${sub.dni} | Empresa: ${sub.companyName} (${sub.companyCuit})`, width/2, 95, { align: 'center' });
-
-    doc.setFontSize(14);
-    doc.text('En la formación técnica de:', width/2, 115, { align: 'center' });
-    
-    doc.setFontSize(22);
-    doc.setFont('helvetica', 'bold');
-    doc.text(`"${sub.trainingName}"`, width/2, 130, { align: 'center' });
-
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'italic');
-    doc.text(`Fecha de emisión: ${new Date(sub.timestamp).toLocaleDateString()}`, width/2, 145, { align: 'center' });
-
-    if (config.signature) {
-      doc.addImage(config.signature, 'PNG', 40, 165, 40, 20);
-      doc.line(30, 185, 90, 185);
-      doc.setFontSize(10);
-      doc.setFont('helvetica', 'bold');
-      doc.text(config.clarification, 60, 192, { align: 'center' });
-      doc.setFontSize(8);
-      doc.text(config.jobTitle, 60, 197, { align: 'center' });
-    }
-
-    if (sub.signature) {
-      doc.addImage(sub.signature, 'PNG', 130, 165, 40, 20);
-      doc.line(120, 185, 180, 185);
-      doc.setFontSize(10);
-      doc.text('Firma del Asistente', 150, 192, { align: 'center' });
-    }
-
-    doc.save(`Certificado_${sub.dni}.pdf`);
-  };
-
-  if (loading) return (
-    <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center space-y-6 text-center px-4">
-      <div className="relative">
-        <div className="w-16 h-16 border-4 border-indigo-500/20 rounded-full animate-ping absolute scale-150 opacity-20"></div>
-        <div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
-      </div>
-      <p className="text-slate-400 font-bold tracking-widest text-lg uppercase">Cargando TrainerApp Pro</p>
-    </div>
-  );
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans selection:bg-indigo-500/30">
-      {toast && <Toast {...toast} />}
+    <div className="font-sans text-slate-200 antialiased bg-[#060912] min-h-screen selection:bg-blue-600 selection:text-white">
+      <Navbar isAdminAuthenticated={isAdminAuthenticated} onLogout={() => { setIsAdminAuthenticated(false); handleGoHome(); }} onGoHome={handleGoHome} onLoginClick={() => setView('adminLogin')} />
 
-      <nav className="bg-slate-900/50 border-b border-slate-800 px-6 py-4 sticky top-0 z-40 backdrop-blur-2xl">
-        <div className="max-w-6xl mx-auto flex justify-between items-center">
-          <div className="flex items-center space-x-3 cursor-pointer group" onClick={() => setView('user')}>
-            <div className="bg-indigo-600 text-white p-2.5 rounded-xl shadow-lg shadow-indigo-500/20 group-hover:scale-110 transition-transform">
-              <GraduationCap size={28} />
+      <main className="pt-20">
+        {view === 'landing' && (
+          <div className="min-h-[80vh] flex flex-col items-center justify-center p-6 animate-in fade-in duration-700">
+            <div className="mb-12 text-center">
+              <h1 className="text-white text-7xl md:text-9xl font-black italic tracking-tighter uppercase leading-none mb-4">TRAINER<br/><span className="text-blue-600">APP</span></h1>
+              <p className="text-slate-500 font-bold tracking-[0.5em] uppercase text-xs md:text-sm italic">Gestión de Capacitaciones Pro</p>
             </div>
-            <h1 className="text-2xl font-bold tracking-tighter">TrainerApp <span className="text-indigo-400">Pro</span></h1>
+            <div className="max-w-md w-full bg-[#111827] p-8 rounded-[2.5rem] border border-gray-800 shadow-2xl">
+               <div className="flex items-center gap-4 mb-6">
+                 <div className="bg-blue-600 p-3 rounded-2xl"><ScanLine className="text-white" /></div>
+                 <h3 className="text-white text-xl font-black uppercase italic">Escanear para comenzar</h3>
+               </div>
+               <p className="text-slate-400 text-sm mb-6 leading-relaxed">Escanee el código QR proporcionado por su instructor para registrar su asistencia y acceder al material.</p>
+               <QRSimulator assignments={assignments} clients={clients} modules={modules} onScan={handleScanSimulation} />
+            </div>
           </div>
-          <button 
-            onClick={() => setView(view === 'user' ? 'admin-login' : 'user')}
-            className="flex items-center space-x-2 px-4 py-2 text-lg font-semibold text-slate-400 hover:text-white transition-colors hover:bg-slate-800 rounded-xl"
-          >
-            {view === 'user' ? <><ShieldCheck size={20} /><span>Acceso Admin</span></> : <><ArrowLeft size={20} /><span>Volver al Portal</span></>}
-          </button>
-        </div>
-      </nav>
+        )}
 
-      <main className="max-w-6xl mx-auto p-6 md:p-12 animate-in fade-in duration-700">
-        {view === 'user' && (
-          <div className="max-w-4xl mx-auto">
-            {!autoCompany ? (
-              <div className="text-center bg-slate-900 p-12 rounded-[2.5rem] shadow-2xl border border-slate-800 space-y-8 mt-12">
-                <div className="bg-rose-500/10 text-rose-500 w-24 h-24 rounded-full flex items-center justify-center mx-auto ring-4 ring-rose-500/20">
-                  <AlertCircle size={48} />
-                </div>
-                <div className="space-y-4">
-                  <h2 className="text-4xl font-bold">Acceso no autorizado</h2>
-                  <p className="text-slate-400 max-w-sm mx-auto text-xl">Esta aplicación requiere un enlace de instructor válido para pre-configurar su empresa.</p>
-                </div>
-                <button 
-                   onClick={() => window.location.reload()} 
-                   className="bg-indigo-600 hover:bg-indigo-500 px-10 py-4 rounded-2xl font-bold transition-all shadow-xl shadow-indigo-600/20 text-xl"
-                >
-                  Intentar reconectar
-                </button>
-              </div>
-            ) : (
-              <div className="grid lg:grid-cols-2 gap-16 items-start">
-                <div className="space-y-10">
-                  <div className="space-y-6">
-                    <div className="inline-flex items-center px-5 py-2 rounded-full bg-emerald-500/10 text-emerald-400 text-base font-bold uppercase tracking-widest border border-emerald-500/20">
-                      <CheckCircle size={18} className="mr-2" />
-                      Sesión Verificada
-                    </div>
-                    <h2 className="text-6xl font-bold text-white leading-[1.1] tracking-tight">
-                      Registro <br/><span className="text-indigo-500">{autoCompany.name}</span>
-                    </h2>
-                    <p className="text-2xl text-slate-300 leading-relaxed font-medium">
-                      Su asistencia se registrará digitalmente. Al finalizar, obtendrá su certificado oficial firmado por el auditor.
-                    </p>
-                  </div>
-                  
-                  <div className="bg-slate-900/50 p-10 rounded-3xl border border-slate-800 space-y-8 backdrop-blur-md">
-                    <div className="flex items-center space-x-4 text-indigo-400">
-                      <Building size={28} />
-                      <span className="font-bold uppercase tracking-widest text-base">Entidad Corporativa</span>
-                    </div>
-                    <div className="space-y-2">
-                        <p className="text-4xl font-bold text-white">{autoCompany.name}</p>
-                        <p className="text-xl text-slate-400 font-semibold tracking-wide">CUIT: {autoCompany.cuit}</p>
-                    </div>
-                    <div className="pt-8 border-t border-slate-800 flex items-start space-x-4 text-slate-400">
-                      <Info size={24} className="mt-1 shrink-0 text-indigo-400" />
-                      <p className="text-lg font-medium">Usted está ingresando sus datos para una capacitación avalada por su empresa.</p>
-                    </div>
-                  </div>
-                </div>
+        {view === 'adminLogin' && (
+          <div className="min-h-[80vh] flex items-center justify-center p-6">
+            <div className="bg-[#111827] p-10 rounded-[3rem] border border-gray-800 w-full max-sm shadow-2xl text-center">
+              <ShieldCheck size={48} className="text-blue-500 mx-auto mb-6" />
+              <h2 className="text-white text-2xl font-black italic mb-8 uppercase">Acceso Restringido</h2>
+              <input type="password" placeholder="PASSWORD" autoFocus
+                onKeyDown={e => e.key === 'Enter' && (e.target as HTMLInputElement).value === ADMIN_PASSWORD && (setIsAdminAuthenticated(true), setView('adminDashboard'))}
+                className="w-full bg-[#0d111c] border border-blue-500/20 text-white px-6 py-5 rounded-2xl outline-none font-bold text-center tracking-widest mb-6 focus:border-blue-500 transition-all" 
+              />
+              <button onClick={(e) => {
+                const input = (e.currentTarget.previousElementSibling as HTMLInputElement);
+                if(input.value === ADMIN_PASSWORD) { setIsAdminAuthenticated(true); setView('adminDashboard'); }
+                else alert("Incorrecto");
+              }} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-2xl uppercase tracking-widest text-xs shadow-lg active:scale-95 transition-all">Desbloquear Panel</button>
+            </div>
+          </div>
+        )}
 
-                <form onSubmit={handleUserSubmit} className="bg-slate-900 p-10 rounded-[3rem] shadow-[0_32px_64px_-16px_rgba(0,0,0,0.5)] border border-slate-800 space-y-8 relative overflow-hidden">
-                  <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/5 blur-[80px]"></div>
-                  
-                  <div className="space-y-4">
-                    <label className="text-base font-semibold text-slate-400 uppercase tracking-widest">Seleccionar Capacitación</label>
-                    <select 
-                      required
-                      disabled={!!new URLSearchParams(window.location.search).get('trainingId')}
-                      value={selectedTrainingId}
-                      onChange={(e) => setSelectedTrainingId(e.target.value)}
-                      className="w-full p-5 bg-slate-950 border border-slate-800 rounded-2xl focus:ring-2 focus:ring-indigo-600 outline-none disabled:opacity-50 text-white font-semibold text-xl appearance-none transition-all cursor-pointer"
-                    >
-                      <option value="">-- Elige la formación --</option>
-                      {data?.trainings.map(t => <option key={t.id} value={t.id} className="bg-slate-900">{t.name}</option>)}
-                    </select>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-8">
-                    <div className="space-y-4">
-                       <label className="text-base font-semibold text-slate-400 uppercase tracking-widest">Nombre</label>
-                       <input required type="text" placeholder="Ej. Javier" value={userForm.firstName} onChange={(e) => setUserForm({...userForm, firstName: e.target.value})} className="w-full p-5 bg-slate-950 border border-slate-800 rounded-2xl focus:ring-2 focus:ring-indigo-600 outline-none text-white font-semibold text-xl" />
-                    </div>
-                    <div className="space-y-4">
-                       <label className="text-base font-semibold text-slate-400 uppercase tracking-widest">Apellido</label>
-                       <input required type="text" placeholder="Ej. Rossi" value={userForm.lastName} onChange={(e) => setUserForm({...userForm, lastName: e.target.value})} className="w-full p-5 bg-slate-950 border border-slate-800 rounded-2xl focus:ring-2 focus:ring-indigo-600 outline-none text-white font-semibold text-xl" />
-                    </div>
-                  </div>
-
-                  <div className="space-y-4">
-                    <label className="text-base font-semibold text-slate-400 uppercase tracking-widest">Documento (DNI)</label>
-                    <input required type="text" placeholder="Sin puntos ni espacios" value={userForm.dni} onChange={(e) => setUserForm({...userForm, dni: e.target.value})} className="w-full p-5 bg-slate-950 border border-slate-800 rounded-2xl focus:ring-2 focus:ring-indigo-600 outline-none text-white font-semibold text-xl" />
-                  </div>
-
-                  <div className="space-y-5">
-                    <label className="text-base font-semibold text-slate-400 uppercase tracking-widest flex justify-between">
-                      <span>Firma Digital</span>
-                      <button type="button" onClick={() => sigCanvasRef.current?.clear()} className="text-indigo-400 hover:text-indigo-300 font-bold tracking-normal underline text-lg">Borrar firma</button>
-                    </label>
-                    <div className="border-2 border-dashed border-slate-800 rounded-[2rem] bg-slate-950 overflow-hidden ring-offset-4 ring-offset-slate-900 focus-within:ring-2 ring-indigo-500 transition-all">
-                      <SignatureCanvas 
-                        ref={sigCanvasRef} 
-                        {...({ penColor: "white" } as any)}
-                        canvasProps={{ className: 'w-full h-56 cursor-crosshair' }} 
-                      />
-                    </div>
-                  </div>
-
-                  <button type="submit" className="w-full bg-indigo-600 text-white p-7 rounded-2xl font-bold text-2xl hover:bg-indigo-500 transition-all flex items-center justify-center space-x-5 shadow-2xl shadow-indigo-600/30 transform active:scale-95 group">
-                    <span>Generar Certificado</span>
-                    <Download size={28} className="group-hover:translate-y-1 transition-transform" />
+        {view === 'adminDashboard' && (
+          <div className="min-h-screen px-4 md:px-8 max-w-7xl mx-auto pb-20">
+            <div className="flex flex-col md:flex-row md:items-end justify-between mb-8 gap-4">
+               <div>
+                 <h1 className="text-white text-4xl font-black italic uppercase tracking-tighter">Panel de <span className="text-blue-600">Control</span></h1>
+                 <p className="text-slate-500 font-bold uppercase text-[10px] tracking-widest">Administración de Entorno Trainer</p>
+               </div>
+               <div className="flex bg-[#111827] p-1.5 rounded-2xl border border-gray-800 overflow-x-auto no-scrollbar shadow-lg">
+                {[
+                  { id: 'asistencias', label: 'Reportes', icon: Users },
+                  { id: 'asignaciones', label: 'QR', icon: Layers },
+                  { id: 'modulos', label: 'Módulos', icon: BookOpen },
+                  { id: 'clientes', label: 'Clientes', icon: FileText },
+                  { id: 'instructor', label: 'Instructor', icon: UserCircle },
+                  { id: 'datos', label: 'Copia', icon: Database }
+                ].map(t => (
+                  <button key={t.id} onClick={() => setAdminTab(t.id as any)} className={`flex items-center gap-2 px-5 py-3 rounded-xl font-black uppercase tracking-widest text-[10px] transition-all whitespace-nowrap ${adminTab === t.id ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}>
+                    <t.icon size={14} /> {t.label}
                   </button>
-                </form>
+                ))}
               </div>
-            )}
-          </div>
-        )}
+            </div>
 
-        {view === 'admin-login' && (
-          <div className="max-w-md mx-auto mt-20">
-            <div className="bg-slate-900 p-12 rounded-[2.5rem] shadow-2xl border border-slate-800 space-y-10 animate-in zoom-in duration-300">
-              <div className="text-center space-y-5">
-                <div className="bg-indigo-600 text-white w-24 h-24 rounded-[1.5rem] flex items-center justify-center mx-auto shadow-2xl shadow-indigo-600/40"><ShieldCheck size={48} /></div>
-                <h2 className="text-4xl font-bold">Admin Access</h2>
-              </div>
-              <form onSubmit={handleAdminLogin} className="space-y-8">
-                <input autoFocus type="password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full p-8 bg-slate-950 border border-slate-800 rounded-2xl focus:ring-2 focus:ring-indigo-600 outline-none text-center text-5xl tracking-[0.5em] text-white" />
-                <button className="w-full bg-indigo-600 text-white p-6 rounded-2xl font-bold hover:bg-indigo-500 transition-all shadow-xl shadow-indigo-600/20 text-2xl">Ingresar al Dashboard</button>
-              </form>
+            <div className="bg-[#111827] rounded-[3rem] border border-gray-800 p-6 md:p-10 min-h-[600px] shadow-2xl relative">
+               {adminTab === 'asistencias' && <AsistenciasView records={records} setRecords={setRecords} clients={clients} modules={modules} instructor={instructor} />}
+               {adminTab === 'asignaciones' && <AsignacionesView clients={clients} modules={modules} assignments={assignments} setAssignments={setAssignments} onSimulate={handleScanSimulation} getBaseUrl={getBaseUrl} />}
+               {adminTab === 'modulos' && <ModulosView modules={modules} setModules={setModules} />}
+               {adminTab === 'clientes' && <ClientesView clients={clients} setClients={setClients} />}
+               {adminTab === 'instructor' && <InstructorView instructor={instructor} setInstructor={setInstructor} />}
+               {adminTab === 'datos' && (
+                 <div className="animate-in fade-in max-w-md mx-auto text-center space-y-8 pt-10">
+                   <Database size={64} className="text-blue-500 mx-auto" />
+                   <h2 className="text-white text-2xl font-black uppercase italic">Backup de Datos</h2>
+                   <div className="space-y-4">
+                     <button onClick={handleExportData} className="w-full bg-slate-800 hover:bg-slate-700 text-white font-black py-5 rounded-3xl flex items-center justify-center gap-3 border border-gray-700 transition-all uppercase tracking-widest text-xs">
+                       <Download size={18} /> Exportar Base de Datos (JSON)
+                     </button>
+                     <div className="relative">
+                        <label className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-5 rounded-3xl flex items-center justify-center gap-3 cursor-pointer shadow-xl transition-all uppercase tracking-widest text-xs">
+                          <Upload size={18} /> Importar Datos (JSON)
+                          <input type="file" accept=".json" onChange={handleImportData} className="hidden" />
+                        </label>
+                     </div>
+                   </div>
+                   <p className="text-slate-500 text-[10px] uppercase font-bold tracking-widest leading-relaxed">Guarde su archivo JSON regularmente para proteger la persistencia de sus clientes, módulos y registros de asistencia.</p>
+                 </div>
+               )}
             </div>
           </div>
         )}
 
-        {view === 'admin-dashboard' && data && (
-          <AdminPanel data={data} setData={setData} showToast={showToast} logout={() => setView('user')} />
-        )}
+        {view === 'userForm' && <UserPortal clients={clients} modules={modules} activeParams={activeParams} onGoHome={handleGoHome} setRecords={setRecords} instructor={instructor} />}
       </main>
     </div>
   );
 };
 
-// --- ADMIN PANEL COMPONENT ---
-const AdminPanel = ({ data, setData, showToast, logout }: { data: AppData, setData: (d: AppData) => void, showToast: any, logout: any }) => {
-  const [activeTab, setActiveTab] = useState<'submissions' | 'trainings' | 'companies' | 'links' | 'config'>('submissions');
-  const [newName, setNewName] = useState('');
-  const [newCuit, setNewCuit] = useState(''); 
-  const [saving, setSaving] = useState(false);
-  const sigCanvasAdminRef = useRef<SignatureCanvas>(null);
+// --- Components ---
 
-  // Filter States
-  const [filterCompanyId, setFilterCompanyId] = useState('');
-  const [filterTrainingId, setFilterTrainingId] = useState('');
-
-  // Row Selection State
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-
-  // Link Generator State
-  const [linkCompanyId, setLinkCompanyId] = useState('');
-  const [linkTrainingId, setLinkTrainingId] = useState('');
-  const [generatedLink, setGeneratedLink] = useState('');
-  const [qrCodeDataUrl, setQrCodeDataUrl] = useState('');
-
-  const filteredSubmissions = useMemo(() => {
-    return data.submissions.filter(s => {
-      const matchCompany = filterCompanyId ? s.companyId === filterCompanyId : true;
-      const matchTraining = filterTrainingId ? s.trainingId === filterTrainingId : true;
-      return matchCompany && matchTraining;
-    });
-  }, [data.submissions, filterCompanyId, filterTrainingId]);
-
-  // Reset selection when filters change
-  useEffect(() => {
-    setSelectedIds(new Set());
-  }, [filterCompanyId, filterTrainingId]);
-
-  const toggleSelect = (id: string) => {
-    const next = new Set(selectedIds);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    setSelectedIds(next);
-  };
-
-  const toggleSelectAll = () => {
-    if (selectedIds.size === filteredSubmissions.length && filteredSubmissions.length > 0) {
-      setSelectedIds(new Set());
-    } else {
-      setSelectedIds(new Set(filteredSubmissions.map(s => s.id)));
-    }
-  };
-
-  const saveAll = async (updatedData: AppData) => {
-    setSaving(true);
-    try {
-      await apiService.saveData(updatedData);
-      setData(updatedData);
-      showToast('Datos sincronizados correctamente', 'success');
-    } catch (e) {
-      showToast('Fallo al sincronizar datos', 'error');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const addEntity = (type: 'training' | 'company') => {
-    if (!newName.trim()) return;
+const Navbar = ({ isAdminAuthenticated, onLogout, onGoHome, onLoginClick }: any) => (
+  <nav className="flex items-center justify-between px-6 py-4 bg-[#0a1120]/80 border-b border-gray-800 fixed top-0 w-full z-50 backdrop-blur-md">
+    <div className="flex items-center gap-2 cursor-pointer group" onClick={onGoHome}>
+      <div className="bg-blue-600 p-1.5 rounded-lg group-hover:rotate-12 transition-transform">
+        <BookOpen className="text-white size-5" />
+      </div>
+      <span className="text-white font-black italic tracking-tighter text-xl uppercase">TRAINER<span className="text-blue-600">APP</span></span>
+    </div>
     
-    if (type === 'company') {
-        const newEntry: Company = { 
-            id: crypto.randomUUID(), 
-            name: newName.trim(), 
-            cuit: newCuit.trim() || 'S/N' 
-        };
-        const updated = { ...data, companies: [...(data.companies || []), newEntry] };
-        saveAll(updated);
-        setNewName('');
-        setNewCuit('');
-    } else {
-        const newEntry: Training = { id: crypto.randomUUID(), name: newName.trim() };
-        const updated = { ...data, trainings: [...(data.trainings || []), newEntry] };
-        saveAll(updated);
-        setNewName('');
-    }
-  };
+    <div className="flex items-center gap-3">
+      {isAdminAuthenticated ? (
+        <button onClick={onLogout} className="flex items-center gap-2 bg-red-600/10 hover:bg-red-600/20 text-red-500 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border border-red-500/20 transition-all">
+          <LogOut size={14} /> Salir
+        </button>
+      ) : (
+        <button onClick={onLoginClick} className="bg-slate-800/50 hover:bg-slate-800 text-slate-400 hover:text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border border-gray-800 transition-all">
+          Admin
+        </button>
+      )}
+    </div>
+  </nav>
+);
 
-  const deleteSubmission = (id: string) => {
-    if(!confirm('¿Eliminar este registro de asistencia?')) return;
-    const updated = { ...data, submissions: data.submissions.filter(s => s.id !== id) };
-    saveAll(updated);
-  };
+const AsistenciasView = ({ records, setRecords, clients, modules, instructor }: any) => {
+  const [sel, setSel] = useState<string[]>([]);
+  const [filterClient, setFilterClient] = useState("");
+  const [filterModule, setFilterModule] = useState("");
 
-  const clearFilteredSubmissions = () => {
-    if (!confirm('¿Desea borrar TODOS los registros que coinciden con el filtro actual?')) return;
-    const filteredIdsToRemove = new Set(filteredSubmissions.map(s => s.id));
-    const updated = { ...data, submissions: data.submissions.filter(s => !filteredIdsToRemove.has(s.id)) };
-    saveAll(updated);
-  };
+  const filteredRecords = useMemo(() => {
+    return records.filter((r: any) => {
+      const matchClient = !filterClient || r.companyId === filterClient;
+      const matchModule = !filterModule || r.moduleId === filterModule;
+      return matchClient && matchModule;
+    });
+  }, [records, filterClient, filterModule]);
 
-  const downloadReportPDF = () => {
-    const listToPrint = selectedIds.size > 0 
-        ? filteredSubmissions.filter(s => selectedIds.has(s.id)) 
-        : filteredSubmissions;
+  const handleGenerateReport = () => {
+    const finalData = filteredRecords.filter((r: any) => sel.includes(r.id));
+    if (finalData.length === 0) return alert("Seleccione registros.");
+    
+    try {
+      const doc = new jsPDF();
+      const first = finalData[0];
+      const client = clients.find((c: any) => c.id === first.companyId);
+      const mod = modules.find((m: any) => m.id === first.moduleId);
 
-    if (listToPrint.length === 0) {
-      showToast('Seleccione al menos un registro para exportar', 'error');
-      return;
-    }
+      doc.setFillColor(15, 23, 42); doc.rect(0, 0, 210, 40, 'F');
+      doc.setTextColor(255, 255, 255); doc.setFontSize(22); doc.setFont("helvetica", "bold");
+      doc.text("REGISTRO DE CAPACITACIÓN", 15, 25);
 
-    const doc = new jsPDF('landscape');
-    const pageWidth = doc.internal.pageSize.getWidth();
-    const pageHeight = doc.internal.pageSize.getHeight();
+      doc.setTextColor(30, 30, 30); doc.setFontSize(14);
+      doc.text("Detalles de la sesión:", 15, 55);
+      doc.setFontSize(10); doc.setFont("helvetica", "normal");
+      doc.text(`Empresa: ${client?.name || 'Múltiples'} (CUIT: ${client?.cuit || 'N/A'})`, 15, 63);
+      doc.text(`Tema: ${mod?.name || 'Múltiples'}`, 15, 69);
+      doc.text(`Fecha Reporte: ${new Date().toLocaleDateString()}`, 15, 75);
 
-    // Metadata Detection for Header
-    // If filter is active, use filter. If not, check if all selected share the same data.
-    let compName = 'Múltiples empresas';
-    let trainName = 'Todas las capacitaciones';
+      const tableRows = finalData.map((r: any) => [r.name, r.dni, '']);
 
-    if (filterCompanyId) {
-        const c = data.companies.find(x => x.id === filterCompanyId);
-        if (c) compName = `${c.name} (CUIT: ${c.cuit})`;
-    } else {
-        const uniqueCompanies = new Set(listToPrint.map(s => s.companyId));
-        if (uniqueCompanies.size === 1) {
-            const c = data.companies.find(x => x.id === Array.from(uniqueCompanies)[0]);
-            if (c) compName = `${c.name} (CUIT: ${c.cuit})`;
-        }
-    }
-
-    if (filterTrainingId) {
-        trainName = data.trainings.find(x => x.id === filterTrainingId)?.name || 'Formación Técnica';
-    } else {
-        const uniqueTrainings = new Set(listToPrint.map(s => s.trainingId));
-        if (uniqueTrainings.size === 1) {
-            trainName = listToPrint[0].trainingName;
-        }
-    }
-
-    // Dark Unified Branding - Slate 950
-    const DARK_COLOR: [number, number, number] = [15, 23, 42]; 
-    doc.setFillColor(DARK_COLOR[0], DARK_COLOR[1], DARK_COLOR[2]); 
-    doc.rect(0, 0, pageWidth, 25, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(18);
-    doc.setFont('helvetica', 'bold');
-    doc.text('CONSTANCIA DE CAPACITACION', 14, 17);
-
-    // Filter Info (Header)
-    doc.setTextColor(30, 41, 59);
-    doc.setFontSize(12);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Información de la Formación:', 14, 35);
-    doc.setFont('helvetica', 'normal');
-    doc.text(`Empresa: ${compName}`, 14, 42);
-    doc.text(`Capacitación: ${trainName}`, 14, 48);
-
-    // Build Table Body - Minimalist
-    const tableRows = listToPrint.map(s => [
-      new Date(s.timestamp).toLocaleDateString(),
-      `${s.lastName}, ${s.firstName}`,
-      s.dni,
-      '' // Signature placeholder at index 3
-    ]);
-
-    autoTable(doc, {
-      startY: 55,
-      head: [['Fecha', 'Apellido y Nombre', 'DNI', 'Firma']],
-      body: tableRows,
-      headStyles: { 
-          fillColor: DARK_COLOR, 
-          textColor: [255, 255, 255], 
-          fontStyle: 'bold',
-          halign: 'center'
-      },
-      styles: { 
-          fontSize: 10, 
-          cellPadding: 6,
-          valign: 'middle'
-      },
-      columnStyles: {
-          0: { halign: 'center', cellWidth: 40 },
-          1: { halign: 'left', cellWidth: 100 },
-          2: { halign: 'center', cellWidth: 40 },
-          3: { halign: 'center', cellWidth: 60 } 
-      },
-      alternateRowStyles: { fillColor: [248, 250, 252] },
-      margin: { left: 14, right: 14 },
-      theme: 'grid',
-      didDrawCell: (dataCell: any) => {
-          if (dataCell.section === 'body' && dataCell.column.index === 3) {
-              const signatureBase64 = listToPrint[dataCell.row.index].signature;
-              if (signatureBase64) {
-                  doc.addImage(signatureBase64, 'PNG', dataCell.cell.x + 15, dataCell.cell.y + 2, 30, 8);
-              }
+      autoTable(doc, {
+        startY: 85,
+        head: [['Apellido y Nombre', 'DNI', 'Firma']],
+        body: tableRows,
+        headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'center' },
+        styles: { fontSize: 9, valign: 'middle', halign: 'center', cellPadding: 5 },
+        columnStyles: { 2: { cellWidth: 45 } },
+        didDrawCell: (data) => {
+          if (data.section === 'body' && data.column.index === 2) {
+            const record = finalData[data.row.index];
+            if (isValidBase64(record.signature)) {
+              doc.addImage(record.signature, 'PNG', data.cell.x + 5, data.cell.y + 1, 35, 8);
+            }
           }
-      }
-    });
-
-    // FOOTER PLACEMENT (At the very bottom of the page)
-    const finalY = (doc as any).lastAutoTable.finalY || 80;
-    
-    // Check if footer fits on current page
-    if (finalY + 60 > pageHeight) {
-        doc.addPage();
-    }
-
-    const RIGHT_MARGIN = pageWidth - 14;
-    const footerBaseY = pageHeight - 35; // Positioned 3.5cm from bottom
-
-    // Signature line
-    doc.setDrawColor(DARK_COLOR[0], DARK_COLOR[1], DARK_COLOR[2]);
-    doc.line(RIGHT_MARGIN - 80, footerBaseY, RIGHT_MARGIN, footerBaseY);
-    
-    // Signature image ABOVE the line
-    if (data.adminConfig.signature) {
-        doc.addImage(data.adminConfig.signature, 'PNG', RIGHT_MARGIN - 65, footerBaseY - 22, 50, 20);
-    }
-    
-    // Text Labels BELOW the line
-    doc.setTextColor(30, 41, 59);
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Firma del Instructor', RIGHT_MARGIN, footerBaseY + 6, { align: 'right' });
-
-    doc.setFontSize(12);
-    doc.text(data.adminConfig.clarification || 'Instructor No Configurado', RIGHT_MARGIN, footerBaseY + 12, { align: 'right' });
-    
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(100);
-    doc.text(data.adminConfig.jobTitle || 'Cargo No Especificado', RIGHT_MARGIN, footerBaseY + 18, { align: 'right' });
-
-    doc.save(`Reporte_TrainerApp_${new Date().toISOString().split('T')[0]}.pdf`);
-    showToast('Reporte PDF generado exitosamente', 'success');
-  };
-
-  const generateInvitationLink = async () => {
-    if (!linkCompanyId) return showToast('Seleccione una empresa', 'error');
-    const baseUrl = window.location.origin + window.location.pathname;
-    const params = new URLSearchParams();
-    params.append('companyId', linkCompanyId);
-    if (linkTrainingId) params.append('trainingId', linkTrainingId);
-    
-    const finalLink = `${baseUrl}?${params.toString()}`;
-    setGeneratedLink(finalLink);
-
-    try {
-      const qrUrl = await QRCode.toDataURL(finalLink, { 
-        width: 600, 
-        margin: 2,
-        color: { dark: '#1e293b', light: '#ffffff' }
+        }
       });
-      setQrCodeDataUrl(qrUrl);
-    } catch (err) {
-      showToast('Error generando QR', 'error');
+
+      const pageHeight = doc.internal.pageSize.getHeight();
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const signatureBottomY = pageHeight - 40;
+      const signatureRightX = pageWidth - 80;
+
+      if (isValidBase64(instructor.signature)) {
+        doc.addImage(instructor.signature, 'PNG', signatureRightX + 5, signatureBottomY - 22, 60, 20);
+      }
+      doc.setDrawColor(180, 180, 180);
+      doc.line(signatureRightX, signatureBottomY, pageWidth - 15, signatureBottomY);
+      doc.setFontSize(9); doc.setTextColor(80, 80, 80);
+      doc.text("Firma del Instructor Responsable", signatureRightX + 32, signatureBottomY + 6, { align: "center" });
+      doc.setFontSize(11); doc.setFont("helvetica", "bold"); doc.setTextColor(30, 30, 30);
+      doc.text(instructor.name || "Instructor", signatureRightX + 32, signatureBottomY + 12, { align: "center" });
+
+      doc.save(`Reporte_Trainer_${Date.now()}.pdf`);
+    } catch (error) {
+      alert("Error al generar PDF.");
     }
   };
 
   return (
-    <div className="space-y-12 animate-in fade-in slide-in-from-top-4 duration-500">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-8">
-        <div className="space-y-3">
-          <h2 className="text-5xl font-bold tracking-tight">Panel Instructor</h2>
-          <p className="text-slate-400 font-medium text-xl">Gestión avanzada de registros y auditorías.</p>
+    <div className="animate-in fade-in">
+      <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
+        <div>
+          <h2 className="text-white text-3xl font-black italic uppercase">Asistencias</h2>
+          <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest mt-1">Registros de conformidad</p>
         </div>
-        <button onClick={logout} className="flex items-center space-x-3 px-8 py-4 bg-rose-500/10 text-rose-500 border border-rose-500/20 rounded-2xl hover:bg-rose-500 hover:text-white font-bold transition-all group text-lg">
-          <LogOut size={24} className="group-hover:-translate-x-1 transition-transform" />
-          <span>Finalizar sesión</span>
+        <div className="flex flex-wrap items-center gap-3">
+          <button onClick={() => confirm("¿Eliminar registros?") && (setRecords(records.filter((r: any) => !sel.includes(r.id))), setSel([]))} disabled={sel.length === 0} className="bg-red-600/10 text-red-500 px-5 py-3 rounded-2xl font-bold uppercase text-[10px] border border-red-500/20 disabled:opacity-30">
+            <Trash2 size={14}/> Borrar
+          </button>
+          <button onClick={handleGenerateReport} disabled={sel.length === 0} className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-2xl font-bold uppercase text-[10px] shadow-xl flex items-center gap-2 disabled:opacity-30">
+            <Download size={14}/> Generar Reporte ({sel.length})
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8 bg-[#0d111c] p-4 rounded-3xl border border-gray-800 shadow-inner">
+        <select value={filterClient} onChange={e => setFilterClient(e.target.value)} className="bg-[#111827] border border-gray-800 text-white p-4 rounded-2xl font-bold uppercase text-xs focus:border-blue-500 outline-none">
+          <option value="">TODAS LAS EMPRESAS</option>
+          {clients.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+        <select value={filterModule} onChange={e => setFilterModule(e.target.value)} className="bg-[#111827] border border-gray-800 text-white p-4 rounded-2xl font-bold uppercase text-xs focus:border-blue-500 outline-none">
+          <option value="">TODOS LOS MÓDULOS</option>
+          {modules.map((m: any) => <option key={m.id} value={m.id}>{m.name}</option>)}
+        </select>
+      </div>
+
+      <div className="overflow-x-auto rounded-[2rem] border border-gray-800 bg-[#0d111c]">
+        <table className="w-full text-left">
+          <thead className="bg-[#161e2e] text-slate-500 text-[10px] font-black uppercase tracking-widest border-b border-gray-800">
+            <tr>
+              <th className="px-6 py-5 w-12 text-center">
+                <input type="checkbox" checked={filteredRecords.length > 0 && sel.length === filteredRecords.length} 
+                  onChange={e => setSel(e.target.checked ? filteredRecords.map((r: any) => r.id) : [])} className="size-4 rounded border-gray-700 bg-gray-800 text-blue-600" />
+              </th>
+              <th className="px-6 py-5">Colaborador</th>
+              <th className="px-6 py-5">Capacitación</th>
+              <th className="px-6 py-5 text-center">Firma</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-800/50">
+            {filteredRecords.length === 0 ? (
+              <tr><td colSpan={4} className="py-20 text-center text-slate-600 font-black uppercase text-sm italic opacity-40 tracking-widest">No hay registros cargados</td></tr>
+            ) : filteredRecords.map((r: any) => (
+              <tr key={r.id} className={`hover:bg-slate-800/30 transition-all cursor-pointer ${sel.includes(r.id) ? 'bg-blue-600/5' : ''}`} onClick={() => setSel(s => s.includes(r.id) ? s.filter(i => i !== r.id) : [...s, r.id])}>
+                <td className="px-6 py-6 text-center" onClick={e => e.stopPropagation()}><input type="checkbox" checked={sel.includes(r.id)} onChange={() => setSel(s => s.includes(r.id) ? s.filter(i => i !== r.id) : [...s, r.id])} className="size-5 rounded border-gray-700 bg-gray-800 text-blue-600" /></td>
+                <td className="px-6 py-6 font-bold text-white uppercase text-sm">{r.name}<div className="text-[10px] text-slate-600 font-bold mt-1">DNI: {r.dni}</div></td>
+                <td className="px-6 py-6 text-[10px] uppercase font-black text-blue-500">{modules.find((m: any) => m.id === r.moduleId)?.name}<div className="text-slate-500 font-bold mt-1">{clients.find((c: any) => c.id === r.companyId)?.name}</div></td>
+                <td className="px-6 py-6 text-center"><div className="bg-white p-1 rounded-xl h-10 w-28 overflow-hidden inline-block shadow-inner"><img src={r.signature} className="h-full w-full object-contain" /></div></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+const QRSimulator = ({ assignments, clients, modules, onScan }: any) => {
+  return (
+    <div className="space-y-3">
+      {assignments.length > 0 ? assignments.map((a: any) => {
+        const client = clients.find((c: any) => c.id === a.clientId);
+        const mod = modules.find((m: any) => m.id === a.moduleId);
+        if (!client || !mod) return null;
+        return (
+          <button key={a.id} onClick={() => onScan(a.clientId, a.moduleId)} className="w-full bg-slate-800/50 hover:bg-blue-600/20 text-left p-5 rounded-3xl border border-slate-700 hover:border-blue-500/50 transition-all group flex items-center justify-between">
+            <div className="overflow-hidden">
+              <div className="text-[10px] text-blue-500 font-black uppercase mb-1 tracking-widest">{client.name}</div>
+              <div className="text-white font-bold text-sm uppercase italic truncate">{mod.name}</div>
+            </div>
+            <ChevronRight size={18} className="text-slate-600 group-hover:text-blue-500 transition-colors" />
+          </button>
+        );
+      }) : (
+        <div className="text-center py-6 opacity-30 italic font-bold uppercase text-[10px] tracking-widest border-2 border-dashed border-gray-800 rounded-3xl">No hay capacitaciones activas</div>
+      )}
+    </div>
+  );
+};
+
+const UserPortal = ({ clients, modules, activeParams, onGoHome, setRecords, instructor }: any) => {
+  const sigCanvas = useRef<SignatureCanvas>(null);
+  const [step, setStep] = useState<'identity' | 'material' | 'signature'>('identity');
+  const [formData, setFormData] = useState({ name: '', dni: '' });
+  const [viewedDocs, setViewedDocs] = useState<Set<number>>(new Set());
+  const [lastRecord, setLastRecord] = useState<AttendanceRecord | null>(null);
+
+  const activeClient = useMemo(() => clients.find((c: any) => c.id === activeParams.cid), [clients, activeParams.cid]);
+  const activeModule = useMemo(() => modules.find((m: any) => m.id === activeParams.mid), [modules, activeParams.mid]);
+
+  const allDocsRead = useMemo(() => {
+    if (!activeModule?.documents?.length) return true;
+    return viewedDocs.size >= activeModule.documents.length;
+  }, [viewedDocs, activeModule]);
+
+  // Effect to automatically close the success screen after 10 seconds
+  useEffect(() => {
+    if (lastRecord) {
+      const timer = setTimeout(() => {
+        onGoHome();
+      }, 10000);
+      return () => clearTimeout(timer);
+    }
+  }, [lastRecord, onGoHome]);
+
+  if (!activeClient || !activeModule) {
+    return (
+      <div className="max-w-md mx-auto px-6 py-20 text-center animate-in fade-in">
+        <AlertCircle size={64} className="text-amber-500 mx-auto mb-6" />
+        <h2 className="text-2xl font-black uppercase italic text-white mb-4">Error de Enlace</h2>
+        <p className="text-slate-500 mb-8 font-bold text-sm">Este acceso QR no existe o ha sido desactivado.</p>
+        <button onClick={onGoHome} className="w-full bg-slate-800 text-white py-4 rounded-2xl font-black uppercase tracking-widest text-xs">Volver al Inicio</button>
+      </div>
+    );
+  }
+
+  if (lastRecord) {
+    return (
+      <div className="max-w-md mx-auto px-6 py-20 text-center animate-in zoom-in duration-300">
+        <div className="bg-green-500/10 size-24 rounded-full flex items-center justify-center mx-auto mb-8 border border-green-500/20">
+          <CheckCircle2 size={48} className="text-green-500" />
+        </div>
+        <h2 className="text-3xl font-black uppercase italic text-white mb-2 leading-none">REGISTRO<br/><span className="text-blue-500">EXITOSO</span></h2>
+        <p className="text-slate-500 font-bold mb-4 text-xs tracking-widest uppercase">Asistencia confirmada satisfactoriamente</p>
+        <p className="text-slate-600 text-[10px] mb-8 uppercase font-black italic">Redireccionando al inicio automáticamente...</p>
+        <div className="space-y-4">
+          <button 
+            onClick={() => {
+                generateIndividualCertificate(lastRecord, activeClient, activeModule, instructor);
+                // After download, close shortly
+                setTimeout(onGoHome, 2000);
+            }} 
+            className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-5 rounded-3xl uppercase tracking-[0.2em] shadow-xl active:scale-95 transition-all text-xs flex items-center justify-center gap-3">
+            <Download size={18} /> Descargar Certificado
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-md mx-auto px-4 md:px-6 pb-20 animate-in slide-in-from-bottom-8">
+      <div className="text-center mb-8">
+        <div className="text-blue-500 font-black uppercase text-[10px] tracking-[0.3em] mb-2">Portal del Colaborador</div>
+        <h2 className="text-white text-3xl font-black italic uppercase leading-none">{activeModule.name}</h2>
+        <div className="mt-3 bg-blue-600/10 px-4 py-1.5 rounded-full border border-blue-500/20 inline-block">
+          <span className="text-blue-400 font-black uppercase text-[9px] tracking-widest">{activeClient.name}</span>
+        </div>
+      </div>
+
+      <div className="bg-[#111827] rounded-[3rem] border border-gray-800 shadow-2xl overflow-hidden p-8">
+        {step === 'identity' && (
+          <div className="space-y-8 animate-in fade-in">
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <label className="text-[10px] text-slate-600 font-black uppercase px-2">Nombre Completo</label>
+                <input value={formData.name} onChange={e => setFormData({...formData, name: e.target.value.toUpperCase()})} placeholder="ESCRIBA AQUÍ..." className="w-full bg-[#0d111c] border border-gray-800 focus:border-blue-500 text-white px-5 py-4 rounded-2xl outline-none font-bold transition-all" />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] text-slate-600 font-black uppercase px-2">DNI / Documento</label>
+                <input value={formData.dni} onChange={e => setFormData({...formData, dni: e.target.value})} placeholder="SÓLO NÚMEROS..." className="w-full bg-[#0d111c] border border-gray-800 focus:border-blue-500 text-white px-5 py-4 rounded-2xl outline-none font-bold transition-all" />
+              </div>
+            </div>
+            <button onClick={() => { if(!formData.name || !formData.dni) return alert("Complete los datos."); setStep('material'); }} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-5 rounded-3xl uppercase tracking-widest text-xs shadow-xl active:scale-95 transition-all">Siguiente Paso</button>
+          </div>
+        )}
+
+        {step === 'material' && (
+          <div className="space-y-8 animate-in fade-in">
+             <div className="text-center px-4">
+               <BookOpen size={40} className="text-blue-500 mx-auto mb-4" />
+               <p className="text-slate-400 text-xs font-bold leading-relaxed uppercase">Para registrar su firma, primero debe revisar el material didáctico adjunto.</p>
+             </div>
+             <div className="space-y-3">
+               {activeModule.documents?.map((doc, idx) => (
+                 <a key={idx} href={doc.url} target="_blank" rel="noopener noreferrer" onClick={() => setViewedDocs(prev => new Set(prev).add(idx))}
+                   className={`flex items-center justify-between w-full p-5 rounded-2xl border font-bold text-[10px] uppercase transition-all ${viewedDocs.has(idx) ? 'bg-blue-600/10 border-blue-600/40 text-blue-400' : 'bg-[#0d111c] border-gray-800 text-slate-300 hover:border-blue-500/50'}`}>
+                   <span className="truncate pr-4">{doc.name}</span>
+                   {viewedDocs.has(idx) ? <CheckCircle2 size={16} /> : <ExternalLink size={16} className="opacity-40" />}
+                 </a>
+               ))}
+               {!activeModule.documents?.length && <div className="text-center py-6 opacity-20 italic font-black uppercase text-[10px]">No hay material adjunto</div>}
+             </div>
+             <button onClick={() => setStep('signature')} disabled={!allDocsRead} className={`w-full font-black py-5 rounded-3xl uppercase tracking-widest text-xs transition-all shadow-xl ${allDocsRead ? 'bg-blue-600 hover:bg-blue-500 text-white active:scale-95' : 'bg-slate-800 text-slate-600 cursor-not-allowed opacity-50'}`}>
+               Proceder a la Firma
+             </button>
+          </div>
+        )}
+
+        {step === 'signature' && (
+          <div className="space-y-8 animate-in fade-in">
+             <div className="text-center px-4">
+               <h3 className="text-white text-xl font-black uppercase italic mb-2">Conformidad</h3>
+               <p className="text-slate-500 text-[9px] uppercase font-black leading-tight">Declaro haber recibido y comprendido el material del módulo {activeModule.name}.</p>
+             </div>
+             <div className="bg-white rounded-[2rem] h-60 overflow-hidden border-4 border-gray-800 shadow-inner cursor-crosshair">
+                {/* @ts-ignore */}
+                <SignatureCanvas ref={sigCanvas} penColor="blue" canvasProps={{ className: 'w-full h-full' }} />
+             </div>
+             <div className="flex gap-2">
+               <button onClick={() => sigCanvas.current?.clear()} className="flex-1 bg-slate-800 text-slate-400 font-bold py-4 rounded-2xl uppercase text-[10px] tracking-widest">Limpiar</button>
+               <button onClick={() => {
+                 if (!sigCanvas.current || sigCanvas.current.isEmpty()) return alert("Firme el documento.");
+                 const record = {
+                   id: Date.now().toString(),
+                   name: formData.name,
+                   dni: formData.dni,
+                   companyId: activeParams.cid!,
+                   moduleId: activeParams.mid!,
+                   timestamp: new Date().toISOString(),
+                   signature: sigCanvas.current.toDataURL()
+                 };
+                 setRecords((prev: any) => [record, ...prev]);
+                 setLastRecord(record);
+               }} className="flex-[2] bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-2xl uppercase text-[10px] tracking-widest shadow-xl active:scale-95 transition-all">Firmar y Registrar</button>
+             </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const AsignacionesView = ({ clients, modules, assignments, setAssignments, onSimulate, getBaseUrl }: any) => {
+  const [cid, setCid] = useState("");
+  const [mid, setMid] = useState("");
+  const [qrModal, setQrModal] = useState<string | null>(null);
+
+  const handleCreate = () => {
+    if(!cid || !mid) return alert("Seleccione datos.");
+    setAssignments([...assignments, { id: Date.now().toString(), clientId: cid, moduleId: mid, createdAt: new Date().toISOString() }]);
+    setCid(""); setMid("");
+  };
+
+  return (
+    <div className="animate-in fade-in">
+      <h2 className="text-white text-3xl font-black italic uppercase mb-10">Vínculos QR</h2>
+      <div className="bg-[#0d111c] p-6 md:p-8 rounded-[2.5rem] border border-gray-800 flex flex-wrap gap-4 items-end mb-12 shadow-inner">
+        <div className="flex-1 min-w-[200px] space-y-2">
+          <label className="text-slate-600 text-[10px] font-black uppercase px-2 tracking-widest">Empresa Cliente</label>
+          <select value={cid} onChange={e => setCid(e.target.value)} className="w-full bg-[#111827] border border-gray-800 text-white p-4 rounded-2xl font-bold uppercase text-xs focus:border-blue-500 outline-none">
+            <option value="">ELIJA CLIENTE...</option>
+            {clients.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+        <div className="flex-1 min-w-[200px] space-y-2">
+          <label className="text-slate-600 text-[10px] font-black uppercase px-2 tracking-widest">Módulo</label>
+          <select value={mid} onChange={e => setMid(e.target.value)} className="w-full bg-[#111827] border border-gray-800 text-white p-4 rounded-2xl font-bold uppercase text-xs focus:border-blue-500 outline-none">
+            <option value="">ELIJA MÓDULO...</option>
+            {modules.map((m: any) => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </select>
+        </div>
+        <button onClick={handleCreate} className="bg-blue-600 hover:bg-blue-500 text-white font-black px-10 h-14 rounded-2xl uppercase tracking-widest text-[11px] shadow-lg active:scale-95 transition-all">Vincular</button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {assignments.map((a: any) => {
+          const client = clients.find((c: any) => c.id === a.clientId);
+          const mod = modules.find((m: any) => m.id === a.moduleId);
+          if(!client || !mod) return null;
+          return (
+            <div key={a.id} className="bg-[#0d111c] p-8 rounded-[2.5rem] border border-gray-800 flex flex-col hover:border-blue-500/50 transition-all shadow-xl group">
+               <div className="flex-1 mb-6">
+                  <div className="text-blue-500 text-[10px] font-black uppercase mb-1 tracking-widest">{client.name}</div>
+                  <h3 className="text-white text-xl font-black italic uppercase leading-tight">{mod.name}</h3>
+               </div>
+               <div className="flex flex-col gap-2">
+                  <button onClick={() => setQrModal(a.id)} className="w-full bg-blue-600/10 hover:bg-blue-600 text-blue-500 hover:text-white font-bold py-3.5 rounded-xl uppercase text-[10px] border border-blue-600/30 transition-all">Ver Código QR</button>
+                  <button onClick={() => onSimulate(a.clientId, a.moduleId)} className="w-full bg-slate-800 hover:bg-slate-700 text-slate-400 font-bold py-3.5 rounded-xl uppercase text-[10px] transition-all">Probar Acceso</button>
+                  <button onClick={() => confirm("Eliminar vínculo?") && setAssignments(assignments.filter((i: any) => i.id !== a.id))} className="text-red-500/30 hover:text-red-500 text-[9px] font-black uppercase mt-3 tracking-widest transition-colors">Eliminar</button>
+               </div>
+               {qrModal === a.id && (
+                  <div className="fixed inset-0 z-[100] bg-black/95 flex items-center justify-center p-6 backdrop-blur-sm" onClick={() => setQrModal(null)}>
+                    <div className="bg-[#111827] p-8 rounded-[2.5rem] max-w-sm w-full border border-gray-800 shadow-2xl animate-in zoom-in duration-200" onClick={e => e.stopPropagation()}>
+                      <QRGenerator clientId={a.clientId} moduleId={a.moduleId} getBaseUrl={getBaseUrl} onCancel={() => setQrModal(null)} />
+                    </div>
+                  </div>
+               )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+const QRGenerator = ({ clientId, moduleId, getBaseUrl, onCancel }: { clientId: string, moduleId: string, getBaseUrl: () => string, onCancel: () => void }) => {
+  const [qrDataUrl, setQrDataUrl] = useState("");
+  const assignmentUrl = useMemo(() => {
+    // Ensuring the URL uses the exact same logic as simulation button
+    const base = getBaseUrl();
+    return `${base}?cid=${clientId}&mid=${moduleId}`;
+  }, [clientId, moduleId, getBaseUrl]);
+
+  useEffect(() => {
+    QRCode.toDataURL(assignmentUrl, { 
+      width: 512, margin: 2, color: { dark: '#000000', light: '#ffffff' } 
+    }).then(setQrDataUrl).catch(console.error);
+  }, [assignmentUrl]);
+
+  return (
+    <div className="flex flex-col items-center gap-6">
+      <div className="bg-white/95 p-6 rounded-[2.5rem] shadow-2xl border-8 border-blue-600/5">
+        {qrDataUrl ? (
+          <img src={qrDataUrl} className="size-64 object-contain rounded-xl" alt="QR" />
+        ) : (
+          <div className="size-64 flex items-center justify-center animate-pulse text-slate-800 font-black">Cargando...</div>
+        )}
+      </div>
+      
+      <div className="w-full flex flex-col gap-3">
+        <button onClick={() => {
+            try {
+              const doc = new jsPDF();
+              doc.setFillColor(15, 23, 42); doc.rect(0, 0, 210, 45, 'F');
+              doc.setTextColor(255, 255, 255); doc.setFontSize(22); doc.setFont("helvetica", "bold");
+              doc.text("ACCESO A CAPACITACIÓN", 105, 28, { align: "center" });
+              if(qrDataUrl) doc.addImage(qrDataUrl, 'PNG', 55, 75, 100, 100);
+              doc.setTextColor(30, 30, 30); doc.setFontSize(14); doc.text("Escanee para iniciar registro", 105, 200, { align: "center" });
+              doc.save(`Acceso_QR_${Date.now()}.pdf`);
+            } catch (e) { alert("Error PDF"); }
+          }} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-2xl uppercase text-[10px] tracking-widest shadow-xl flex items-center justify-center gap-3 transition-all active:scale-95">
+          <Download size={18}/> Descargar PDF QR
+        </button>
+        
+        <button onClick={() => { navigator.clipboard.writeText(assignmentUrl); alert("URL copiada con éxito."); }} className="w-full bg-[#1e293b] hover:bg-[#334155] text-slate-300 font-black py-4 rounded-2xl uppercase text-[10px] transition-all border border-slate-700">
+          Copiar Enlace Directo
+        </button>
+        
+        <button onClick={onCancel} className="w-full bg-[#1e293b] hover:bg-[#334155] text-white font-black py-4 rounded-2xl uppercase text-[10px] transition-all">
+          Cerrar
         </button>
       </div>
+    </div>
+  );
+};
 
-      <div className="flex flex-wrap gap-3 p-3 bg-slate-900 border border-slate-800 rounded-3xl w-fit">
-        {[
-          {id: 'submissions', icon: Users, label: 'Asistencias'},
-          {id: 'trainings', icon: GraduationCap, label: 'Cursos'},
-          {id: 'companies', icon: Building, label: 'Empresas'},
-          {id: 'links', icon: QrCode, label: 'Generar QR'},
-          {id: 'config', icon: Settings, label: 'Mi Perfil'}
-        ].map(tab => (
-          <button 
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id as any)}
-            className={`flex items-center space-x-3 px-6 py-4 rounded-2xl font-bold uppercase text-base tracking-widest transition-all ${activeTab === tab.id ? 'bg-indigo-600 shadow-xl shadow-indigo-600/30 text-white scale-105' : 'text-slate-500 hover:text-white hover:bg-slate-800'}`}
-          >
-            <tab.icon size={20} />
-            <span>{tab.label}</span>
-          </button>
+const ModulosView = ({ modules, setModules }: any) => {
+  const [name, setName] = useState("");
+  const [docName, setDocName] = useState("");
+  const [docUrl, setDocUrl] = useState("");
+  const [activeMod, setActiveMod] = useState<string | null>(null);
+
+  const handleAddModule = () => {
+    if(!name) return;
+    setModules([...modules, { id: Date.now().toString(), name: name.toUpperCase(), documents: [] }]);
+    setName("");
+  };
+
+  return (
+    <div className="animate-in fade-in">
+      <h2 className="text-white text-3xl font-black italic uppercase mb-10 tracking-tight">Módulos</h2>
+      <div className="flex gap-3 mb-12 bg-[#0d111c] p-4 rounded-[2rem] border border-gray-800 shadow-inner">
+        <input value={name} onChange={e => setName(e.target.value)} placeholder="TÍTULO DEL MÓDULO..." className="flex-1 bg-transparent text-white px-4 font-bold uppercase outline-none placeholder:text-slate-700 tracking-widest text-xs" />
+        <button onClick={handleAddModule} className="bg-blue-600 hover:bg-blue-500 text-white font-black px-10 py-4 rounded-2xl uppercase text-[10px] shadow-lg active:scale-95 transition-all">Crear</button>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {modules.map((m: any) => (
+          <div key={m.id} className="bg-[#0d111c] rounded-[2.5rem] border border-gray-800 overflow-hidden flex flex-col shadow-xl hover:border-gray-700 transition-all">
+             <div className="bg-[#161e2e] p-6 border-b border-gray-800 flex justify-between items-center">
+                <h3 className="text-white font-black uppercase text-xs italic tracking-widest truncate pr-4">{m.name}</h3>
+                <button onClick={() => confirm("Eliminar?") && setModules(modules.filter((i: any) => i.id !== m.id))} className="text-slate-700 hover:text-red-500 transition-colors"><Trash2 size={16} /></button>
+             </div>
+             <div className="p-8 space-y-4">
+                <div className="space-y-2">
+                  {m.documents?.map((d: any, i: number) => (
+                    <div key={i} className="flex items-center justify-between bg-[#111827] p-3 rounded-xl border border-gray-800 group">
+                      <span className="text-slate-300 font-bold uppercase text-[10px] truncate max-w-[200px]">{d.name}</span>
+                      <button onClick={() => setModules(modules.map((mod: any) => mod.id === m.id ? { ...mod, documents: mod.documents.filter((_: any, idx: number) => idx !== i) } : mod))} className="text-red-500/20 hover:text-red-500 transition-colors"><X size={14} /></button>
+                    </div>
+                  ))}
+                  {!m.documents?.length && <div className="text-center py-4 text-slate-800 text-[9px] uppercase font-black tracking-widest italic opacity-50">Sin material</div>}
+                </div>
+                {activeMod === m.id ? (
+                  <div className="bg-[#111827] p-5 rounded-[2rem] space-y-3 border border-blue-500/20 animate-in zoom-in duration-200">
+                    <input value={docName} onChange={e => setDocName(e.target.value)} placeholder="NOMBRE" className="w-full bg-[#0d111c] border border-gray-800 p-4 rounded-xl text-[10px] text-white font-bold uppercase outline-none focus:border-blue-500 transition-colors" />
+                    <input value={docUrl} onChange={e => setDocUrl(e.target.value)} placeholder="URL (DRIVE/PDF)" className="w-full bg-[#0d111c] border border-gray-800 p-4 rounded-xl text-[10px] text-blue-400 font-bold outline-none focus:border-blue-500 transition-colors" />
+                    <button onClick={() => { if(!docName || !docUrl) return; setModules(modules.map((mod: any) => mod.id === m.id ? { ...mod, documents: [...mod.documents, { name: docName.toUpperCase(), url: docUrl }] } : mod)); setDocName(""); setDocUrl(""); setActiveMod(null); }} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-xl uppercase text-[10px] tracking-widest shadow-lg transition-all active:scale-95">Guardar</button>
+                    <button onClick={() => setActiveMod(null)} className="w-full text-slate-600 text-[9px] font-black uppercase tracking-widest text-center">Cancelar</button>
+                  </div>
+                ) : (
+                  <button onClick={() => setActiveMod(m.id)} className="w-full py-4 border-2 border-dashed border-gray-800 rounded-2xl text-slate-700 font-black uppercase text-[10px] tracking-widest hover:text-blue-500 hover:border-blue-500/30 transition-all">+ Gestionar Material</button>
+                )}
+             </div>
+          </div>
         ))}
       </div>
+    </div>
+  );
+};
 
-      <div className="bg-slate-900 rounded-[3rem] border border-slate-800 shadow-2xl overflow-hidden min-h-[600px] backdrop-blur-3xl">
-        {activeTab === 'submissions' && (
-          <div className="flex flex-col h-full">
-            {/* Filter Section */}
-            <div className="p-10 border-b border-slate-800 grid md:grid-cols-4 gap-6 items-end bg-slate-950/20">
-              <div className="space-y-3">
-                <label className="text-sm font-bold text-slate-500 uppercase">Empresa</label>
-                <select value={filterCompanyId} onChange={(e) => setFilterCompanyId(e.target.value)} className="w-full p-4 bg-slate-900 border border-slate-800 rounded-xl text-white font-semibold outline-none focus:ring-2 focus:ring-indigo-600">
-                  <option value="">Todas las empresas</option>
-                  {data.companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
-              </div>
-              <div className="space-y-3">
-                <label className="text-sm font-bold text-slate-500 uppercase">Capacitación</label>
-                <select value={filterTrainingId} onChange={(e) => setFilterTrainingId(e.target.value)} className="w-full p-4 bg-slate-900 border border-slate-800 rounded-xl text-white font-semibold outline-none focus:ring-2 focus:ring-indigo-600">
-                  <option value="">Todos los cursos</option>
-                  {data.trainings.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                </select>
-              </div>
-              <div className="flex space-x-3">
-                 <button onClick={downloadReportPDF} className="flex-1 bg-indigo-600 hover:bg-indigo-500 p-4 rounded-xl font-bold flex items-center justify-center space-x-2 transition-all shadow-lg shadow-indigo-600/20">
-                    <FileText size={20} />
-                    <span>{selectedIds.size > 0 ? `Exportar (${selectedIds.size})` : 'Exportar PDF'}</span>
-                 </button>
-                 <button onClick={clearFilteredSubmissions} className="bg-rose-500/10 text-rose-500 border border-rose-500/20 p-4 rounded-xl font-bold flex items-center justify-center space-x-2 transition-all hover:bg-rose-500 hover:text-white" title="Borrado masivo filtrado">
-                    <FilterX size={20} />
-                 </button>
-              </div>
-              <div className="text-slate-500 text-sm font-bold uppercase tracking-widest text-right flex flex-col items-end">
-                <span>Resultados: {filteredSubmissions.length}</span>
-                {selectedIds.size > 0 && <span className="text-indigo-400">Seleccionados: {selectedIds.size}</span>}
-              </div>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-left">
-                <thead className="bg-slate-950/50 border-b border-slate-800 text-slate-500 text-sm font-bold uppercase tracking-widest">
-                  <tr>
-                    <th className="px-6 py-6 w-12 text-center">
-                        <button onClick={toggleSelectAll} className="p-1 hover:text-indigo-400 transition-colors">
-                            {selectedIds.size === filteredSubmissions.length && filteredSubmissions.length > 0 
-                                ? <CheckSquare size={24} className="text-indigo-500" /> 
-                                : <Square size={24} />}
-                        </button>
-                    </th>
-                    <th className="px-6 py-6">Fecha</th>
-                    <th className="px-6 py-6">Personal</th>
-                    <th className="px-6 py-6">DNI</th>
-                    <th className="px-6 py-6">Empresa & CUIT</th>
-                    <th className="px-6 py-6">Curso</th>
-                    <th className="px-6 py-6 text-right">Acción</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800">
-                  {filteredSubmissions.map(s => {
-                    const isSelected = selectedIds.has(s.id);
-                    return (
-                      <tr key={s.id} className={`transition-colors group ${isSelected ? 'bg-indigo-500/10' : 'hover:bg-indigo-500/5'}`}>
-                        <td className="px-6 py-6 text-center">
-                            <button onClick={() => toggleSelect(s.id)} className="p-1 hover:text-indigo-400 transition-colors">
-                                {isSelected ? <CheckSquare size={24} className="text-indigo-500" /> : <Square size={24} />}
-                            </button>
-                        </td>
-                        <td className="px-6 py-6 whitespace-nowrap text-lg font-medium text-slate-400">{new Date(s.timestamp).toLocaleDateString()}</td>
-                        <td className="px-6 py-6">
-                            <span className="font-bold text-white text-xl">{s.lastName}, {s.firstName}</span>
-                        </td>
-                        <td className="px-6 py-6">
-                            <span className="text-lg text-indigo-400 font-semibold tracking-wide">{s.dni}</span>
-                        </td>
-                        <td className="px-6 py-6">
-                           <div className="flex flex-col">
-                              <span className="text-lg font-semibold text-slate-300">{s.companyName}</span>
-                              <span className="text-sm text-slate-500 font-medium">CUIT: {s.companyCuit || 'S/N'}</span>
-                           </div>
-                        </td>
-                        <td className="px-6 py-6">
-                          <span className="inline-flex items-center px-4 py-1.5 rounded-full bg-slate-800 text-white text-sm font-bold uppercase border border-slate-700 whitespace-nowrap">
-                            {s.trainingName}
-                          </span>
-                        </td>
-                        <td className="px-6 py-6 text-right">
-                          <button onClick={() => deleteSubmission(s.id)} className="p-4 text-rose-500 hover:bg-rose-500/10 rounded-2xl transition-all" title="Eliminar fila">
-                            <Trash2 size={24} />
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {filteredSubmissions.length === 0 && (
-                    <tr>
-                      <td colSpan={7} className="p-32 text-center">
-                        <div className="flex flex-col items-center space-y-6 opacity-20">
-                          <Users size={80} />
-                          <p className="font-bold uppercase tracking-widest text-xl">Sin registros coincidentes</p>
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+const ClientesView = ({ clients, setClients }: any) => {
+  const [n, setN] = useState("");
+  const [c, setC] = useState("");
+  const handleAdd = () => {
+    if(!n || !c) return alert("Datos requeridos.");
+    setClients([...clients, { id: Date.now().toString(), name: n.toUpperCase(), cuit: c }]);
+    setN(""); setC("");
+  };
+  return (
+    <div className="animate-in fade-in">
+      <h2 className="text-white text-3xl font-black italic uppercase mb-10 tracking-tight">Clientes</h2>
+      <div className="bg-[#0d111c] p-6 md:p-8 rounded-[2.5rem] border border-gray-800 flex flex-wrap gap-4 items-end mb-12 shadow-inner">
+        <div className="flex-1 min-w-[200px] space-y-2"><label className="text-slate-600 text-[10px] font-black uppercase tracking-widest px-2">Razón Social</label><input value={n} onChange={e => setN(e.target.value)} placeholder="EMPRESA..." className="w-full bg-[#111827] border border-gray-800 text-white p-4 rounded-2xl font-bold uppercase focus:border-blue-500 outline-none transition-colors" /></div>
+        <div className="flex-1 min-w-[200px] space-y-2"><label className="text-slate-600 text-[10px] font-black uppercase tracking-widest px-2">CUIT</label><input value={c} onChange={e => setC(e.target.value)} placeholder="NUMERO..." className="w-full bg-[#111827] border border-gray-800 text-white p-4 rounded-2xl font-bold focus:border-blue-500 outline-none transition-colors" /></div>
+        <button onClick={handleAdd} className="bg-blue-600 hover:bg-blue-500 text-white font-black px-10 h-14 rounded-2xl uppercase tracking-widest text-[11px] shadow-lg active:scale-95 transition-all">Registrar</button>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {clients.map((i: any) => (
+          <div key={i.id} className="bg-[#0d111c] p-8 rounded-[2.5rem] border border-gray-800 relative shadow-xl hover:border-blue-500/30 transition-all group overflow-hidden">
+            <h3 className="text-white font-black uppercase italic mb-1 text-lg group-hover:text-blue-400 transition-colors tracking-tighter leading-tight">{i.name}</h3>
+            <p className="text-slate-500 text-[10px] font-black tracking-[0.2em] mb-4">CUIT: {i.cuit}</p>
+            <button onClick={() => confirm("Eliminar?") && setClients(clients.filter((cl: any) => cl.id !== i.id))} className="absolute top-8 right-8 text-slate-800 hover:text-red-500 transition-colors"><Trash2 size={18} /></button>
           </div>
-        )}
+        ))}
+      </div>
+    </div>
+  );
+};
 
-        {(activeTab === 'trainings' || activeTab === 'companies') && (
-          <div className="p-16 space-y-12">
-            <div className="flex flex-col md:flex-row space-y-6 md:space-y-0 md:space-x-6 max-w-5xl">
-              <input 
-                type="text" 
-                placeholder={`Nombre de la nueva ${activeTab === 'trainings' ? 'formación' : 'entidad'}`}
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                className="flex-1 p-6 bg-slate-950 border border-slate-800 rounded-2xl focus:ring-2 focus:ring-indigo-600 outline-none text-white font-semibold text-xl"
-              />
-              {activeTab === 'companies' && (
-                <input 
-                  type="text" 
-                  placeholder="CUIT (Opcional)"
-                  value={newCuit}
-                  onChange={(e) => setNewCuit(e.target.value)}
-                  className="w-full md:w-64 p-6 bg-slate-950 border border-slate-800 rounded-2xl focus:ring-2 focus:ring-indigo-600 outline-none text-white font-semibold text-xl"
-                />
-              )}
-              <button onClick={() => addEntity(activeTab === 'trainings' ? 'training' : 'company')} className="bg-white text-slate-900 px-12 rounded-2xl font-bold hover:bg-indigo-100 flex items-center justify-center space-x-3 transition-all text-xl py-5 md:py-0">
-                <PlusCircle size={24} />
-                <span>AGREGAR</span>
-              </button>
-            </div>
-            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
-              {(data[activeTab === 'trainings' ? 'trainings' : 'companies'] || []).map((e: any) => (
-                <div key={e.id} className="p-10 border border-slate-800 rounded-[2.5rem] flex justify-between items-center bg-slate-950/50 group hover:border-indigo-500/50 hover:bg-slate-950 transition-all hover:shadow-2xl hover:shadow-indigo-500/10">
-                  <div className="flex flex-col gap-1">
-                    <span className="font-bold text-white text-2xl">{e.name}</span>
-                    {activeTab === 'companies' && <span className="text-slate-500 text-base font-semibold">CUIT: {e.cuit || 'S/N'}</span>}
-                  </div>
-                  <button onClick={() => { if(confirm('¿Eliminar?')) saveAll({...data, [activeTab === 'trainings' ? 'trainings' : 'companies']: (data[activeTab === 'trainings' ? 'trainings' : 'companies'] as any).filter((x:any) => x.id !== e.id)}) }} className="p-3 text-slate-700 hover:text-rose-500 transition-colors">
-                    <Trash2 size={28} />
-                  </button>
-                </div>
-              ))}
-            </div>
+const InstructorView = ({ instructor, setInstructor }: any) => {
+  const sigCanvas = useRef<SignatureCanvas>(null);
+  const [localInstructor, setLocalInstructor] = useState(instructor);
+  
+  useEffect(() => {
+    setLocalInstructor(instructor);
+  }, [instructor]);
+
+  const handleSave = () => {
+    const canvasEmpty = sigCanvas.current?.isEmpty();
+    const newSignature = !canvasEmpty ? sigCanvas.current?.toDataURL() : instructor.signature;
+    setInstructor({...localInstructor, signature: newSignature}); 
+    alert("Perfil actualizado correctamente.");
+  };
+
+  return (
+    <div className="animate-in fade-in">
+      <h2 className="text-white text-3xl font-black italic uppercase mb-10 tracking-tight">Perfil del Instructor</h2>
+      <div className="max-w-xl mx-auto bg-[#0d111c] p-10 rounded-[3rem] border border-gray-800 shadow-2xl space-y-8">
+        <div className="space-y-5">
+          <div className="space-y-1">
+             <label className="text-[10px] text-slate-600 font-black uppercase px-2 tracking-widest">Nombre Completo</label>
+             <input value={localInstructor.name} onChange={e => setLocalInstructor({...localInstructor, name: e.target.value.toUpperCase()})} placeholder="NOMBRE" className="w-full bg-[#111827] border border-gray-800 text-white p-5 rounded-2xl outline-none font-bold uppercase focus:border-blue-500 transition-all" />
           </div>
-        )}
-
-        {activeTab === 'links' && (
-          <div className="p-16 grid md:grid-cols-2 gap-24">
-            <div className="space-y-12">
-              <div className="space-y-5">
-                <h3 className="text-4xl font-bold">Generador de Acceso</h3>
-                <p className="text-slate-400 font-medium text-xl leading-relaxed">Cree un portal de entrada rápido para una empresa. El usuario no tendrá que elegir su empresa manualmente.</p>
-              </div>
-              <div className="space-y-8">
-                <div className="space-y-4">
-                  <label className="text-base font-bold uppercase text-slate-500 tracking-widest">Entidad Corporativa</label>
-                  <select value={linkCompanyId} onChange={(e) => setLinkCompanyId(e.target.value)} className="w-full p-6 bg-slate-950 border border-slate-800 rounded-2xl outline-none focus:ring-2 focus:ring-indigo-600 font-semibold text-white text-xl">
-                    <option value="">Seleccione Empresa...</option>
-                    {data.companies.map(c => <option key={c.id} value={c.id}>{c.name} ({c.cuit})</option>)}
-                  </select>
-                </div>
-                <div className="space-y-4">
-                  <label className="text-base font-bold uppercase text-slate-500 tracking-widest">Curso Relacionado</label>
-                  <select value={linkTrainingId} onChange={(e) => setLinkTrainingId(e.target.value)} className="w-full p-6 bg-slate-950 border border-slate-800 rounded-2xl outline-none focus:ring-2 focus:ring-indigo-600 font-semibold text-white text-xl">
-                    <option value="">Cualquier formación</option>
-                    {data.trainings.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                  </select>
-                </div>
-                <button onClick={generateInvitationLink} className="w-full bg-indigo-600 text-white p-7 rounded-2xl font-bold text-xl hover:bg-indigo-500 flex items-center justify-center space-x-4 transition-all shadow-2xl shadow-indigo-600/30">
-                  <QrCode size={28} />
-                  <span>GENERAR QR DE ENTRADA</span>
-                </button>
-              </div>
-            </div>
-            <div className="flex flex-col items-center justify-center space-y-10">
-              {generatedLink ? (
-                <div className="text-center space-y-10 animate-in zoom-in duration-300 w-full max-w-sm">
-                  <div className="bg-white p-10 rounded-[3.5rem] shadow-[0_0_100px_rgba(79,70,229,0.3)] border-8 border-slate-800">
-                    <img src={qrCodeDataUrl} className="w-full" alt="QR de acceso" />
-                  </div>
-                  <div className="flex gap-6">
-                    <button onClick={() => { navigator.clipboard.writeText(generatedLink); showToast('Enlace copiado', 'success'); }} className="flex-1 bg-slate-800 p-5 rounded-2xl text-base font-bold flex items-center justify-center gap-3 hover:bg-slate-700 transition-all border border-slate-700 tracking-widest">COPIAR</button>
-                    <a href={qrCodeDataUrl} download={`QR_${data.companies.find(c => c.id === linkCompanyId)?.name || 'TrainerApp'}.png`} className="flex-1 bg-white text-slate-900 p-5 rounded-2xl text-base font-bold flex items-center justify-center gap-3 hover:bg-indigo-50 transition-all tracking-widest">BAJAR</a>
-                  </div>
-                </div>
-              ) : (
-                <div className="text-center space-y-10 opacity-10 select-none scale-150">
-                  <div className="bg-slate-800 w-56 h-56 rounded-[3.5rem] mx-auto flex items-center justify-center">
-                    <QrCode size={112} className="text-slate-400" />
-                  </div>
-                  <p className="text-slate-400 font-bold uppercase tracking-widest text-lg leading-relaxed">Configura la <br/> invitación</p>
-                </div>
-              )}
-            </div>
+          <div className="space-y-1">
+             <label className="text-[10px] text-slate-600 font-black uppercase px-2 tracking-widest">Cargo Profesional</label>
+             <input value={localInstructor.role} onChange={e => setLocalInstructor({...localInstructor, role: e.target.value.toUpperCase()})} placeholder="PUESTO / TÍTULO" className="w-full bg-[#111827] border border-gray-800 text-white p-5 rounded-2xl outline-none font-bold uppercase focus:border-blue-500 transition-all" />
           </div>
-        )}
+        </div>
+        
+        <div className="space-y-3">
+          <label className="text-[10px] text-slate-600 font-black uppercase px-2 flex justify-between tracking-widest">Firma Digital <span>(Firmar debajo para cambiar)</span></label>
+          <div className="bg-white rounded-[2rem] h-52 border-4 border-gray-800 overflow-hidden shadow-inner cursor-crosshair">
+             {/* @ts-ignore */}
+             <SignatureCanvas ref={sigCanvas} penColor="blue" canvasProps={{ className: 'w-full h-full' }} />
+          </div>
+        </div>
 
-        {activeTab === 'config' && (
-          <div className="p-16 max-w-3xl space-y-12">
-            <div className="space-y-4">
-              <h3 className="text-4xl font-bold">Perfil del Instructor</h3>
-              <p className="text-slate-400 font-medium text-xl">Sus datos y firma aparecerán en cada certificado emitido por esta plataforma.</p>
-            </div>
-            <div className="space-y-10">
-              <div className="space-y-4">
-                <label className="text-base font-bold uppercase text-slate-500 tracking-widest">Nombre y Apellido (Aclaración)</label>
-                <input type="text" placeholder="Ej. Ing. Martín Lutero" value={data.adminConfig.clarification} onChange={(e) => setData({...data, adminConfig: {...data.adminConfig, clarification: e.target.value}})} className="w-full p-6 bg-slate-950 border border-slate-800 rounded-2xl outline-none focus:ring-2 focus:ring-indigo-600 font-semibold text-white text-xl transition-all" />
-              </div>
-              <div className="space-y-4">
-                <label className="text-base font-bold uppercase text-slate-500 tracking-widest">Cargo Corporativo</label>
-                <input type="text" placeholder="Ej. Jefe de Higiene y Seguridad" value={data.adminConfig.jobTitle} onChange={(e) => setData({...data, adminConfig: {...data.adminConfig, jobTitle: e.target.value}})} className="w-full p-6 bg-slate-950 border border-slate-800 rounded-2xl outline-none focus:ring-2 focus:ring-indigo-600 font-semibold text-white text-xl transition-all" />
-              </div>
-              <div className="space-y-5">
-                <label className="text-base font-bold text-slate-500 uppercase tracking-widest mb-3 block flex justify-between">
-                  <span>Firma Manuscrita Guardada</span>
-                  <button onClick={() => sigCanvasAdminRef.current?.clear()} className="text-indigo-400 font-bold hover:underline tracking-normal normal-case text-lg">Limpiar lienzo</button>
-                </label>
-                <div className="border-2 border-dashed border-slate-800 p-8 rounded-[3rem] bg-slate-950">
-                  <SignatureCanvas 
-                    ref={sigCanvasAdminRef} 
-                    {...({ penColor: "white" } as any)} 
-                    canvasProps={{ className: 'w-full h-48 border-b border-slate-900 bg-slate-950/30 rounded-2xl cursor-crosshair' }} 
-                  />
-                </div>
-              </div>
-              <button onClick={() => {
-                const sig = sigCanvasAdminRef.current?.isEmpty() ? data.adminConfig.signature : sigCanvasAdminRef.current?.getTrimmedCanvas().toDataURL('image/png');
-                saveAll({...data, adminConfig: {...data.adminConfig, signature: sig || null}});
-              }} className="w-full bg-indigo-600 text-white p-7 rounded-2xl font-bold text-xl hover:bg-indigo-500 flex items-center justify-center gap-4 transition-all shadow-2xl shadow-indigo-600/30">
-                <Save size={28} />
-                <span>GUARDAR CONFIGURACIÓN</span>
-              </button>
+        <div className="flex gap-3">
+          <button onClick={() => sigCanvas.current?.clear()} className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-400 font-black py-5 rounded-3xl uppercase text-[10px] tracking-widest transition-all">Borrar Pad</button>
+          <button onClick={handleSave} className="flex-[2] bg-blue-600 hover:bg-blue-500 text-white font-black py-5 rounded-3xl uppercase text-[10px] tracking-widest shadow-xl active:scale-95 transition-all">Guardar Datos</button>
+        </div>
+        
+        {instructor.signature && (
+          <div className="mt-10 pt-10 border-t border-gray-800/50 text-center">
+            <p className="text-[9px] text-slate-700 font-black uppercase tracking-widest mb-4">Visualización de firma registrada:</p>
+            <div className="bg-white p-4 rounded-[2rem] h-28 w-48 mx-auto overflow-hidden shadow-md flex items-center justify-center">
+              <img src={instructor.signature} className="h-full w-full object-contain" alt="Instructor Signature" />
             </div>
           </div>
         )}
@@ -948,14 +921,5 @@ const AdminPanel = ({ data, setData, showToast, logout }: { data: AppData, setDa
   );
 };
 
-// Render entry point
-try {
-    const rootEl = document.getElementById('root');
-    if (rootEl) {
-        ReactDOM.createRoot(rootEl).render(<App />);
-    } else {
-        console.error('Root element not found');
-    }
-} catch (err) {
-    console.error('Render error:', err);
-}
+const root = createRoot(document.getElementById('root')!);
+root.render(<App />);
