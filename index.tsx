@@ -26,7 +26,10 @@ import {
   EyeOff,
   CloudLightning,
   RefreshCw,
-  Cloud
+  Cloud,
+  Globe,
+  Wifi,
+  WifiOff
 } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 import QRCode from 'qrcode';
@@ -74,17 +77,20 @@ interface Instructor {
   signature: string;
 }
 
+interface AppState {
+  clients: Client[];
+  modules: Module[];
+  assignments: Assignment[];
+  records: AttendanceRecord[];
+  instructor: Instructor;
+}
+
 // --- Constants ---
 const ADMIN_PASSWORD = "admin2025";
 const STORAGE_KEYS = {
-  CLIENTS: 'trainer_app_clients_v3',
-  MODULES: 'trainer_app_modules_v3',
-  ASSIGNMENTS: 'trainer_app_assignments_v3',
-  RECORDS: 'trainer_app_records_v3',
-  INSTRUCTOR: 'trainer_app_instructor_v3',
-  AUTH: 'trainer_app_auth_v3',
-  REMEMBER_ME: 'trainer_app_remember_v3',
-  SYNC_ID: 'trainer_app_sync_id_v3'
+  WORKSPACE_ID: 'trainer_app_wsid_v4',
+  AUTH: 'trainer_app_auth_v4',
+  REMEMBER_ME: 'trainer_app_remember_v4'
 };
 
 const getStorage = (key: string, defaultValue: any) => {
@@ -95,6 +101,56 @@ const getStorage = (key: string, defaultValue: any) => {
     return parsed ?? defaultValue;
   } catch (e) {
     return defaultValue;
+  }
+};
+
+// --- API Persistence Helpers (Automatic Cloud Sync) ---
+const CLOUD_API_URL = 'https://api.restful-api.dev/objects';
+
+const saveToCloud = async (wsid: string, state: AppState) => {
+  if (!wsid) return;
+  try {
+    await fetch(`${CLOUD_API_URL}/${wsid}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: `TrainerAppWS_${wsid}`,
+        data: state
+      })
+    });
+  } catch (e) {
+    console.error("Error auto-saving to cloud:", e);
+  }
+};
+
+const loadFromCloud = async (wsid: string): Promise<AppState | null> => {
+  if (!wsid) return null;
+  try {
+    const response = await fetch(`${CLOUD_API_URL}/${wsid}`);
+    if (!response.ok) return null;
+    const result = await response.json();
+    return result.data as AppState;
+  } catch (e) {
+    console.error("Error loading from cloud:", e);
+    return null;
+  }
+};
+
+const createNewWorkspace = async (initialState: AppState): Promise<string | null> => {
+  try {
+    const response = await fetch(CLOUD_API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: `TrainerAppWS_${Date.now()}`,
+        data: initialState
+      })
+    });
+    const result = await response.json();
+    return result.id;
+  } catch (e) {
+    console.error("Error creating workspace:", e);
+    return null;
   }
 };
 
@@ -170,153 +226,180 @@ const generateIndividualCertificate = (record: AttendanceRecord, client: Client,
 
 const App = () => {
   const [view, setView] = useState<'landing' | 'userForm' | 'adminLogin' | 'adminDashboard'>('landing');
-  const [activeParams, setActiveParams] = useState<{cid: string | null, mid: string | null}>({ cid: null, mid: null });
+  const [activeParams, setActiveParams] = useState<{cid: string | null, mid: string | null, wsid: string | null}>({ cid: null, mid: null, wsid: null });
   const [isAdminAuthenticated, setIsAdminAuthenticated] = useState<boolean>(() => getStorage(STORAGE_KEYS.AUTH, false));
   const [rememberMe, setRememberMe] = useState<boolean>(() => getStorage(STORAGE_KEYS.REMEMBER_ME, false));
-  const [adminTab, setAdminTab] = useState<'asistencias' | 'asignaciones' | 'modulos' | 'clientes' | 'instructor' | 'sync'>('asistencias');
+  const [adminTab, setAdminTab] = useState<'asistencias' | 'asignaciones' | 'modulos' | 'clientes' | 'instructor'>('asistencias');
 
-  const [clients, setClients] = useState<Client[]>(() => getStorage(STORAGE_KEYS.CLIENTS, []));
-  const [modules, setModules] = useState<Module[]>(() => getStorage(STORAGE_KEYS.MODULES, []));
-  const [assignments, setAssignments] = useState<Assignment[]>(() => getStorage(STORAGE_KEYS.ASSIGNMENTS, []));
-  const [records, setRecords] = useState<AttendanceRecord[]>(() => getStorage(STORAGE_KEYS.RECORDS, []));
-  const [instructor, setInstructor] = useState<Instructor>(() => getStorage(STORAGE_KEYS.INSTRUCTOR, { name: "", role: "", signature: "" }));
-  const [syncId, setSyncId] = useState<string>(() => getStorage(STORAGE_KEYS.SYNC_ID, ""));
+  // App State
+  const [clients, setClients] = useState<Client[]>([]);
+  const [modules, setModules] = useState<Module[]>([]);
+  const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const [records, setRecords] = useState<AttendanceRecord[]>([]);
+  const [instructor, setInstructor] = useState<Instructor>({ name: "", role: "", signature: "" });
+  const [workspaceId, setWorkspaceId] = useState<string>(() => getStorage(STORAGE_KEYS.WORKSPACE_ID, ""));
+
+  // UI States
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSaved, setLastSaved] = useState<Date | null>(null);
 
   const getBaseUrl = () => {
     return window.location.origin + window.location.pathname;
   };
 
-  const handleScanSimulation = useCallback((cid: string, mid: string) => {
+  const handleScanSimulation = useCallback((cid: string, mid: string, wsid: string) => {
     const baseUrl = getBaseUrl();
-    const newUrl = `${baseUrl}?cid=${cid}&mid=${mid}`;
-    setActiveParams({ cid, mid });
+    const newUrl = `${baseUrl}?cid=${cid}&mid=${mid}&wsid=${wsid}`;
+    setActiveParams({ cid, mid, wsid });
     setView('userForm');
-    window.history.pushState({ cid, mid }, '', newUrl);
+    window.history.pushState({ cid, mid, wsid }, '', newUrl);
     window.scrollTo(0, 0);
   }, []);
 
   const handleGoHome = useCallback(() => {
     const baseUrl = getBaseUrl();
     window.history.pushState({}, '', baseUrl);
-    setActiveParams({ cid: null, mid: null });
+    setActiveParams({ cid: null, mid: null, wsid: null });
     setView(isAdminAuthenticated ? 'adminDashboard' : 'landing');
   }, [isAdminAuthenticated]);
 
+  // Initial Sync from URL or Cloud
   useEffect(() => {
-    const syncFromUrl = () => {
+    const syncFromUrl = async () => {
       const p = new URLSearchParams(window.location.search);
       const cid = p.get('cid');
       const mid = p.get('mid');
-      if (cid && mid) {
-        setActiveParams({ cid, mid });
+      const wsid = p.get('wsid');
+      
+      if (wsid) {
+        setIsSyncing(true);
+        const cloudData = await loadFromCloud(wsid);
+        if (cloudData) {
+          setClients(cloudData.clients);
+          setModules(cloudData.modules);
+          setAssignments(cloudData.assignments);
+          setRecords(cloudData.records);
+          setInstructor(cloudData.instructor);
+          setWorkspaceId(wsid);
+        }
+        setIsSyncing(false);
+      }
+
+      if (cid && mid && wsid) {
+        setActiveParams({ cid, mid, wsid });
         setView('userForm');
       }
     };
     syncFromUrl();
-    window.addEventListener('popstate', syncFromUrl);
-    return () => window.removeEventListener('popstate', syncFromUrl);
   }, []);
 
-  // Sync state to LocalStorage
+  // Workspace Auto-Loading for Admin
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.CLIENTS, JSON.stringify(clients));
-    localStorage.setItem(STORAGE_KEYS.MODULES, JSON.stringify(modules));
-    localStorage.setItem(STORAGE_KEYS.ASSIGNMENTS, JSON.stringify(assignments));
-    localStorage.setItem(STORAGE_KEYS.RECORDS, JSON.stringify(records));
-    localStorage.setItem(STORAGE_KEYS.INSTRUCTOR, JSON.stringify(instructor));
-    localStorage.setItem(STORAGE_KEYS.SYNC_ID, JSON.stringify(syncId));
-    
+    if (isAdminAuthenticated && workspaceId && clients.length === 0) {
+      setIsSyncing(true);
+      loadFromCloud(workspaceId).then(data => {
+        if (data) {
+          setClients(data.clients);
+          setModules(data.modules);
+          setAssignments(data.assignments);
+          setRecords(data.records);
+          setInstructor(data.instructor);
+          setLastSaved(new Date());
+        }
+        setIsSyncing(false);
+      });
+    }
+  }, [isAdminAuthenticated, workspaceId]);
+
+  // Automatic Cloud Persistence (Debounced)
+  const saveTimeout = useRef<any>(null);
+  useEffect(() => {
+    if (isAdminAuthenticated && workspaceId) {
+      if (saveTimeout.current) clearTimeout(saveTimeout.current);
+      saveTimeout.current = setTimeout(() => {
+        const state: AppState = { clients, modules, assignments, records, instructor };
+        setIsSyncing(true);
+        saveToCloud(workspaceId, state).then(() => {
+          setLastSaved(new Date());
+          setIsSyncing(false);
+        });
+      }, 1500); // 1.5s debounce
+    }
+
+    // Local Storage Backup
     if (rememberMe) {
       localStorage.setItem(STORAGE_KEYS.AUTH, JSON.stringify(isAdminAuthenticated));
-      localStorage.setItem(STORAGE_KEYS.REMEMBER_ME, JSON.stringify(true));
-    } else {
-      localStorage.removeItem(STORAGE_KEYS.AUTH);
-      localStorage.setItem(STORAGE_KEYS.REMEMBER_ME, JSON.stringify(false));
+      localStorage.setItem(STORAGE_KEYS.WORKSPACE_ID, JSON.stringify(workspaceId));
     }
-  }, [clients, modules, assignments, records, instructor, isAdminAuthenticated, rememberMe, syncId]);
+  }, [clients, modules, assignments, records, instructor, workspaceId, isAdminAuthenticated, rememberMe]);
 
   const [loginPassword, setLoginPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [loginWorkspace, setLoginWorkspace] = useState(workspaceId);
 
-  const handleAdminAuth = () => {
+  const handleAdminAuth = async () => {
     if (loginPassword === ADMIN_PASSWORD) {
-      setIsAdminAuthenticated(true);
-      setView('adminDashboard');
-    } else {
-      alert("Contraseña incorrecta");
-    }
-  };
-
-  // --- Sync Functions (Using public object storage API) ---
-  const [isSyncing, setIsSyncing] = useState(false);
-
-  const handleCloudUpload = async () => {
-    setIsSyncing(true);
-    try {
-      const payload = { clients, modules, assignments, records, instructor };
-      // Using a public storage mock API (simulate real backend)
-      const response = await fetch('https://api.restful-api.dev/objects', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: "TrainerAppData_" + (syncId || Date.now().toString()),
-          data: payload
-        })
-      });
-      const result = await response.json();
-      const newSyncId = result.id;
-      setSyncId(newSyncId);
-      alert(`Sincronización exitosa. Código de enlace: ${newSyncId}. Use este código en otro dispositivo para recuperar sus datos.`);
-    } catch (error) {
-      alert("Error en la sincronización de subida.");
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-
-  const handleCloudDownload = async (targetId: string) => {
-    if (!targetId) return alert("Ingrese un código de enlace.");
-    setIsSyncing(true);
-    try {
-      const response = await fetch(`https://api.restful-api.dev/objects/${targetId}`);
-      if (!response.ok) throw new Error("Objeto no encontrado");
-      const result = await response.json();
-      const data = result.data;
-      
-      if (data) {
-        if (data.clients) setClients(data.clients);
-        if (data.modules) setModules(data.modules);
-        if (data.assignments) setAssignments(data.assignments);
-        if (data.records) setRecords(data.records);
-        if (data.instructor) setInstructor(data.instructor);
-        setSyncId(targetId);
-        alert("¡Datos sincronizados correctamente desde la nube!");
+      if (!loginWorkspace) {
+        // Create new workspace if none provided
+        setIsSyncing(true);
+        const newId = await createNewWorkspace({ clients: [], modules: [], assignments: [], records: [], instructor: { name: "", role: "", signature: "" } });
+        if (newId) {
+          setWorkspaceId(newId);
+          setLoginWorkspace(newId);
+          setIsAdminAuthenticated(true);
+          setView('adminDashboard');
+        } else {
+          alert("Error al inicializar espacio en la nube.");
+        }
+        setIsSyncing(false);
+      } else {
+        // Load existing workspace
+        setIsSyncing(true);
+        const data = await loadFromCloud(loginWorkspace);
+        if (data) {
+          setClients(data.clients);
+          setModules(data.modules);
+          setAssignments(data.assignments);
+          setRecords(data.records);
+          setInstructor(data.instructor);
+          setWorkspaceId(loginWorkspace);
+          setIsAdminAuthenticated(true);
+          setView('adminDashboard');
+        } else {
+          alert("El ID de Espacio no existe.");
+        }
+        setIsSyncing(false);
       }
-    } catch (error) {
-      alert("Error al descargar: Código no válido o expirado.");
-    } finally {
-      setIsSyncing(false);
+    } else {
+      alert("Contraseña incorrecta.");
     }
   };
 
   return (
     <div className="font-sans text-slate-200 antialiased bg-[#060912] min-h-screen selection:bg-blue-600 selection:text-white">
-      <Navbar isAdminAuthenticated={isAdminAuthenticated} onLogout={() => { setIsAdminAuthenticated(false); setRememberMe(false); handleGoHome(); }} onGoHome={handleGoHome} onLoginClick={() => setView('adminLogin')} />
+      <Navbar 
+        isAdminAuthenticated={isAdminAuthenticated} 
+        onLogout={() => { setIsAdminAuthenticated(false); setRememberMe(false); setWorkspaceId(""); handleGoHome(); }} 
+        onGoHome={handleGoHome} 
+        onLoginClick={() => setView('adminLogin')} 
+        isSyncing={isSyncing}
+        lastSaved={lastSaved}
+      />
 
       <main className="pt-20">
         {view === 'landing' && (
           <div className="min-h-[80vh] flex flex-col items-center justify-center p-6 animate-in fade-in duration-700">
             <div className="mb-12 text-center">
               <h1 className="text-white text-7xl md:text-9xl font-black italic tracking-tighter uppercase leading-none mb-4">TRAINER<br/><span className="text-blue-600">APP</span></h1>
-              <p className="text-slate-500 font-bold tracking-[0.5em] uppercase text-xs md:text-sm italic">Gestión de Capacitaciones Pro</p>
+              <p className="text-slate-500 font-bold tracking-[0.5em] uppercase text-xs md:text-sm italic">Sincronización Automática Cloud</p>
             </div>
             <div className="max-w-md w-full bg-[#111827] p-8 rounded-[2.5rem] border border-gray-800 shadow-2xl">
                <div className="flex items-center gap-4 mb-6">
                  <div className="bg-blue-600 p-3 rounded-2xl"><ScanLine className="text-white" /></div>
                  <h3 className="text-white text-xl font-black uppercase italic">Escanear para comenzar</h3>
                </div>
-               <p className="text-slate-400 text-sm mb-6 leading-relaxed">Escanee el código QR proporcionado por su instructor para registrar su asistencia y acceder al material.</p>
-               <QRSimulator assignments={assignments} clients={clients} modules={modules} onScan={handleScanSimulation} />
+               <p className="text-slate-400 text-sm mb-6 leading-relaxed">Escanee el código QR proporcionado por su instructor. Todos sus documentos y progresos se sincronizan automáticamente.</p>
+               <QRSimulator assignments={assignments} clients={clients} modules={modules} onScan={handleScanSimulation} workspaceId={workspaceId} />
             </div>
           </div>
         )}
@@ -325,38 +408,47 @@ const App = () => {
           <div className="min-h-[80vh] flex items-center justify-center p-6">
             <div className="bg-[#111827] p-10 rounded-[3rem] border border-gray-800 w-full max-w-md shadow-2xl text-center animate-in zoom-in duration-300">
               <ShieldCheck size={48} className="text-blue-500 mx-auto mb-6" />
-              <h2 className="text-white text-2xl font-black italic mb-8 uppercase">Acceso Restringido</h2>
+              <h2 className="text-white text-2xl font-black italic mb-8 uppercase">Gestión de Workspace</h2>
               
-              <div className="relative mb-6">
-                <input 
-                  type={showPassword ? "text" : "password"} 
-                  placeholder="CONTRASEÑA" 
-                  autoFocus
-                  value={loginPassword}
-                  onChange={e => setLoginPassword(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleAdminAuth()}
-                  className="w-full bg-[#0d111c] border border-blue-500/20 text-white px-6 py-5 rounded-2xl outline-none font-bold text-center tracking-widest focus:border-blue-500 transition-all" 
-                />
-                <button 
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 hover:text-blue-500 transition-colors p-2"
-                >
-                  {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
-                </button>
+              <div className="space-y-4 mb-6">
+                <div className="relative">
+                  <input 
+                    type={showPassword ? "text" : "password"} 
+                    placeholder="CONTRASEÑA ADMIN" 
+                    value={loginPassword}
+                    onChange={e => setLoginPassword(e.target.value)}
+                    className="w-full bg-[#0d111c] border border-blue-500/20 text-white px-6 py-5 rounded-2xl outline-none font-bold text-center tracking-widest focus:border-blue-500 transition-all" 
+                  />
+                  <button onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 p-2">
+                    {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                  </button>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] text-slate-600 font-black uppercase tracking-widest px-2">ID de Espacio (Opcional si es nuevo)</label>
+                  <input 
+                    type="text" 
+                    placeholder="Escriba su ID para sincronizar..." 
+                    value={loginWorkspace}
+                    onChange={e => setLoginWorkspace(e.target.value)}
+                    className="w-full bg-[#0d111c] border border-gray-800 text-white px-6 py-4 rounded-2xl outline-none font-bold text-center text-xs focus:border-blue-500 transition-all" 
+                  />
+                </div>
               </div>
 
               <div className="flex items-center justify-center gap-2 mb-8 group cursor-pointer" onClick={() => setRememberMe(!rememberMe)}>
                 <div className={`size-5 rounded-md border-2 transition-all flex items-center justify-center ${rememberMe ? 'bg-blue-600 border-blue-600' : 'border-gray-700'}`}>
                   {rememberMe && <CheckCircle2 size={12} className="text-white" />}
                 </div>
-                <span className="text-[10px] text-slate-500 font-black uppercase tracking-widest group-hover:text-slate-300">Recordar sesión</span>
+                <span className="text-[10px] text-slate-500 font-black uppercase tracking-widest group-hover:text-slate-300">Persistir Sesión</span>
               </div>
 
               <button 
                 onClick={handleAdminAuth}
-                className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-2xl uppercase tracking-widest text-xs shadow-lg active:scale-95 transition-all">
-                Desbloquear Panel
+                disabled={isSyncing}
+                className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-2xl uppercase tracking-widest text-xs shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2">
+                {isSyncing ? <RefreshCw className="animate-spin" size={16} /> : <Globe size={16} />}
+                Ingresar al Sistema
               </button>
             </div>
           </div>
@@ -366,8 +458,16 @@ const App = () => {
           <div className="min-h-screen px-4 md:px-8 max-w-7xl mx-auto pb-20">
             <div className="flex flex-col md:flex-row md:items-end justify-between mb-8 gap-4">
                <div>
-                 <h1 className="text-white text-4xl font-black italic uppercase tracking-tighter">Panel de <span className="text-blue-600">Control</span></h1>
-                 <p className="text-slate-500 font-bold uppercase text-[10px] tracking-widest">Administración de Entorno Trainer</p>
+                 <div className="flex items-center gap-3 mb-2">
+                    <h1 className="text-white text-4xl font-black italic uppercase tracking-tighter">Panel <span className="text-blue-600">Pro</span></h1>
+                    <div className="bg-blue-600/10 px-3 py-1 rounded-full border border-blue-500/20 flex items-center gap-2">
+                       <span className="size-2 bg-blue-500 rounded-full animate-pulse" />
+                       <span className="text-blue-400 font-mono text-[9px] font-bold">WS: {workspaceId}</span>
+                    </div>
+                 </div>
+                 <p className="text-slate-500 font-bold uppercase text-[10px] tracking-widest flex items-center gap-2">
+                    <CloudLightning size={12} /> Sincronizado automáticamente en la nube
+                 </p>
                </div>
                <div className="flex bg-[#111827] p-1.5 rounded-2xl border border-gray-800 overflow-x-auto no-scrollbar shadow-lg">
                 {[
@@ -375,8 +475,7 @@ const App = () => {
                   { id: 'asignaciones', label: 'QR', icon: Layers },
                   { id: 'modulos', label: 'Módulos', icon: BookOpen },
                   { id: 'clientes', label: 'Clientes', icon: FileText },
-                  { id: 'instructor', label: 'Instructor', icon: UserCircle },
-                  { id: 'sync', label: 'Sync', icon: CloudLightning }
+                  { id: 'instructor', label: 'Instructor', icon: UserCircle }
                 ].map(t => (
                   <button key={t.id} onClick={() => setAdminTab(t.id as any)} className={`flex items-center gap-2 px-5 py-3 rounded-xl font-black uppercase tracking-widest text-[10px] transition-all whitespace-nowrap ${adminTab === t.id ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}>
                     <t.icon size={14} /> {t.label}
@@ -387,16 +486,15 @@ const App = () => {
 
             <div className="bg-[#111827] rounded-[3rem] border border-gray-800 p-6 md:p-10 min-h-[600px] shadow-2xl relative">
                {adminTab === 'asistencias' && <AsistenciasView records={records} setRecords={setRecords} clients={clients} modules={modules} instructor={instructor} />}
-               {adminTab === 'asignaciones' && <AsignacionesView clients={clients} modules={modules} assignments={assignments} setAssignments={setAssignments} onSimulate={handleScanSimulation} getBaseUrl={getBaseUrl} />}
+               {adminTab === 'asignaciones' && <AsignacionesView clients={clients} modules={modules} assignments={assignments} setAssignments={setAssignments} onSimulate={handleScanSimulation} getBaseUrl={getBaseUrl} workspaceId={workspaceId} />}
                {adminTab === 'modulos' && <ModulosView modules={modules} setModules={setModules} />}
                {adminTab === 'clientes' && <ClientesView clients={clients} setClients={setClients} />}
                {adminTab === 'instructor' && <InstructorView instructor={instructor} setInstructor={setInstructor} />}
-               {adminTab === 'sync' && <SyncView syncId={syncId} onUpload={handleCloudUpload} onDownload={handleCloudDownload} isSyncing={isSyncing} />}
             </div>
           </div>
         )}
 
-        {view === 'userForm' && <UserPortal clients={clients} modules={modules} activeParams={activeParams} onGoHome={handleGoHome} setRecords={setRecords} instructor={instructor} />}
+        {view === 'userForm' && <UserPortal clients={clients} modules={modules} activeParams={activeParams} onGoHome={handleGoHome} setRecords={setRecords} instructor={instructor} isSyncing={isSyncing} />}
       </main>
     </div>
   );
@@ -404,7 +502,7 @@ const App = () => {
 
 // --- Components ---
 
-const Navbar = ({ isAdminAuthenticated, onLogout, onGoHome, onLoginClick }: any) => (
+const Navbar = ({ isAdminAuthenticated, onLogout, onGoHome, onLoginClick, isSyncing, lastSaved }: any) => (
   <nav className="flex items-center justify-between px-6 py-4 bg-[#0a1120]/80 border-b border-gray-800 fixed top-0 w-full z-50 backdrop-blur-md">
     <div className="flex items-center gap-2 cursor-pointer group" onClick={onGoHome}>
       <div className="bg-blue-600 p-1.5 rounded-lg group-hover:rotate-12 transition-transform">
@@ -413,7 +511,19 @@ const Navbar = ({ isAdminAuthenticated, onLogout, onGoHome, onLoginClick }: any)
       <span className="text-white font-black italic tracking-tighter text-xl uppercase">TRAINER<span className="text-blue-600">APP</span></span>
     </div>
     
-    <div className="flex items-center gap-3">
+    <div className="flex items-center gap-6">
+      <div className="hidden sm:flex items-center gap-2">
+        {isSyncing ? (
+          <div className="flex items-center gap-2 text-blue-500 font-black uppercase text-[9px] tracking-widest">
+            <RefreshCw size={12} className="animate-spin" /> Guardando...
+          </div>
+        ) : lastSaved ? (
+          <div className="flex items-center gap-2 text-slate-500 font-black uppercase text-[9px] tracking-widest">
+            <CheckCircle2 size={12} className="text-green-500" /> Al día
+          </div>
+        ) : null}
+      </div>
+
       {isAdminAuthenticated ? (
         <button onClick={onLogout} className="flex items-center gap-2 bg-red-600/10 hover:bg-red-600/20 text-red-500 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border border-red-500/20 transition-all">
           <LogOut size={14} /> Salir
@@ -501,19 +611,12 @@ const AsistenciasView = ({ records, setRecords, clients, modules, instructor }: 
     }
   };
 
-  const handleIndividualDelete = (id: string) => {
-    if (confirm("¿Seguro que desea eliminar este registro de asistencia? No aparecerá en los reportes.")) {
-      setRecords(records.filter((r: any) => r.id !== id));
-      setSel(prev => prev.filter(i => i !== id));
-    }
-  };
-
   return (
     <div className="animate-in fade-in">
       <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
         <div>
           <h2 className="text-white text-3xl font-black italic uppercase">Asistencias</h2>
-          <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest mt-1">Registros de conformidad</p>
+          <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest mt-1">Sincronizado Cloud</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <button onClick={() => confirm("¿Eliminar registros seleccionados?") && (setRecords(records.filter((r: any) => !sel.includes(r.id))), setSel([]))} disabled={sel.length === 0} className="bg-red-600/10 text-red-500 px-5 py-3 rounded-2xl font-bold uppercase text-[10px] border border-red-500/20 disabled:opacity-30">
@@ -560,15 +663,7 @@ const AsistenciasView = ({ records, setRecords, clients, modules, instructor }: 
                 <td className="px-6 py-6 text-[10px] uppercase font-black text-blue-500">{modules.find((m: any) => m.id === r.moduleId)?.name}<div className="text-slate-500 font-bold mt-1">{clients.find((c: any) => c.id === r.companyId)?.name}</div></td>
                 <td className="px-6 py-6 text-center"><div className="bg-white p-1 rounded-xl h-10 w-28 overflow-hidden inline-block shadow-inner"><img src={r.signature} className="h-full w-full object-contain" /></div></td>
                 <td className="px-6 py-6 text-center" onClick={e => e.stopPropagation()}>
-                  <div className="flex items-center justify-center gap-2">
-                    <button 
-                      onClick={() => handleIndividualDelete(r.id)}
-                      className="p-3 text-slate-500 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all"
-                      title="Eliminar registro"
-                    >
-                      <Trash2 size={18} />
-                    </button>
-                  </div>
+                  <button onClick={() => confirm("Eliminar registro?") && setRecords(records.filter((rec: any) => rec.id !== r.id))} className="p-3 text-slate-700 hover:text-red-500 transition-colors"><Trash2 size={16} /></button>
                 </td>
               </tr>
             ))}
@@ -579,81 +674,7 @@ const AsistenciasView = ({ records, setRecords, clients, modules, instructor }: 
   );
 };
 
-const SyncView = ({ syncId, onUpload, onDownload, isSyncing }: any) => {
-  const [inputCode, setInputCode] = useState("");
-
-  return (
-    <div className="animate-in fade-in max-w-2xl mx-auto py-10 space-y-12">
-      <div className="text-center space-y-4">
-        <CloudLightning size={64} className="text-blue-500 mx-auto" />
-        <h2 className="text-white text-3xl font-black uppercase italic">Sincronización en la Nube</h2>
-        <p className="text-slate-500 text-sm font-bold uppercase tracking-widest leading-relaxed">
-          Permite transferir su base de datos completa a otros dispositivos.
-        </p>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-        {/* Upload Card */}
-        <div className="bg-[#0d111c] p-8 rounded-[2.5rem] border border-gray-800 flex flex-col items-center space-y-6 shadow-xl relative overflow-hidden group">
-          <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity">
-            <Cloud size={80} />
-          </div>
-          <h3 className="text-white font-black uppercase italic tracking-widest text-lg">Subir Datos</h3>
-          <p className="text-slate-500 text-[10px] font-bold text-center leading-relaxed">
-            Guarda la configuración actual y los registros en la nube para compartirlos.
-          </p>
-          {syncId && (
-            <div className="bg-blue-600/10 px-4 py-3 rounded-xl border border-blue-500/20 w-full text-center">
-              <div className="text-[9px] text-blue-500 font-black uppercase mb-1">Código Actual</div>
-              <div className="text-white font-mono font-bold text-lg">{syncId}</div>
-            </div>
-          )}
-          <button 
-            onClick={onUpload}
-            disabled={isSyncing}
-            className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-2xl uppercase text-[10px] tracking-widest shadow-xl flex items-center justify-center gap-2 disabled:opacity-50 transition-all"
-          >
-            {isSyncing ? <RefreshCw className="animate-spin" size={16} /> : <Upload size={16} />}
-            Subir a la Nube
-          </button>
-        </div>
-
-        {/* Download Card */}
-        <div className="bg-[#0d111c] p-8 rounded-[2.5rem] border border-gray-800 flex flex-col items-center space-y-6 shadow-xl">
-          <h3 className="text-white font-black uppercase italic tracking-widest text-lg">Vincular Dispositivo</h3>
-          <p className="text-slate-500 text-[10px] font-bold text-center leading-relaxed">
-            Ingrese un código de enlace generado previamente para descargar los datos.
-          </p>
-          <input 
-            value={inputCode}
-            onChange={e => setInputCode(e.target.value)}
-            placeholder="CÓDIGO DE ENLACE"
-            className="w-full bg-[#111827] border border-gray-800 text-white p-4 rounded-xl font-mono text-center font-bold uppercase focus:border-blue-500 outline-none"
-          />
-          <button 
-            onClick={() => onDownload(inputCode)}
-            disabled={isSyncing || !inputCode}
-            className="w-full bg-slate-800 hover:bg-slate-700 text-white font-black py-4 rounded-2xl uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 disabled:opacity-50 transition-all"
-          >
-            {isSyncing ? <RefreshCw className="animate-spin" size={16} /> : <RefreshCw size={16} />}
-            Descargar Datos
-          </button>
-        </div>
-      </div>
-
-      <div className="bg-amber-500/10 p-6 rounded-[2rem] border border-amber-500/20 text-center">
-        <div className="flex items-center justify-center gap-2 text-amber-500 font-black uppercase text-[10px] mb-2">
-          <AlertCircle size={14} /> Importante
-        </div>
-        <p className="text-slate-400 text-[10px] font-bold leading-relaxed">
-          La descarga de datos reemplazará toda la información actual de este dispositivo. Asegúrese de haber respaldado si es necesario. Los registros se almacenan temporalmente para facilitar la migración.
-        </p>
-      </div>
-    </div>
-  );
-};
-
-const QRSimulator = ({ assignments, clients, modules, onScan }: any) => {
+const QRSimulator = ({ assignments, clients, modules, onScan, workspaceId }: any) => {
   return (
     <div className="space-y-3">
       {assignments.length > 0 ? assignments.map((a: any) => {
@@ -661,7 +682,7 @@ const QRSimulator = ({ assignments, clients, modules, onScan }: any) => {
         const mod = modules.find((m: any) => m.id === a.moduleId);
         if (!client || !mod) return null;
         return (
-          <button key={a.id} onClick={() => onScan(a.clientId, a.moduleId)} className="w-full bg-slate-800/50 hover:bg-blue-600/20 text-left p-5 rounded-3xl border border-slate-700 hover:border-blue-500/50 transition-all group flex items-center justify-between">
+          <button key={a.id} onClick={() => onScan(a.clientId, a.moduleId, workspaceId)} className="w-full bg-slate-800/50 hover:bg-blue-600/20 text-left p-5 rounded-3xl border border-slate-700 hover:border-blue-500/50 transition-all group flex items-center justify-between">
             <div className="overflow-hidden">
               <div className="text-[10px] text-blue-500 font-black uppercase mb-1 tracking-widest">{client.name}</div>
               <div className="text-white font-bold text-sm uppercase italic truncate">{mod.name}</div>
@@ -676,7 +697,7 @@ const QRSimulator = ({ assignments, clients, modules, onScan }: any) => {
   );
 };
 
-const UserPortal = ({ clients, modules, activeParams, onGoHome, setRecords, instructor }: any) => {
+const UserPortal = ({ clients, modules, activeParams, onGoHome, setRecords, instructor, isSyncing }: any) => {
   const sigCanvas = useRef<SignatureCanvas>(null);
   const [step, setStep] = useState<'identity' | 'material' | 'signature'>('identity');
   const [formData, setFormData] = useState({ name: '', dni: '' });
@@ -691,23 +712,30 @@ const UserPortal = ({ clients, modules, activeParams, onGoHome, setRecords, inst
     return viewedDocs.size >= activeModule.documents.length;
   }, [viewedDocs, activeModule]);
 
-  // Redirección automática tras éxito
   useEffect(() => {
     if (lastRecord) {
-      const timer = setTimeout(() => {
-        onGoHome();
-      }, 10000);
+      const timer = setTimeout(onGoHome, 15000);
       return () => clearTimeout(timer);
     }
   }, [lastRecord, onGoHome]);
+
+  if (isSyncing && clients.length === 0) {
+    return (
+      <div className="max-w-md mx-auto px-6 py-20 text-center animate-in fade-in">
+        <RefreshCw size={64} className="text-blue-500 mx-auto mb-6 animate-spin" />
+        <h2 className="text-2xl font-black uppercase italic text-white mb-2">Sincronizando...</h2>
+        <p className="text-slate-500 font-bold text-[10px] tracking-widest uppercase">Cargando material de capacitación</p>
+      </div>
+    );
+  }
 
   if (!activeClient || !activeModule) {
     return (
       <div className="max-w-md mx-auto px-6 py-20 text-center animate-in fade-in">
         <AlertCircle size={64} className="text-amber-500 mx-auto mb-6" />
-        <h2 className="text-2xl font-black uppercase italic text-white mb-4">Error de Enlace</h2>
-        <p className="text-slate-500 mb-8 font-bold text-sm">Este acceso QR no existe o ha sido desactivado.</p>
-        <button onClick={onGoHome} className="w-full bg-slate-800 text-white py-4 rounded-2xl font-black uppercase tracking-widest text-xs">Volver al Inicio</button>
+        <h2 className="text-2xl font-black uppercase italic text-white mb-4">Enlace no Encontrado</h2>
+        <p className="text-slate-500 mb-8 font-bold text-sm">Este QR no pertenece a un espacio de trabajo válido o está expirado.</p>
+        <button onClick={onGoHome} className="w-full bg-slate-800 text-white py-4 rounded-2xl font-black uppercase tracking-widest text-xs">Ir al Inicio</button>
       </div>
     );
   }
@@ -719,18 +747,11 @@ const UserPortal = ({ clients, modules, activeParams, onGoHome, setRecords, inst
           <CheckCircle2 size={48} className="text-green-500" />
         </div>
         <h2 className="text-3xl font-black uppercase italic text-white mb-2 leading-none">REGISTRO<br/><span className="text-blue-500">EXITOSO</span></h2>
-        <p className="text-slate-500 font-bold mb-4 text-xs tracking-widest uppercase">Asistencia confirmada satisfactoriamente</p>
-        <p className="text-slate-600 text-[10px] mb-8 uppercase font-black italic">Redireccionando al inicio automáticamente...</p>
-        <div className="space-y-4">
-          <button 
-            onClick={() => {
-                generateIndividualCertificate(lastRecord, activeClient, activeModule, instructor);
-                setTimeout(onGoHome, 2000);
-            }} 
-            className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-5 rounded-3xl uppercase tracking-[0.2em] shadow-xl active:scale-95 transition-all text-xs flex items-center justify-center gap-3">
-            <Download size={18} /> Descargar Certificado
-          </button>
-        </div>
+        <p className="text-slate-500 font-bold mb-8 text-xs tracking-widest uppercase">Asistencia confirmada y sincronizada</p>
+        <button onClick={() => generateIndividualCertificate(lastRecord, activeClient, activeModule, instructor)} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-5 rounded-3xl uppercase text-xs flex items-center justify-center gap-3 transition-all">
+          <Download size={18} /> Descargar Certificado
+        </button>
+        <button onClick={onGoHome} className="mt-4 text-slate-600 font-black uppercase text-[10px] tracking-widest">Cerrar</button>
       </div>
     );
   }
@@ -738,7 +759,7 @@ const UserPortal = ({ clients, modules, activeParams, onGoHome, setRecords, inst
   return (
     <div className="max-w-md mx-auto px-4 md:px-6 pb-20 animate-in slide-in-from-bottom-8">
       <div className="text-center mb-8">
-        <div className="text-blue-500 font-black uppercase text-[10px] tracking-[0.3em] mb-2">Portal del Colaborador</div>
+        <div className="text-blue-500 font-black uppercase text-[10px] tracking-[0.3em] mb-2">Portal Sincronizado</div>
         <h2 className="text-white text-3xl font-black italic uppercase leading-none">{activeModule.name}</h2>
         <div className="mt-3 bg-blue-600/10 px-4 py-1.5 rounded-full border border-blue-500/20 inline-block">
           <span className="text-blue-400 font-black uppercase text-[9px] tracking-widest">{activeClient.name}</span>
@@ -766,7 +787,7 @@ const UserPortal = ({ clients, modules, activeParams, onGoHome, setRecords, inst
           <div className="space-y-8 animate-in fade-in">
              <div className="text-center px-4">
                <BookOpen size={40} className="text-blue-500 mx-auto mb-4" />
-               <p className="text-slate-400 text-xs font-bold leading-relaxed uppercase">Para registrar su firma, primero debe revisar el material didáctico adjunto.</p>
+               <p className="text-slate-400 text-xs font-bold leading-relaxed uppercase">Revise el material pedagógico oficial antes de confirmar su firma.</p>
              </div>
              <div className="space-y-3">
                {activeModule.documents?.map((doc, idx) => (
@@ -776,7 +797,7 @@ const UserPortal = ({ clients, modules, activeParams, onGoHome, setRecords, inst
                    {viewedDocs.has(idx) ? <CheckCircle2 size={16} /> : <ExternalLink size={16} className="opacity-40" />}
                  </a>
                ))}
-               {!activeModule.documents?.length && <div className="text-center py-6 opacity-20 italic font-black uppercase text-[10px]">No hay material adjunto</div>}
+               {!activeModule.documents?.length && <div className="text-center py-6 opacity-20 italic font-black uppercase text-[10px]">Sin material cargado</div>}
              </div>
              <button onClick={() => setStep('signature')} disabled={!allDocsRead} className={`w-full font-black py-5 rounded-3xl uppercase tracking-widest text-xs transition-all shadow-xl ${allDocsRead ? 'bg-blue-600 hover:bg-blue-500 text-white active:scale-95' : 'bg-slate-800 text-slate-600 cursor-not-allowed opacity-50'}`}>
                Proceder a la Firma
@@ -787,8 +808,8 @@ const UserPortal = ({ clients, modules, activeParams, onGoHome, setRecords, inst
         {step === 'signature' && (
           <div className="space-y-8 animate-in fade-in">
              <div className="text-center px-4">
-               <h3 className="text-white text-xl font-black uppercase italic mb-2">Conformidad</h3>
-               <p className="text-slate-500 text-[9px] uppercase font-black leading-tight">Declaro haber recibido y comprendido el material del módulo {activeModule.name}.</p>
+               <h3 className="text-white text-xl font-black uppercase italic mb-2">Firma Digital</h3>
+               <p className="text-slate-500 text-[9px] uppercase font-black leading-tight">Su firma se guardará en el servidor central de capacitación.</p>
              </div>
              <div className="bg-white rounded-[2rem] h-60 overflow-hidden border-4 border-gray-800 shadow-inner cursor-crosshair">
                 {/* @ts-ignore */}
@@ -809,7 +830,7 @@ const UserPortal = ({ clients, modules, activeParams, onGoHome, setRecords, inst
                  };
                  setRecords((prev: any) => [record, ...prev]);
                  setLastRecord(record);
-               }} className="flex-[2] bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-2xl uppercase text-[10px] tracking-widest shadow-xl active:scale-95 transition-all">Firmar y Registrar</button>
+               }} className="flex-[2] bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-2xl uppercase text-[10px] tracking-widest shadow-xl transition-all">Confirmar Firma</button>
              </div>
           </div>
         )}
@@ -818,7 +839,7 @@ const UserPortal = ({ clients, modules, activeParams, onGoHome, setRecords, inst
   );
 };
 
-const AsignacionesView = ({ clients, modules, assignments, setAssignments, onSimulate, getBaseUrl }: any) => {
+const AsignacionesView = ({ clients, modules, assignments, setAssignments, onSimulate, getBaseUrl, workspaceId }: any) => {
   const [cid, setCid] = useState("");
   const [mid, setMid] = useState("");
   const [qrModal, setQrModal] = useState<string | null>(null);
@@ -847,7 +868,7 @@ const AsignacionesView = ({ clients, modules, assignments, setAssignments, onSim
             {modules.map((m: any) => <option key={m.id} value={m.id}>{m.name}</option>)}
           </select>
         </div>
-        <button onClick={handleCreate} className="bg-blue-600 hover:bg-blue-500 text-white font-black px-10 h-14 rounded-2xl uppercase tracking-widest text-[11px] shadow-lg active:scale-95 transition-all">Vincular</button>
+        <button onClick={handleCreate} className="bg-blue-600 hover:bg-blue-500 text-white font-black px-10 h-14 rounded-2xl uppercase tracking-widest text-[11px] shadow-lg transition-all">Vincular</button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -862,14 +883,14 @@ const AsignacionesView = ({ clients, modules, assignments, setAssignments, onSim
                   <h3 className="text-white text-xl font-black italic uppercase leading-tight">{mod.name}</h3>
                </div>
                <div className="flex flex-col gap-2">
-                  <button onClick={() => setQrModal(a.id)} className="w-full bg-blue-600/10 hover:bg-blue-600 text-blue-500 hover:text-white font-bold py-3.5 rounded-xl uppercase text-[10px] border border-blue-600/30 transition-all">Ver Código QR</button>
-                  <button onClick={() => onSimulate(a.clientId, a.moduleId)} className="w-full bg-slate-800 hover:bg-slate-700 text-slate-400 font-bold py-3.5 rounded-xl uppercase text-[10px] transition-all">Probar Acceso</button>
+                  <button onClick={() => setQrModal(a.id)} className="w-full bg-blue-600/10 hover:bg-blue-600 text-blue-500 hover:text-white font-bold py-3.5 rounded-xl uppercase text-[10px] border border-blue-600/30 transition-all">Generar QR Sincronizado</button>
+                  <button onClick={() => onSimulate(a.clientId, a.moduleId, workspaceId)} className="w-full bg-slate-800 hover:bg-slate-700 text-slate-400 font-bold py-3.5 rounded-xl uppercase text-[10px] transition-all">Vista Previa</button>
                   <button onClick={() => confirm("¿Eliminar vínculo?") && setAssignments(assignments.filter((i: any) => i.id !== a.id))} className="text-red-500/30 hover:text-red-500 text-[9px] font-black uppercase mt-3 tracking-widest transition-colors">Eliminar</button>
                </div>
                {qrModal === a.id && (
                   <div className="fixed inset-0 z-[100] bg-black/95 flex items-center justify-center p-6 backdrop-blur-sm" onClick={() => setQrModal(null)}>
                     <div className="bg-[#111827] p-8 rounded-[2.5rem] max-w-sm w-full border border-gray-800 shadow-2xl animate-in zoom-in duration-200" onClick={e => e.stopPropagation()}>
-                      <QRGenerator clientId={a.clientId} moduleId={a.moduleId} getBaseUrl={getBaseUrl} onCancel={() => setQrModal(null)} clientName={client.name} moduleName={mod.name} />
+                      <QRGenerator clientId={a.clientId} moduleId={a.moduleId} getBaseUrl={getBaseUrl} onCancel={() => setQrModal(null)} clientName={client.name} moduleName={mod.name} workspaceId={workspaceId} />
                     </div>
                   </div>
                )}
@@ -881,12 +902,12 @@ const AsignacionesView = ({ clients, modules, assignments, setAssignments, onSim
   );
 };
 
-const QRGenerator = ({ clientId, moduleId, getBaseUrl, onCancel, clientName, moduleName }: any) => {
+const QRGenerator = ({ clientId, moduleId, getBaseUrl, onCancel, clientName, moduleName, workspaceId }: any) => {
   const [qrDataUrl, setQrDataUrl] = useState("");
   const assignmentUrl = useMemo(() => {
     const base = getBaseUrl();
-    return `${base}?cid=${clientId}&mid=${moduleId}`;
-  }, [clientId, moduleId, getBaseUrl]);
+    return `${base}?cid=${clientId}&mid=${moduleId}&wsid=${workspaceId}`;
+  }, [clientId, moduleId, getBaseUrl, workspaceId]);
 
   useEffect(() => {
     QRCode.toDataURL(assignmentUrl, { 
@@ -900,14 +921,11 @@ const QRGenerator = ({ clientId, moduleId, getBaseUrl, onCancel, clientName, mod
       const pageWidth = doc.internal.pageSize.getWidth();
       const pageHeight = doc.internal.pageSize.getHeight();
       
-      // Decorative Professional Background Elements
-      doc.setFillColor(31, 41, 55); // Slate 800
+      doc.setFillColor(31, 41, 55); 
       doc.rect(0, 0, pageWidth, 60, 'F');
-      
-      doc.setFillColor(59, 130, 246); // Blue 500 accent line
+      doc.setFillColor(59, 130, 246); 
       doc.rect(0, 58, pageWidth, 2, 'F');
 
-      // Title & Branding
       doc.setTextColor(255, 255, 255);
       doc.setFontSize(32);
       doc.setFont("helvetica", "bold");
@@ -916,9 +934,8 @@ const QRGenerator = ({ clientId, moduleId, getBaseUrl, onCancel, clientName, mod
       doc.setFontSize(10);
       doc.setFont("helvetica", "normal");
       doc.setTextColor(200, 200, 200);
-      doc.text("SISTEMA DE GESTIÓN PROFESIONAL TRAINERAPP", pageWidth / 2, 45, { align: "center" });
+      doc.text("SISTEMA SINCRONIZADO TRAINERAPP PRO", pageWidth / 2, 45, { align: "center" });
       
-      // Information Card Body
       doc.setTextColor(31, 41, 55);
       doc.setFontSize(24);
       doc.setFont("helvetica", "bold");
@@ -929,7 +946,6 @@ const QRGenerator = ({ clientId, moduleId, getBaseUrl, onCancel, clientName, mod
       doc.setTextColor(100, 100, 100);
       doc.text(`Empresa: ${clientName}`, pageWidth / 2, 100, { align: "center" });
 
-      // QR Code with Professional Frame
       doc.setDrawColor(59, 130, 246);
       doc.setLineWidth(1.5);
       doc.roundedRect(pageWidth / 2 - 55, 120, 110, 110, 5, 5, 'D');
@@ -938,7 +954,6 @@ const QRGenerator = ({ clientId, moduleId, getBaseUrl, onCancel, clientName, mod
         doc.addImage(qrDataUrl, 'PNG', pageWidth / 2 - 50, 125, 100, 100);
       }
 
-      // Actionable Callout
       doc.setFillColor(31, 41, 55);
       doc.roundedRect(pageWidth / 2 - 80, 245, 160, 22, 11, 11, 'F');
       doc.setTextColor(255, 255, 255);
@@ -946,27 +961,12 @@ const QRGenerator = ({ clientId, moduleId, getBaseUrl, onCancel, clientName, mod
       doc.setFont("helvetica", "bold");
       doc.text("ESCANEÉ EL CÓDIGO PARA REGISTRAR ASISTENCIA", pageWidth / 2, 259, { align: "center" });
       
-      // URL & Link Section
-      doc.setTextColor(180, 180, 180);
-      doc.setFontSize(8);
-      doc.setFont("helvetica", "normal");
-      doc.text("O utilice el siguiente enlace directo (clickable):", pageWidth / 2, 278, { align: "center" });
-      
-      const trimmedUrl = assignmentUrl.length > 80 ? assignmentUrl.substring(0, 77) + "..." : assignmentUrl;
       doc.setTextColor(59, 130, 246);
+      doc.setFontSize(9);
       doc.setFont("helvetica", "bold");
-      doc.text(trimmedUrl, pageWidth / 2, 283, { align: "center" });
-      doc.link(pageWidth / 2 - (trimmedUrl.length * 1.3) / 2, 279, trimmedUrl.length * 1.3, 6, { url: assignmentUrl });
+      doc.text("ID Espacio: " + workspaceId, pageWidth / 2, 280, { align: "center" });
 
-      // Aesthetic Footer
-      doc.setDrawColor(240, 240, 240);
-      doc.line(15, pageHeight - 10, pageWidth - 15, pageHeight - 10);
-      doc.setTextColor(210, 210, 210);
-      doc.setFontSize(7);
-      doc.setFont("helvetica", "italic");
-      doc.text(`Generado en: ${new Date().toLocaleString()} | ID de Vínculo: ${Date.now()}`, pageWidth / 2, pageHeight - 6, { align: "center" });
-      
-      doc.save(`QR_${moduleName.replace(/\s+/g, '_')}_${clientName.replace(/\s+/g, '_')}.pdf`);
+      doc.save(`QR_Oficial_${moduleName.replace(/\s+/g, '_')}.pdf`);
     } catch (e) {
       console.error(e);
       alert("Error al generar PDF.");
@@ -984,17 +984,13 @@ const QRGenerator = ({ clientId, moduleId, getBaseUrl, onCancel, clientName, mod
       </div>
       
       <div className="w-full flex flex-col gap-3">
-        <button onClick={downloadProfessionalPDF} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-2xl uppercase text-[10px] tracking-widest shadow-xl flex items-center justify-center gap-3 transition-all active:scale-95">
-          <Download size={18}/> Descargar PDF QR Corporativo
+        <button onClick={downloadProfessionalPDF} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-2xl uppercase text-[10px] tracking-widest shadow-xl flex items-center justify-center gap-3 transition-all">
+          <Download size={18}/> Descargar PDF QR Oficial
         </button>
-        
-        <button onClick={() => { navigator.clipboard.writeText(assignmentUrl); alert("URL copiada con éxito."); }} className="w-full bg-[#1e293b] hover:bg-[#334155] text-slate-300 font-black py-4 rounded-2xl uppercase text-[10px] transition-all border border-slate-700 flex items-center justify-center gap-2">
+        <button onClick={() => { navigator.clipboard.writeText(assignmentUrl); alert("URL copiada."); }} className="w-full bg-[#1e293b] text-slate-300 font-black py-4 rounded-2xl uppercase text-[10px] border border-slate-700 flex items-center justify-center gap-2">
           <Copy size={16}/> Copiar Enlace Directo
         </button>
-        
-        <button onClick={onCancel} className="w-full bg-[#1e293b] hover:bg-[#334155] text-white font-black py-4 rounded-2xl uppercase text-[10px] transition-all">
-          Cerrar
-        </button>
+        <button onClick={onCancel} className="w-full bg-slate-800 text-white font-black py-4 rounded-2xl uppercase text-[10px]">Cerrar</button>
       </div>
     </div>
   );
@@ -1017,11 +1013,11 @@ const ModulosView = ({ modules, setModules }: any) => {
       <h2 className="text-white text-3xl font-black italic uppercase mb-10 tracking-tight">Módulos</h2>
       <div className="flex gap-3 mb-12 bg-[#0d111c] p-4 rounded-[2rem] border border-gray-800 shadow-inner">
         <input value={name} onChange={e => setName(e.target.value)} placeholder="TÍTULO DEL MÓDULO..." className="flex-1 bg-transparent text-white px-4 font-bold uppercase outline-none placeholder:text-slate-700 tracking-widest text-xs" />
-        <button onClick={handleAddModule} className="bg-blue-600 hover:bg-blue-500 text-white font-black px-10 py-4 rounded-2xl uppercase text-[10px] shadow-lg active:scale-95 transition-all">Crear</button>
+        <button onClick={handleAddModule} className="bg-blue-600 hover:bg-blue-500 text-white font-black px-10 py-4 rounded-2xl uppercase text-[10px] shadow-lg transition-all">Crear</button>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {modules.map((m: any) => (
-          <div key={m.id} className="bg-[#0d111c] rounded-[2.5rem] border border-gray-800 overflow-hidden flex flex-col shadow-xl hover:border-gray-700 transition-all">
+          <div key={m.id} className="bg-[#0d111c] rounded-[2.5rem] border border-gray-800 overflow-hidden flex flex-col shadow-xl group hover:border-blue-500/20 transition-all">
              <div className="bg-[#161e2e] p-6 border-b border-gray-800 flex justify-between items-center">
                 <h3 className="text-white font-black uppercase text-xs italic tracking-widest truncate pr-4">{m.name}</h3>
                 <button onClick={() => confirm("Eliminar?") && setModules(modules.filter((i: any) => i.id !== m.id))} className="text-slate-700 hover:text-red-500 transition-colors"><Trash2 size={16} /></button>
@@ -1068,7 +1064,7 @@ const ClientesView = ({ clients, setClients }: any) => {
       <div className="bg-[#0d111c] p-6 md:p-8 rounded-[2.5rem] border border-gray-800 flex flex-wrap gap-4 items-end mb-12 shadow-inner">
         <div className="flex-1 min-w-[200px] space-y-2"><label className="text-slate-600 text-[10px] font-black uppercase tracking-widest px-2">Razón Social</label><input value={n} onChange={e => setN(e.target.value)} placeholder="EMPRESA..." className="w-full bg-[#111827] border border-gray-800 text-white p-4 rounded-2xl font-bold uppercase focus:border-blue-500 outline-none transition-colors" /></div>
         <div className="flex-1 min-w-[200px] space-y-2"><label className="text-slate-600 text-[10px] font-black uppercase tracking-widest px-2">CUIT</label><input value={c} onChange={e => setC(e.target.value)} placeholder="NUMERO..." className="w-full bg-[#111827] border border-gray-800 text-white p-4 rounded-2xl font-bold focus:border-blue-500 outline-none transition-colors" /></div>
-        <button onClick={handleAdd} className="bg-blue-600 hover:bg-blue-500 text-white font-black px-10 h-14 rounded-2xl uppercase tracking-widest text-[11px] shadow-lg active:scale-95 transition-all">Registrar</button>
+        <button onClick={handleAdd} className="bg-blue-600 hover:bg-blue-500 text-white font-black px-10 h-14 rounded-2xl uppercase tracking-widest text-[11px] shadow-lg transition-all">Registrar</button>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {clients.map((i: any) => (
@@ -1095,7 +1091,7 @@ const InstructorView = ({ instructor, setInstructor }: any) => {
     const canvasEmpty = sigCanvas.current?.isEmpty();
     const newSignature = !canvasEmpty ? sigCanvas.current?.toDataURL() : instructor.signature;
     setInstructor({...localInstructor, signature: newSignature}); 
-    alert("Perfil actualizado correctamente.");
+    alert("Perfil guardado y sincronizado.");
   };
 
   return (
@@ -1114,7 +1110,7 @@ const InstructorView = ({ instructor, setInstructor }: any) => {
         </div>
         
         <div className="space-y-3">
-          <label className="text-[10px] text-slate-600 font-black uppercase px-2 flex justify-between tracking-widest">Firma Digital <span>(Firmar debajo para cambiar)</span></label>
+          <label className="text-[10px] text-slate-600 font-black uppercase px-2 flex justify-between tracking-widest">Firma Digital</label>
           <div className="bg-white rounded-[2rem] h-52 border-4 border-gray-800 overflow-hidden shadow-inner cursor-crosshair">
              {/* @ts-ignore */}
              <SignatureCanvas ref={sigCanvas} penColor="blue" canvasProps={{ className: 'w-full h-full' }} />
@@ -1123,12 +1119,12 @@ const InstructorView = ({ instructor, setInstructor }: any) => {
 
         <div className="flex gap-3">
           <button onClick={() => sigCanvas.current?.clear()} className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-400 font-black py-5 rounded-3xl uppercase text-[10px] tracking-widest transition-all">Borrar Pad</button>
-          <button onClick={handleSave} className="flex-[2] bg-blue-600 hover:bg-blue-500 text-white font-black py-5 rounded-3xl uppercase text-[10px] tracking-widest shadow-xl active:scale-95 transition-all">Guardar Datos</button>
+          <button onClick={handleSave} className="flex-[2] bg-blue-600 hover:bg-blue-500 text-white font-black py-5 rounded-3xl uppercase text-[10px] tracking-widest shadow-xl transition-all">Guardar Cambios</button>
         </div>
         
         {instructor.signature && (
           <div className="mt-10 pt-10 border-t border-gray-800/50 text-center">
-            <p className="text-[9px] text-slate-700 font-black uppercase tracking-widest mb-4">Visualización de firma registrada:</p>
+            <p className="text-[9px] text-slate-700 font-black uppercase tracking-widest mb-4">Firma actual en la nube:</p>
             <div className="bg-white p-4 rounded-[2rem] h-28 w-48 mx-auto overflow-hidden shadow-md flex items-center justify-center">
               <img src={instructor.signature} className="h-full w-full object-contain" alt="Instructor Signature" />
             </div>
