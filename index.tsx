@@ -21,7 +21,9 @@ import {
   Layers,
   ScanLine,
   Upload,
-  Database
+  Database,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 import QRCode from 'qrcode';
@@ -77,7 +79,8 @@ const STORAGE_KEYS = {
   ASSIGNMENTS: 'trainer_app_assignments_v3',
   RECORDS: 'trainer_app_records_v3',
   INSTRUCTOR: 'trainer_app_instructor_v3',
-  AUTH: 'trainer_app_auth_v3'
+  AUTH: 'trainer_app_auth_v3',
+  REMEMBER_ME: 'trainer_app_remember_v3'
 };
 
 const getStorage = (key: string, defaultValue: any) => {
@@ -165,7 +168,8 @@ const App = () => {
   const [view, setView] = useState<'landing' | 'userForm' | 'adminLogin' | 'adminDashboard'>('landing');
   const [activeParams, setActiveParams] = useState<{cid: string | null, mid: string | null}>({ cid: null, mid: null });
   const [isAdminAuthenticated, setIsAdminAuthenticated] = useState<boolean>(() => getStorage(STORAGE_KEYS.AUTH, false));
-  const [adminTab, setAdminTab] = useState<'asistencias' | 'asignaciones' | 'modulos' | 'clientes' | 'instructor' | 'datos'>('asistencias');
+  const [rememberMe, setRememberMe] = useState<boolean>(() => getStorage(STORAGE_KEYS.REMEMBER_ME, false));
+  const [adminTab, setAdminTab] = useState<'asistencias' | 'asignaciones' | 'modulos' | 'clientes' | 'instructor'>('asistencias');
 
   const [clients, setClients] = useState<Client[]>(() => getStorage(STORAGE_KEYS.CLIENTS, []));
   const [modules, setModules] = useState<Module[]>(() => getStorage(STORAGE_KEYS.MODULES, []));
@@ -174,7 +178,7 @@ const App = () => {
   const [instructor, setInstructor] = useState<Instructor>(() => getStorage(STORAGE_KEYS.INSTRUCTOR, { name: "", role: "", signature: "" }));
 
   const getBaseUrl = () => {
-    return window.location.href.split('?')[0].split('#')[0];
+    return window.location.origin + window.location.pathname;
   };
 
   const handleScanSimulation = useCallback((cid: string, mid: string) => {
@@ -214,42 +218,32 @@ const App = () => {
     localStorage.setItem(STORAGE_KEYS.ASSIGNMENTS, JSON.stringify(assignments));
     localStorage.setItem(STORAGE_KEYS.RECORDS, JSON.stringify(records));
     localStorage.setItem(STORAGE_KEYS.INSTRUCTOR, JSON.stringify(instructor));
-    localStorage.setItem(STORAGE_KEYS.AUTH, JSON.stringify(isAdminAuthenticated));
-  }, [clients, modules, assignments, records, instructor, isAdminAuthenticated]);
+    
+    // Auth persistence logic based on rememberMe
+    if (rememberMe) {
+      localStorage.setItem(STORAGE_KEYS.AUTH, JSON.stringify(isAdminAuthenticated));
+      localStorage.setItem(STORAGE_KEYS.REMEMBER_ME, JSON.stringify(true));
+    } else {
+      localStorage.removeItem(STORAGE_KEYS.AUTH);
+      localStorage.setItem(STORAGE_KEYS.REMEMBER_ME, JSON.stringify(false));
+    }
+  }, [clients, modules, assignments, records, instructor, isAdminAuthenticated, rememberMe]);
 
-  const handleExportData = () => {
-    const data = { clients, modules, assignments, records, instructor };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `trainer_app_backup_${new Date().toISOString().slice(0,10)}.json`;
-    a.click();
-  };
+  const [loginPassword, setLoginPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
 
-  const handleImportData = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      try {
-        const data = JSON.parse(event.target?.result as string);
-        if (data.clients) setClients(data.clients);
-        if (data.modules) setModules(data.modules);
-        if (data.assignments) setAssignments(data.assignments);
-        if (data.records) setRecords(data.records);
-        if (data.instructor) setInstructor(data.instructor);
-        alert("Datos importados con éxito.");
-      } catch (err) {
-        alert("Archivo inválido.");
-      }
-    };
-    reader.readAsText(file);
+  const handleAdminAuth = () => {
+    if (loginPassword === ADMIN_PASSWORD) {
+      setIsAdminAuthenticated(true);
+      setView('adminDashboard');
+    } else {
+      alert("Contraseña incorrecta");
+    }
   };
 
   return (
     <div className="font-sans text-slate-200 antialiased bg-[#060912] min-h-screen selection:bg-blue-600 selection:text-white">
-      <Navbar isAdminAuthenticated={isAdminAuthenticated} onLogout={() => { setIsAdminAuthenticated(false); handleGoHome(); }} onGoHome={handleGoHome} onLoginClick={() => setView('adminLogin')} />
+      <Navbar isAdminAuthenticated={isAdminAuthenticated} onLogout={() => { setIsAdminAuthenticated(false); setRememberMe(false); handleGoHome(); }} onGoHome={handleGoHome} onLoginClick={() => setView('adminLogin')} />
 
       <main className="pt-20">
         {view === 'landing' && (
@@ -271,18 +265,41 @@ const App = () => {
 
         {view === 'adminLogin' && (
           <div className="min-h-[80vh] flex items-center justify-center p-6">
-            <div className="bg-[#111827] p-10 rounded-[3rem] border border-gray-800 w-full max-sm shadow-2xl text-center">
+            <div className="bg-[#111827] p-10 rounded-[3rem] border border-gray-800 w-full max-w-md shadow-2xl text-center animate-in zoom-in duration-300">
               <ShieldCheck size={48} className="text-blue-500 mx-auto mb-6" />
               <h2 className="text-white text-2xl font-black italic mb-8 uppercase">Acceso Restringido</h2>
-              <input type="password" placeholder="PASSWORD" autoFocus
-                onKeyDown={e => e.key === 'Enter' && (e.target as HTMLInputElement).value === ADMIN_PASSWORD && (setIsAdminAuthenticated(true), setView('adminDashboard'))}
-                className="w-full bg-[#0d111c] border border-blue-500/20 text-white px-6 py-5 rounded-2xl outline-none font-bold text-center tracking-widest mb-6 focus:border-blue-500 transition-all" 
-              />
-              <button onClick={(e) => {
-                const input = (e.currentTarget.previousElementSibling as HTMLInputElement);
-                if(input.value === ADMIN_PASSWORD) { setIsAdminAuthenticated(true); setView('adminDashboard'); }
-                else alert("Incorrecto");
-              }} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-2xl uppercase tracking-widest text-xs shadow-lg active:scale-95 transition-all">Desbloquear Panel</button>
+              
+              <div className="relative mb-6">
+                <input 
+                  type={showPassword ? "text" : "password"} 
+                  placeholder="CONTRASEÑA" 
+                  autoFocus
+                  value={loginPassword}
+                  onChange={e => setLoginPassword(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleAdminAuth()}
+                  className="w-full bg-[#0d111c] border border-blue-500/20 text-white px-6 py-5 rounded-2xl outline-none font-bold text-center tracking-widest focus:border-blue-500 transition-all" 
+                />
+                <button 
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 hover:text-blue-500 transition-colors p-2"
+                >
+                  {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                </button>
+              </div>
+
+              <div className="flex items-center justify-center gap-2 mb-8 group cursor-pointer" onClick={() => setRememberMe(!rememberMe)}>
+                <div className={`size-5 rounded-md border-2 transition-all flex items-center justify-center ${rememberMe ? 'bg-blue-600 border-blue-600' : 'border-gray-700'}`}>
+                  {rememberMe && <CheckCircle2 size={12} className="text-white" />}
+                </div>
+                <span className="text-[10px] text-slate-500 font-black uppercase tracking-widest group-hover:text-slate-300">Recordar sesión</span>
+              </div>
+
+              <button 
+                onClick={handleAdminAuth}
+                className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-2xl uppercase tracking-widest text-xs shadow-lg active:scale-95 transition-all">
+                Desbloquear Panel
+              </button>
             </div>
           </div>
         )}
@@ -300,8 +317,7 @@ const App = () => {
                   { id: 'asignaciones', label: 'QR', icon: Layers },
                   { id: 'modulos', label: 'Módulos', icon: BookOpen },
                   { id: 'clientes', label: 'Clientes', icon: FileText },
-                  { id: 'instructor', label: 'Instructor', icon: UserCircle },
-                  { id: 'datos', label: 'Copia', icon: Database }
+                  { id: 'instructor', label: 'Instructor', icon: UserCircle }
                 ].map(t => (
                   <button key={t.id} onClick={() => setAdminTab(t.id as any)} className={`flex items-center gap-2 px-5 py-3 rounded-xl font-black uppercase tracking-widest text-[10px] transition-all whitespace-nowrap ${adminTab === t.id ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}>
                     <t.icon size={14} /> {t.label}
@@ -316,24 +332,6 @@ const App = () => {
                {adminTab === 'modulos' && <ModulosView modules={modules} setModules={setModules} />}
                {adminTab === 'clientes' && <ClientesView clients={clients} setClients={setClients} />}
                {adminTab === 'instructor' && <InstructorView instructor={instructor} setInstructor={setInstructor} />}
-               {adminTab === 'datos' && (
-                 <div className="animate-in fade-in max-w-md mx-auto text-center space-y-8 pt-10">
-                   <Database size={64} className="text-blue-500 mx-auto" />
-                   <h2 className="text-white text-2xl font-black uppercase italic">Backup de Datos</h2>
-                   <div className="space-y-4">
-                     <button onClick={handleExportData} className="w-full bg-slate-800 hover:bg-slate-700 text-white font-black py-5 rounded-3xl flex items-center justify-center gap-3 border border-gray-700 transition-all uppercase tracking-widest text-xs">
-                       <Download size={18} /> Exportar Base de Datos (JSON)
-                     </button>
-                     <div className="relative">
-                        <label className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-5 rounded-3xl flex items-center justify-center gap-3 cursor-pointer shadow-xl transition-all uppercase tracking-widest text-xs">
-                          <Upload size={18} /> Importar Datos (JSON)
-                          <input type="file" accept=".json" onChange={handleImportData} className="hidden" />
-                        </label>
-                     </div>
-                   </div>
-                   <p className="text-slate-500 text-[10px] uppercase font-bold tracking-widest leading-relaxed">Guarde su archivo JSON regularmente para proteger la persistencia de sus clientes, módulos y registros de asistencia.</p>
-                 </div>
-               )}
             </div>
           </div>
         )}
@@ -443,6 +441,13 @@ const AsistenciasView = ({ records, setRecords, clients, modules, instructor }: 
     }
   };
 
+  const handleIndividualDelete = (id: string) => {
+    if (confirm("¿Seguro que desea eliminar esta fila de asistencia?")) {
+      setRecords(records.filter((r: any) => r.id !== id));
+      setSel(sel.filter(i => i !== id));
+    }
+  };
+
   return (
     <div className="animate-in fade-in">
       <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
@@ -451,8 +456,8 @@ const AsistenciasView = ({ records, setRecords, clients, modules, instructor }: 
           <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest mt-1">Registros de conformidad</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <button onClick={() => confirm("¿Eliminar registros?") && (setRecords(records.filter((r: any) => !sel.includes(r.id))), setSel([]))} disabled={sel.length === 0} className="bg-red-600/10 text-red-500 px-5 py-3 rounded-2xl font-bold uppercase text-[10px] border border-red-500/20 disabled:opacity-30">
-            <Trash2 size={14}/> Borrar
+          <button onClick={() => confirm("¿Eliminar registros seleccionados?") && (setRecords(records.filter((r: any) => !sel.includes(r.id))), setSel([]))} disabled={sel.length === 0} className="bg-red-600/10 text-red-500 px-5 py-3 rounded-2xl font-bold uppercase text-[10px] border border-red-500/20 disabled:opacity-30">
+            <Trash2 size={14}/> Borrar Selección
           </button>
           <button onClick={handleGenerateReport} disabled={sel.length === 0} className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-2xl font-bold uppercase text-[10px] shadow-xl flex items-center gap-2 disabled:opacity-30">
             <Download size={14}/> Generar Reporte ({sel.length})
@@ -482,17 +487,23 @@ const AsistenciasView = ({ records, setRecords, clients, modules, instructor }: 
               <th className="px-6 py-5">Colaborador</th>
               <th className="px-6 py-5">Capacitación</th>
               <th className="px-6 py-5 text-center">Firma</th>
+              <th className="px-6 py-5 text-center w-16">Acciones</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800/50">
             {filteredRecords.length === 0 ? (
-              <tr><td colSpan={4} className="py-20 text-center text-slate-600 font-black uppercase text-sm italic opacity-40 tracking-widest">No hay registros cargados</td></tr>
+              <tr><td colSpan={5} className="py-20 text-center text-slate-600 font-black uppercase text-sm italic opacity-40 tracking-widest">No hay registros cargados</td></tr>
             ) : filteredRecords.map((r: any) => (
               <tr key={r.id} className={`hover:bg-slate-800/30 transition-all cursor-pointer ${sel.includes(r.id) ? 'bg-blue-600/5' : ''}`} onClick={() => setSel(s => s.includes(r.id) ? s.filter(i => i !== r.id) : [...s, r.id])}>
                 <td className="px-6 py-6 text-center" onClick={e => e.stopPropagation()}><input type="checkbox" checked={sel.includes(r.id)} onChange={() => setSel(s => s.includes(r.id) ? s.filter(i => i !== r.id) : [...s, r.id])} className="size-5 rounded border-gray-700 bg-gray-800 text-blue-600" /></td>
                 <td className="px-6 py-6 font-bold text-white uppercase text-sm">{r.name}<div className="text-[10px] text-slate-600 font-bold mt-1">DNI: {r.dni}</div></td>
                 <td className="px-6 py-6 text-[10px] uppercase font-black text-blue-500">{modules.find((m: any) => m.id === r.moduleId)?.name}<div className="text-slate-500 font-bold mt-1">{clients.find((c: any) => c.id === r.companyId)?.name}</div></td>
                 <td className="px-6 py-6 text-center"><div className="bg-white p-1 rounded-xl h-10 w-28 overflow-hidden inline-block shadow-inner"><img src={r.signature} className="h-full w-full object-contain" /></div></td>
+                <td className="px-6 py-6 text-center" onClick={e => e.stopPropagation()}>
+                  <button onClick={() => handleIndividualDelete(r.id)} className="text-slate-700 hover:text-red-500 transition-colors p-2 rounded-lg hover:bg-red-500/10">
+                    <Trash2 size={16} />
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -540,7 +551,7 @@ const UserPortal = ({ clients, modules, activeParams, onGoHome, setRecords, inst
     return viewedDocs.size >= activeModule.documents.length;
   }, [viewedDocs, activeModule]);
 
-  // Effect to automatically close the success screen after 10 seconds
+  // Redirección automática tras éxito
   useEffect(() => {
     if (lastRecord) {
       const timer = setTimeout(() => {
@@ -574,7 +585,6 @@ const UserPortal = ({ clients, modules, activeParams, onGoHome, setRecords, inst
           <button 
             onClick={() => {
                 generateIndividualCertificate(lastRecord, activeClient, activeModule, instructor);
-                // After download, close shortly
                 setTimeout(onGoHome, 2000);
             }} 
             className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-5 rounded-3xl uppercase tracking-[0.2em] shadow-xl active:scale-95 transition-all text-xs flex items-center justify-center gap-3">
@@ -714,12 +724,12 @@ const AsignacionesView = ({ clients, modules, assignments, setAssignments, onSim
                <div className="flex flex-col gap-2">
                   <button onClick={() => setQrModal(a.id)} className="w-full bg-blue-600/10 hover:bg-blue-600 text-blue-500 hover:text-white font-bold py-3.5 rounded-xl uppercase text-[10px] border border-blue-600/30 transition-all">Ver Código QR</button>
                   <button onClick={() => onSimulate(a.clientId, a.moduleId)} className="w-full bg-slate-800 hover:bg-slate-700 text-slate-400 font-bold py-3.5 rounded-xl uppercase text-[10px] transition-all">Probar Acceso</button>
-                  <button onClick={() => confirm("Eliminar vínculo?") && setAssignments(assignments.filter((i: any) => i.id !== a.id))} className="text-red-500/30 hover:text-red-500 text-[9px] font-black uppercase mt-3 tracking-widest transition-colors">Eliminar</button>
+                  <button onClick={() => confirm("¿Eliminar vínculo?") && setAssignments(assignments.filter((i: any) => i.id !== a.id))} className="text-red-500/30 hover:text-red-500 text-[9px] font-black uppercase mt-3 tracking-widest transition-colors">Eliminar</button>
                </div>
                {qrModal === a.id && (
                   <div className="fixed inset-0 z-[100] bg-black/95 flex items-center justify-center p-6 backdrop-blur-sm" onClick={() => setQrModal(null)}>
                     <div className="bg-[#111827] p-8 rounded-[2.5rem] max-w-sm w-full border border-gray-800 shadow-2xl animate-in zoom-in duration-200" onClick={e => e.stopPropagation()}>
-                      <QRGenerator clientId={a.clientId} moduleId={a.moduleId} getBaseUrl={getBaseUrl} onCancel={() => setQrModal(null)} />
+                      <QRGenerator clientId={a.clientId} moduleId={a.moduleId} getBaseUrl={getBaseUrl} onCancel={() => setQrModal(null)} clientName={client.name} moduleName={mod.name} />
                     </div>
                   </div>
                )}
@@ -731,19 +741,97 @@ const AsignacionesView = ({ clients, modules, assignments, setAssignments, onSim
   );
 };
 
-const QRGenerator = ({ clientId, moduleId, getBaseUrl, onCancel }: { clientId: string, moduleId: string, getBaseUrl: () => string, onCancel: () => void }) => {
+const QRGenerator = ({ clientId, moduleId, getBaseUrl, onCancel, clientName, moduleName }: any) => {
   const [qrDataUrl, setQrDataUrl] = useState("");
   const assignmentUrl = useMemo(() => {
-    // Ensuring the URL uses the exact same logic as simulation button
     const base = getBaseUrl();
     return `${base}?cid=${clientId}&mid=${moduleId}`;
   }, [clientId, moduleId, getBaseUrl]);
 
   useEffect(() => {
     QRCode.toDataURL(assignmentUrl, { 
-      width: 512, margin: 2, color: { dark: '#000000', light: '#ffffff' } 
+      width: 1024, margin: 1, color: { dark: '#000000', light: '#ffffff' } 
     }).then(setQrDataUrl).catch(console.error);
   }, [assignmentUrl]);
+
+  const downloadProfessionalPDF = () => {
+    try {
+      const doc = new jsPDF();
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
+      
+      // Decorative Professional Background Elements
+      doc.setFillColor(31, 41, 55); // Slate 800
+      doc.rect(0, 0, pageWidth, 60, 'F');
+      
+      doc.setFillColor(59, 130, 246); // Blue 500 accent line
+      doc.rect(0, 58, pageWidth, 2, 'F');
+
+      // Title & Branding
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(32);
+      doc.setFont("helvetica", "bold");
+      doc.text("ACCESO CAPACITACIÓN", pageWidth / 2, 35, { align: "center" });
+      
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(200, 200, 200);
+      doc.text("SISTEMA DE GESTIÓN PROFESIONAL TRAINERAPP", pageWidth / 2, 45, { align: "center" });
+      
+      // Information Card Body
+      doc.setTextColor(31, 41, 55);
+      doc.setFontSize(24);
+      doc.setFont("helvetica", "bold");
+      doc.text(moduleName, pageWidth / 2, 90, { align: "center" });
+      
+      doc.setFontSize(14);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(100, 100, 100);
+      doc.text(`Empresa: ${clientName}`, pageWidth / 2, 100, { align: "center" });
+
+      // QR Code with Professional Frame
+      doc.setDrawColor(59, 130, 246);
+      doc.setLineWidth(1.5);
+      doc.roundedRect(pageWidth / 2 - 55, 120, 110, 110, 5, 5, 'D');
+
+      if(qrDataUrl) {
+        doc.addImage(qrDataUrl, 'PNG', pageWidth / 2 - 50, 125, 100, 100);
+      }
+
+      // Actionable Callout
+      doc.setFillColor(31, 41, 55);
+      doc.roundedRect(pageWidth / 2 - 80, 245, 160, 22, 11, 11, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(12);
+      doc.setFont("helvetica", "bold");
+      doc.text("ESCANEÉ EL CÓDIGO PARA REGISTRAR ASISTENCIA", pageWidth / 2, 259, { align: "center" });
+      
+      // URL & Link Section
+      doc.setTextColor(180, 180, 180);
+      doc.setFontSize(8);
+      doc.setFont("helvetica", "normal");
+      doc.text("O utilice el siguiente enlace directo (clickable):", pageWidth / 2, 278, { align: "center" });
+      
+      const trimmedUrl = assignmentUrl.length > 80 ? assignmentUrl.substring(0, 77) + "..." : assignmentUrl;
+      doc.setTextColor(59, 130, 246);
+      doc.setFont("helvetica", "bold");
+      doc.text(trimmedUrl, pageWidth / 2, 283, { align: "center" });
+      doc.link(pageWidth / 2 - (trimmedUrl.length * 1.3) / 2, 279, trimmedUrl.length * 1.3, 6, { url: assignmentUrl });
+
+      // Aesthetic Footer
+      doc.setDrawColor(240, 240, 240);
+      doc.line(15, pageHeight - 10, pageWidth - 15, pageHeight - 10);
+      doc.setTextColor(210, 210, 210);
+      doc.setFontSize(7);
+      doc.setFont("helvetica", "italic");
+      doc.text(`Generado en: ${new Date().toLocaleString()} | ID de Vínculo: ${Date.now()}`, pageWidth / 2, pageHeight - 6, { align: "center" });
+      
+      doc.save(`QR_${moduleName.replace(/\s+/g, '_')}_${clientName.replace(/\s+/g, '_')}.pdf`);
+    } catch (e) {
+      console.error(e);
+      alert("Error al generar PDF.");
+    }
+  };
 
   return (
     <div className="flex flex-col items-center gap-6">
@@ -756,22 +844,12 @@ const QRGenerator = ({ clientId, moduleId, getBaseUrl, onCancel }: { clientId: s
       </div>
       
       <div className="w-full flex flex-col gap-3">
-        <button onClick={() => {
-            try {
-              const doc = new jsPDF();
-              doc.setFillColor(15, 23, 42); doc.rect(0, 0, 210, 45, 'F');
-              doc.setTextColor(255, 255, 255); doc.setFontSize(22); doc.setFont("helvetica", "bold");
-              doc.text("ACCESO A CAPACITACIÓN", 105, 28, { align: "center" });
-              if(qrDataUrl) doc.addImage(qrDataUrl, 'PNG', 55, 75, 100, 100);
-              doc.setTextColor(30, 30, 30); doc.setFontSize(14); doc.text("Escanee para iniciar registro", 105, 200, { align: "center" });
-              doc.save(`Acceso_QR_${Date.now()}.pdf`);
-            } catch (e) { alert("Error PDF"); }
-          }} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-2xl uppercase text-[10px] tracking-widest shadow-xl flex items-center justify-center gap-3 transition-all active:scale-95">
-          <Download size={18}/> Descargar PDF QR
+        <button onClick={downloadProfessionalPDF} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-2xl uppercase text-[10px] tracking-widest shadow-xl flex items-center justify-center gap-3 transition-all active:scale-95">
+          <Download size={18}/> Descargar PDF QR Corporativo
         </button>
         
-        <button onClick={() => { navigator.clipboard.writeText(assignmentUrl); alert("URL copiada con éxito."); }} className="w-full bg-[#1e293b] hover:bg-[#334155] text-slate-300 font-black py-4 rounded-2xl uppercase text-[10px] transition-all border border-slate-700">
-          Copiar Enlace Directo
+        <button onClick={() => { navigator.clipboard.writeText(assignmentUrl); alert("URL copiada con éxito."); }} className="w-full bg-[#1e293b] hover:bg-[#334155] text-slate-300 font-black py-4 rounded-2xl uppercase text-[10px] transition-all border border-slate-700 flex items-center justify-center gap-2">
+          <Copy size={16}/> Copiar Enlace Directo
         </button>
         
         <button onClick={onCancel} className="w-full bg-[#1e293b] hover:bg-[#334155] text-white font-black py-4 rounded-2xl uppercase text-[10px] transition-all">
