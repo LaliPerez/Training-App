@@ -1,12 +1,13 @@
+
 <!DOCTYPE html>
-<html lang="en">
+<html lang="es">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="./vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Trainer App</title>
+    <title>Trainer App Professional</title>
     <script src="https://cdn.tailwindcss.com"></script>
-  <script type="importmap">
+    <script type="importmap">
 {
   "imports": {
     "react": "https://esm.sh/react@18.2.0",
@@ -19,16 +20,13 @@
     "jspdf-autotable": "https://esm.sh/jspdf-autotable@3.8.2",
     "react-signature-canvas": "https://esm.sh/react-signature-canvas@1.0.6",
     "qrcode": "https://esm.sh/qrcode@1.5.3",
-    "@google/genai": "https://esm.sh/@google/genai@^1.35.0"
+    "@google/genai": "https://esm.sh/@google/genai@1.35.0"
   }
 }
 </script>
-<!-- Add Babel for JSX/TS transpilation in the browser -->
-<script src="https://unpkg.com/@babel/standalone@7.24.8/babel.min.js"></script>
 </head>
-  <body>
+  <body class="bg-[#060912]">
     <div id="root"></div>
-    <!-- Change script type to text/babel and add presets -->
-    <script type="text/babel" data-presets="react,typescript" data-type="module" src="./index.tsx"></script>
+    <script type="module" src="./index.tsx"></script>
   </body>
 </html>
