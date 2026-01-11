@@ -15,7 +15,8 @@
     "lucide-react": "0.378.0",
     "jspdf-autotable": "3.8.2",
     "react-signature-canvas": "1.0.6",
-    "qrcode": "1.5.3"
+    "qrcode": "1.5.3",
+    "@google/genai": "^1.35.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
