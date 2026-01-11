@@ -6,41 +6,156 @@
     <link rel="icon" type="image/svg+xml" href="./vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>Trainer App Pro</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-      tailwind.config = {
-        theme: {
-          extend: {
-            colors: {
-              brand: {
-                50: '#f0f7ff',
-                100: '#e0effe',
-                200: '#bae2fd',
-                300: '#7cc8fb',
-                400: '#38a9f8',
-                500: '#0e8ce9',
-                600: '#026fc7',
-                700: '#0358a1',
-                800: '#074b85',
-                900: '#0c3f6f',
-                950: '#082849',
-              },
-            }
-          }
-        }
-      }
-    </script>
     <style>
-      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap');
+      
+      :root {
+        --bg-dark: #060912;
+        --bg-header: rgba(10, 17, 32, 0.9);
+        --bg-card: #111827;
+        --bg-input: #0d111c;
+        --brand-500: #0e8ce9;
+        --brand-600: #026fc7;
+        --brand-shadow: rgba(2, 111, 199, 0.3);
+        --text-main: #f8fafc;
+        --text-dim: #94a3b8;
+        --text-muted: #64748b;
+        --danger: #ef4444;
+        --success: #22c55e;
+        --border-color: rgba(255, 255, 255, 0.05);
+        --radius-xl: 1.5rem;
+        --radius-2xl: 2rem;
+        --radius-full: 9999px;
+      }
+
+      * {
+        box-sizing: border-box;
+        -webkit-tap-highlight-color: transparent;
+      }
+
       body {
         font-family: 'Inter', sans-serif;
-        background-color: #060912;
+        background-color: var(--bg-dark);
         margin: 0;
-        color: #f8fafc;
+        color: var(--text-main);
+        line-height: 1.5;
+        overflow-x: hidden;
       }
-      #root {
-        min-height: 100vh;
+
+      /* Layout Utilities */
+      .container { width: 100%; max-width: 1100px; margin: 0 auto; padding: 0 1.5rem; }
+      .flex { display: flex; }
+      .flex-col { flex-direction: column; }
+      .items-center { align-items: center; }
+      .justify-between { justify-content: space-between; }
+      .justify-center { justify-content: center; }
+      .gap-2 { gap: 0.5rem; }
+      .gap-4 { gap: 1rem; }
+      .gap-6 { gap: 1.5rem; }
+      .grid { display: grid; }
+      .grid-cols-1 { grid-template-columns: 1fr; }
+      .text-center { text-align: center; }
+      .w-full { width: 100%; }
+      .mt-24 { margin-top: 6rem; }
+
+      /* Typography */
+      .font-black { font-weight: 900; }
+      .uppercase { text-transform: uppercase; }
+      .italic { font-style: italic; }
+      .tracking-tighter { letter-spacing: -0.05em; }
+      .tracking-widest { letter-spacing: 0.1em; }
+      .text-xs { font-size: 0.75rem; }
+      .text-sm { font-size: 0.875rem; }
+      .text-base { font-size: 1rem; }
+      .text-lg { font-size: 1.125rem; }
+      .text-xl { font-size: 1.25rem; }
+      .text-brand { color: var(--brand-500); }
+      .text-dim { color: var(--text-dim); }
+
+      /* Components */
+      header {
+        position: fixed;
+        top: 0;
+        width: 100%;
+        z-index: 100;
+        background: var(--bg-header);
+        backdrop-filter: blur(16px);
+        border-bottom: 1px solid var(--border-color);
+        padding: 1rem 1.5rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.5);
       }
+
+      .btn {
+        padding: 1rem 2rem;
+        border-radius: 1rem;
+        font-weight: 900;
+        text-transform: uppercase;
+        font-size: 0.75rem;
+        cursor: pointer;
+        border: none;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
+      }
+      .btn-brand { background: var(--brand-600); color: white; box-shadow: 0 10px 15px var(--brand-shadow); }
+      .btn-brand:hover { background: var(--brand-500); transform: translateY(-2px); }
+      .btn-brand:active { transform: scale(0.98); }
+      
+      .btn-outline-danger { background: transparent; border: 1px solid rgba(239, 68, 68, 0.2); color: var(--danger); }
+      .btn-outline-danger:hover { background: var(--danger); color: white; }
+
+      .card {
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-xl);
+        padding: 2rem;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+      }
+
+      .input-field {
+        width: 100%;
+        background: var(--bg-input);
+        border: 1px solid var(--border-color);
+        padding: 1.25rem;
+        border-radius: 1rem;
+        color: white;
+        font-weight: 600;
+        outline: none;
+        transition: border 0.2s;
+      }
+      .input-field:focus { border-color: var(--brand-600); }
+
+      .select-field {
+        width: 100%;
+        background: var(--bg-input);
+        border: 1px solid var(--border-color);
+        padding: 1.25rem;
+        border-radius: 1rem;
+        color: white;
+        font-weight: 600;
+        outline: none;
+        appearance: none;
+      }
+
+      /* Animations */
+      @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+      .animate-fade { animation: fadeIn 0.4s ease-out forwards; }
+
+      /* Responsive */
+      @media (max-width: 768px) {
+        .h-large { font-size: 3rem; }
+        .grid-cols-md-2 { grid-template-columns: 1fr; }
+      }
+      @media (min-width: 769px) {
+        .grid-cols-md-2 { grid-template-columns: 1fr 1fr; }
+        .h-large { font-size: 4rem; }
+      }
+
       .no-scrollbar::-webkit-scrollbar { display: none; }
       .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
     </style>
