@@ -1,12 +1,49 @@
 
 <!DOCTYPE html>
 <html lang="es">
-  <head>
+<head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="./vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Trainer App Professional</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Trainer App Pro</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              brand: {
+                50: '#f0f7ff',
+                100: '#e0effe',
+                200: '#bae2fd',
+                300: '#7cc8fb',
+                400: '#38a9f8',
+                500: '#0e8ce9',
+                600: '#026fc7',
+                700: '#0358a1',
+                800: '#074b85',
+                900: '#0c3f6f',
+                950: '#082849',
+              },
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+      body {
+        font-family: 'Inter', sans-serif;
+        background-color: #060912;
+        margin: 0;
+        color: #f8fafc;
+      }
+      #root {
+        min-height: 100vh;
+      }
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
     <script type="importmap">
 {
   "imports": {
@@ -14,17 +51,17 @@
     "react/": "https://esm.sh/react@18.2.0/",
     "react-dom": "https://esm.sh/react-dom@18.2.0",
     "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
-    "react-dom/": "https://esm.sh/react-dom@18.2.0/",
     "jspdf": "https://esm.sh/jspdf@2.5.1",
     "lucide-react": "https://esm.sh/lucide-react@0.378.0",
     "jspdf-autotable": "https://esm.sh/jspdf-autotable@3.8.2",
-    "react-signature-canvas": "https://esm.sh/react-signature-canvas@1.0.6",
-    "qrcode": "https://esm.sh/qrcode@1.5.3"
+    "react-signature-canvas": "https://esm.sh/react-signature-canvas@1.0.6?external=react,react-dom",
+    "qrcode": "https://esm.sh/qrcode@1.5.3",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/"
   }
 }
 </script>
 </head>
-  <body class="bg-[#060912] text-slate-200">
+<body>
     <div id="root"></div>
-  </body>
+</body>
 </html>
