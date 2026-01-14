@@ -1,505 +1,831 @@
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { 
-  BookOpen, Trash2, CheckCircle2, ShieldCheck, RefreshCw, ChevronRight, Lock, Key, Eraser, AlertTriangle, LogOut, Award, Loader2
+  Shield, User, Users, ClipboardList, LogOut, CheckCircle, 
+  ChevronRight, Trash2, Plus, Lock, ArrowLeft, Eye, EyeOff, 
+  QrCode, FileDown, Info, Award, ExternalLink, BookOpen,
+  FileText, X
 } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 import QRCode from 'qrcode';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 // --- Interfaces ---
-interface Client { id: string; name: string; cuit: string; }
-interface Module { id: string; name: string; documents: any[]; }
-interface Assignment { id: string; clientId: string; moduleId: string; createdAt: string; }
-interface AttendanceRecord { id: string; name: string; dni: string; companyId: string; moduleId: string; timestamp: string; signature: string; }
-interface Instructor { name: string; role: string; signature: string; }
-interface AppState { clients: Client[]; modules: Module[]; assignments: Assignment[]; records: AttendanceRecord[]; instructor: Instructor; }
+interface Client { 
+  id: string; 
+  name: string; 
+  cuit: string; 
+}
+interface Module { 
+  id: string; 
+  name: string; 
+  driveUrl: string; 
+}
+interface Assignment {
+  id: string;
+  clientId: string;
+  moduleId: string;
+  createdAt: string;
+}
+interface Record { 
+  id: string; 
+  name: string; 
+  dni: string; 
+  clientId: string;
+  assignmentId: string; 
+  signature: string; 
+  timestamp: string; 
+}
 
-// --- Config ---
-const STORAGE_KEYS = { 
-  MASTER_KEY: 'trainer_pro_mk_v42',
-  WSID: 'trainer_pro_wsid_v42', 
-  AUTH: 'trainer_pro_auth_v42',
-  STATE_CACHE: 'trainer_pro_cache_v42'
-};
-const API_URL = 'https://api.restful-api.dev/objects';
+interface AppState {
+  clients: Client[];
+  modules: Module[];
+  assignments: Assignment[];
+  records: Record[];
+  instructorName: string;
+  instructorRole: string;
+  instructorSignature: string; // Base64
+}
 
-// Helper: Ultra-Compression for Cloud Storage
-const compressSignature = (canvas: HTMLCanvasElement): string => {
-  const targetW = 180;
-  const targetH = 90;
-  const tempCanvas = document.createElement('canvas');
-  tempCanvas.width = targetW;
-  tempCanvas.height = targetH;
-  const ctx = tempCanvas.getContext('2d');
-  if (ctx) {
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(0, 0, targetW, targetH);
-    ctx.drawImage(canvas, 0, 0, targetW, targetH);
-  }
-  return tempCanvas.toDataURL('image/jpeg', 0.15);
-};
-
-const api = {
-  load: async (id: string): Promise<AppState | null> => {
-    if (!id) return null;
-    try {
-      const res = await fetch(`${API_URL}/${id}`, { cache: 'no-store' });
-      if (!res.ok) return null;
-      const json = await res.json();
-      return json.data || null;
-    } catch { return null; }
-  },
-  save: async (id: string, masterKey: string, data: AppState): Promise<boolean> => {
-    if (!id || !masterKey) return false;
-    try {
-      const optimizedData = { ...data, records: (data.records || []).slice(0, 15) };
-      const res = await fetch(`${API_URL}/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: `TrainerCloud_${masterKey}`, data: optimizedData })
-      });
-      return res.ok;
-    } catch { return false; }
-  },
-  findByKey: async (masterKey: string): Promise<{id: string, data: AppState} | null> => {
-    try {
-      const res = await fetch(API_URL);
-      const objects = await res.json();
-      const prefix = `TrainerCloud_`;
-      const found = objects.find((obj: any) => obj.name === `${prefix}${masterKey}`);
-      if (found) {
-        const fullRes = await fetch(`${API_URL}/${found.id}`);
-        const fullObj = await fullRes.json();
-        return { id: found.id, data: fullObj.data };
-      }
-      return null;
-    } catch { return null; }
-  },
-  create: async (masterKey: string): Promise<string> => {
-    try {
-      const res = await fetch(API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          name: `TrainerCloud_${masterKey}`, 
-          data: { clients: [], modules: [], assignments: [], records: [], instructor: { name: "", role: "", signature: "" } } 
-        })
-      });
-      const json = await res.json();
-      return json.id;
-    } catch { return ""; }
-  }
-};
+const STORAGE_KEY = 'trainer_pro_v5_data';
+const SYNC_KEY_STORAGE = 'trainer_sync_key';
+const SYNC_API = 'https://keyvalue.xyz/1'; 
 
 const App = () => {
-  const [view, setView] = useState<'landing' | 'userPortal' | 'adminLogin' | 'adminDashboard'>('landing');
-  const [masterKey, setMasterKey] = useState(() => localStorage.getItem(STORAGE_KEYS.MASTER_KEY) || "");
-  const [wsid, setWsid] = useState(() => localStorage.getItem(STORAGE_KEYS.WSID) || "");
-  const [isAuth, setIsAuth] = useState(() => localStorage.getItem(STORAGE_KEYS.AUTH) === 'true');
-  const [state, setState] = useState<AppState>(() => {
-    const cache = localStorage.getItem(STORAGE_KEYS.STATE_CACHE);
-    return cache ? JSON.parse(cache) : { clients: [], modules: [], assignments: [], records: [], instructor: { name: "", role: "", signature: "" } };
+  const [view, setView] = useState<'role-select' | 'admin-login' | 'admin' | 'trainer'>('role-select');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'error' | 'success'>('idle');
+  
+  const [data, setData] = useState<AppState>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      const defaultState: AppState = { 
+        clients: [], 
+        modules: [], 
+        assignments: [], 
+        records: [], 
+        instructorName: 'Adrian Ramundo', 
+        instructorRole: 'Resp. Higiene y Seguridad de la Empresa',
+        instructorSignature: ''
+      };
+      if (!saved) return defaultState;
+      const parsed = JSON.parse(saved);
+      return { ...defaultState, ...parsed };
+    } catch (e) {
+      return { clients: [], modules: [], assignments: [], records: [], instructorName: '', instructorRole: '', instructorSignature: '' };
+    }
   });
 
-  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'saved' | 'error'>('idle');
-  const [isLoggingIn, setIsLoggingIn] = useState(false);
-  const [activeTab, setActiveTab] = useState<'asistencias' | 'asignaciones' | 'modulos' | 'clientes' | 'instructor'>('asistencias');
-
-  // Ref to store the hash/string of the last synced state to avoid redundant renders and main thread blocking
-  const lastStateHashRef = useRef(JSON.stringify(state));
-
-  const sync = useCallback(async (silent = true) => {
-    if (!wsid) return;
-    if (!silent) setSyncStatus('syncing');
-    
+  // --- Remote Sync ---
+  const fetchRemote = async (keyToUse: string) => {
+    if (!keyToUse) return;
     try {
-      const cloud = await api.load(wsid);
-      if (cloud) {
-        const cloudString = JSON.stringify(cloud);
-        if (cloudString !== lastStateHashRef.current) {
-          lastStateHashRef.current = cloudString;
-          setState(cloud);
+      const res = await fetch(`${SYNC_API}/${keyToUse}`);
+      if (res.ok) {
+        const text = await res.text();
+        if (text && text.trim().length > 0) {
+          const remoteData = JSON.parse(text);
+          if (remoteData && typeof remoteData === 'object' && Array.isArray(remoteData.records)) {
+            setData(prev => {
+              if (JSON.stringify(prev) === JSON.stringify(remoteData)) return prev;
+              return { ...prev, ...remoteData };
+            });
+            setSyncStatus('success');
+          }
         }
-        setSyncStatus('idle');
-      } else if (!silent) {
-        setSyncStatus('error');
       }
     } catch (e) {
-      if (!silent) setSyncStatus('error');
-    }
-  }, [wsid]);
-
-  useEffect(() => {
-    const p = new URLSearchParams(window.location.search);
-    const urlWsid = p.get('wsid'), urlMk = p.get('mk');
-    if (urlWsid) setWsid(urlWsid);
-    if (urlMk) setMasterKey(urlMk);
-    if (p.get('cid') && p.get('mid')) setView('userPortal');
-  }, []);
-
-  useEffect(() => {
-    if (wsid) sync(false);
-    // Increased sync interval to reduce main thread pressure
-    const timer = setInterval(() => sync(true), 45000);
-    return () => clearInterval(timer);
-  }, [wsid, sync]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.STATE_CACHE, JSON.stringify(state));
-  }, [state]);
-
-  const updateGlobal = async (patch: Partial<AppState>) => {
-    if (!wsid) return;
-    setSyncStatus('syncing');
-    const newState = { ...state, ...patch };
-    setState(newState);
-    lastStateHashRef.current = JSON.stringify(newState);
-    
-    try {
-      const ok = await api.save(wsid, masterKey, newState);
-      setSyncStatus(ok ? 'saved' : 'error');
-      if (ok) setTimeout(() => setSyncStatus('idle'), 2000);
-    } catch {
       setSyncStatus('error');
     }
   };
 
-  const handleLogin = async (keyInput: string) => {
-    if (!keyInput) return;
-    setIsLoggingIn(true);
-    const cleanKey = keyInput.trim().toLowerCase().replace(/\s+/g, '_');
-    try {
-      const existing = await api.findByKey(cleanKey);
-      const targetWsid = existing ? existing.id : await api.create(cleanKey);
-      if (targetWsid) {
-        if (existing) {
-          setState(existing.data);
-          lastStateHashRef.current = JSON.stringify(existing.data);
-        }
-        localStorage.setItem(STORAGE_KEYS.AUTH, 'true');
-        localStorage.setItem(STORAGE_KEYS.MASTER_KEY, cleanKey);
-        localStorage.setItem(STORAGE_KEYS.WSID, targetWsid);
-        setMasterKey(cleanKey); setWsid(targetWsid); setIsAuth(true);
-        setView('adminDashboard');
+  useEffect(() => {
+    let key = localStorage.getItem(SYNC_KEY_STORAGE);
+    if (!key) {
+      key = 'TP_AUTO_' + Math.random().toString(36).substring(2, 12).toUpperCase();
+      localStorage.setItem(SYNC_KEY_STORAGE, key);
+    }
+    fetchRemote(key);
+    const pollInterval = setInterval(() => fetchRemote(key!), 30000); 
+    return () => clearInterval(pollInterval);
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    const key = localStorage.getItem(SYNC_KEY_STORAGE);
+    if (!key) return;
+
+    const timeoutId = setTimeout(async () => {
+      setSyncStatus('syncing');
+      try {
+        await fetch(`${SYNC_API}/${key}`, {
+          method: 'POST',
+          body: JSON.stringify(data),
+          headers: { 'Content-Type': 'application/json' }
+        });
+        setSyncStatus('success');
+      } catch (e) {
+        setSyncStatus('error');
       }
-    } catch { alert("Error de conexión"); }
-    finally { setIsLoggingIn(false); }
+    }, 2000); 
+
+    return () => clearTimeout(timeoutId);
+  }, [data]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('a')) setView('trainer');
+  }, []);
+
+  const handleAdminLogin = () => {
+    if (password === 'admin2025') { 
+      setView('admin');
+      setPassword('');
+    } else {
+      alert('Contraseña errónea.');
+    }
+  };
+
+  const handleGlobalBack = () => {
+    // Correctamente limpia el parámetro 'a' de la URL sin recargar la página
+    const url = new URL(window.location.href);
+    url.searchParams.delete('a');
+    // Usamos url.href para mantener la ruta exacta pero sin el parámetro de capacitación
+    window.history.replaceState({}, '', url.href);
+    setView('role-select');
   };
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <header>
-        <div className="flex items-center gap-2" style={{ cursor: 'pointer' }} onClick={() => setView('landing')}>
-          <div style={{ background: 'var(--brand-600)', padding: '0.4rem', borderRadius: '0.6rem', display: 'flex' }}><BookOpen size={18} color="white" /></div>
-          <span className="font-black italic uppercase tracking-tighter" style={{ fontSize: '1.1rem' }}>TRAINER<span className="text-brand">PRO</span></span>
-        </div>
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2" style={{ background: 'rgba(0,0,0,0.2)', padding: '0.3rem 0.8rem', borderRadius: '1rem', border: '1px solid var(--border-color)' }}>
-            <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: syncStatus === 'error' ? 'var(--danger)' : 'var(--success)' }}></div>
-            <span className="text-xs font-black uppercase tracking-widest text-dim">{syncStatus === 'syncing' ? 'Sync' : 'Cloud'}</span>
+    <div className="container">
+      {view === 'role-select' && (
+        <div className="animate-in flex flex-col gap-8 items-center justify-center" style={{ minHeight: '80vh' }}>
+          <div className="text-center">
+            <h1 style={{ fontSize: '3rem', fontWeight: 900, marginBottom: '0.5rem', letterSpacing: '-0.02em' }}>
+              Trainer<span style={{ color: 'var(--accent)' }}>Pro</span>
+            </h1>
+            <p style={{ color: 'var(--text-muted)', fontSize: '1.1rem' }}>Gestión profesional de capacitaciones</p>
           </div>
-          {isAuth && view === 'adminDashboard' && <button onClick={() => { localStorage.clear(); window.location.reload(); }} style={{ background: 'transparent', border: 'none', color: 'var(--danger)', cursor: 'pointer', padding: '0.5rem' }}><LogOut size={18} /></button>}
-        </div>
-      </header>
-
-      <main className="container mt-24">
-        {view === 'landing' && (
-          <div className="animate-fade text-center" style={{ height: '70vh', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: '2rem' }}>
-            <div>
-              <h1 className="font-black italic uppercase tracking-tighter h-large" style={{ margin: 0, lineHeight: 0.9 }}>TRAINER<br/><span className="text-brand">PRO</span></h1>
-              <p className="font-black uppercase tracking-widest text-xs" style={{ color: 'var(--text-muted)', marginTop: '1rem' }}>Digital Training Records & Signatures</p>
-            </div>
-            <button className="btn btn-brand" onClick={() => isAuth ? setView('adminDashboard') : setView('adminLogin')}>Acceder al Panel <ChevronRight size={16} /></button>
-          </div>
-        )}
-
-        {view === 'adminLogin' && (
-          <div className="card animate-fade" style={{ maxWidth: '400px', margin: '2rem auto' }}>
-            <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
-              <div style={{ background: 'rgba(14, 140, 233, 0.1)', padding: '1rem', borderRadius: '1rem', display: 'inline-block', marginBottom: '1rem' }}><ShieldCheck size={32} color="var(--brand-500)" /></div>
-              <h2 className="font-black uppercase italic text-xl">Acceso Seguro</h2>
-            </div>
-            <div className="grid gap-4">
-              <div style={{ position: 'relative' }}>
-                <Lock style={{ position: 'absolute', left: '1rem', top: '1.2rem', color: 'var(--text-muted)' }} size={18} />
-                <input type="password" placeholder="Clave de Acceso" className="input-field" style={{ paddingLeft: '3rem' }} onKeyDown={(e) => e.key === 'Enter' && handleLogin((e.target as HTMLInputElement).value)} />
+          <div className="flex gap-6 w-full flex-col md:flex-row" style={{ maxWidth: '600px' }}>
+            <button type="button" className="card w-full flex flex-col items-center gap-4 transition-all hover:scale-[1.02]" onClick={() => setView('admin-login')} style={{ cursor: 'pointer', border: '1px solid var(--border)' }}>
+              <Shield size={56} color="var(--accent)" />
+              <div style={{ textAlign: 'center' }}>
+                <span style={{ display: 'block', fontWeight: 800, fontSize: '1.2rem' }}>ADMINISTRADOR</span>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Configuración y Reportes</span>
               </div>
-              <button disabled={isLoggingIn} className="btn btn-brand" onClick={() => handleLogin((document.querySelector('input[type="password"]') as HTMLInputElement).value)}>
-                {isLoggingIn ? <RefreshCw className="animate-spin" size={16} /> : "Iniciar Sesión"}
-              </button>
-            </div>
+            </button>
+            <button type="button" className="card w-full flex flex-col items-center gap-4 transition-all hover:scale-[1.02]" onClick={() => setView('trainer')} style={{ cursor: 'pointer', border: '1px solid var(--border)' }}>
+              <User size={56} color="var(--success)" />
+              <div style={{ textAlign: 'center' }}>
+                <span style={{ display: 'block', fontWeight: 800, fontSize: '1.2rem' }}>ALUMNO</span>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Firmar Asistencia</span>
+              </div>
+            </button>
           </div>
-        )}
+        </div>
+      )}
 
-        {view === 'adminDashboard' && (
-          <div className="animate-fade flex flex-col gap-6">
-            <div className="dashboard-header flex justify-between items-end gap-4" style={{ flexWrap: 'wrap' }}>
+      {view === 'admin-login' && (
+        <div className="animate-in flex flex-col gap-6 items-center justify-center" style={{ minHeight: '80vh' }}>
+          <div className="card w-full" style={{ maxWidth: '400px' }}>
+            <h2 className="flex items-center gap-3 mb-6"><Lock size={24} color="var(--accent)" /> Acceso Admin</h2>
+            <div className="flex flex-col gap-5">
               <div>
-                <h1 className="font-black italic uppercase text-2xl tracking-tighter">Mi <span className="text-brand">Gestión</span></h1>
-                <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(0,0,0,0.2)', padding: '0.3rem 0.6rem', borderRadius: '0.5rem', width: 'fit-content' }}>
-                  <Key size={12} color="var(--brand-500)" />
-                  <span style={{ fontSize: '0.65rem', fontWeight: 900, textTransform: 'uppercase', color: 'var(--text-muted)' }}>{masterKey}</span>
+                <label>Contraseña</label>
+                <div style={{ position: 'relative' }}>
+                  <input 
+                    type={showPassword ? "text" : "password"} 
+                    value={password} 
+                    onChange={(e) => setPassword(e.target.value)} 
+                    onKeyDown={(e) => e.key === 'Enter' && handleAdminLogin()} 
+                    style={{ paddingRight: '45px' }} 
+                  />
+                  <button type="button" onClick={() => setShowPassword(!showPassword)} style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
+                    {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                  </button>
                 </div>
               </div>
-              <div style={{ background: 'var(--bg-card)', padding: '0.3rem', borderRadius: '1rem', display: 'flex', overflowX: 'auto' }} className="no-scrollbar">
-                {['asistencias', 'asignaciones', 'modulos', 'clientes'].map(t => (
-                  <button key={t} onClick={() => setActiveTab(t as any)} style={{ 
-                    padding: '0.6rem 1.2rem', 
-                    borderRadius: '0.8rem', 
-                    border: 'none', 
-                    fontSize: '0.65rem', 
-                    fontWeight: 900, 
-                    textTransform: 'uppercase',
-                    cursor: 'pointer',
-                    background: activeTab === t ? 'var(--brand-600)' : 'transparent',
-                    color: activeTab === t ? 'white' : 'var(--text-muted)',
-                    whiteSpace: 'nowrap'
-                  }}>{t}</button>
-                ))}
-              </div>
-            </div>
-
-            <div className="card" style={{ minHeight: '500px' }}>
-              {activeTab === 'asistencias' && (
-                <div className="flex flex-col gap-6">
-                  <div className="flex justify-between items-center">
-                    <h3 className="font-black uppercase italic text-lg">Firmas Recibidas</h3>
-                    <div className="flex gap-2">
-                      <button className="btn btn-outline-danger" style={{ padding: '0.6rem' }} onClick={() => confirm("¿Vaciar?") && updateGlobal({ records: [] })}><Eraser size={18} /></button>
-                      <button className="btn btn-brand" style={{ padding: '0.6rem', background: 'rgba(14, 140, 233, 0.1)', color: 'var(--brand-500)', boxShadow: 'none' }} onClick={() => sync(false)}><RefreshCw size={18} /></button>
-                    </div>
-                  </div>
-                  <div className="no-scrollbar" style={{ overflowX: 'auto', borderRadius: '1rem', border: '1px solid var(--border-color)' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.75rem' }}>
-                      <thead style={{ background: 'var(--bg-input)', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
-                        <tr>
-                          <th style={{ padding: '1rem', textAlign: 'left' }}>Empleado</th>
-                          <th style={{ padding: '1rem', textAlign: 'left' }}>Módulo</th>
-                          <th style={{ padding: '1rem', textAlign: 'center' }}>Firma</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(state.records || []).map(r => (
-                          <tr key={r.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                            <td style={{ padding: '1rem' }}><strong style={{ display: 'block' }}>{r.name}</strong><span style={{ color: 'var(--text-muted)' }}>{r.dni}</span></td>
-                            <td style={{ padding: '1rem', color: 'var(--brand-500)', fontWeight: 900 }}>{state.modules.find(m => m.id === r.moduleId)?.name || 'CURSO'}</td>
-                            <td style={{ padding: '1rem', textAlign: 'center' }}>
-                              {r.signature ? <img src={r.signature} style={{ height: '30px', background: 'white', padding: '2px', borderRadius: '4px' }} /> : '-'}
-                            </td>
-                          </tr>
-                        ))}
-                        {(!state.records || state.records.length === 0) && (
-                          <tr><td colSpan={3} style={{ padding: '4rem', textAlign: 'center', color: 'var(--text-muted)', fontStyle: 'italic' }}>No hay registros en la nube</td></tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-
-              {activeTab === 'asignaciones' && (
-                <div className="grid gap-6">
-                  <div className="grid grid-cols-md-2 gap-4">
-                    <div className="flex flex-col gap-1">
-                      <label className="text-xs uppercase font-black text-muted italic" style={{ paddingLeft: '0.5rem' }}>Empresa</label>
-                      <select id="sel-client" className="select-field">
-                        <option value="">SELECCIONE CLIENTE</option>
-                        {state.clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                      </select>
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <label className="text-xs uppercase font-black text-muted italic" style={{ paddingLeft: '0.5rem' }}>Curso</label>
-                      <select id="sel-module" className="select-field">
-                        <option value="">SELECCIONE MÓDULO</option>
-                        {state.modules.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                      </select>
-                    </div>
-                  </div>
-                  <button className="btn btn-brand" onClick={() => {
-                    const cid = (document.getElementById('sel-client') as HTMLSelectElement).value;
-                    const mid = (document.getElementById('sel-module') as HTMLSelectElement).value;
-                    if(cid && mid) updateGlobal({ assignments: [...(state.assignments || []), { id: Date.now().toString(), clientId: cid, moduleId: mid, createdAt: new Date().toISOString() }] });
-                  }}>Generar Código QR</button>
-                  
-                  <div className="grid grid-cols-md-2 gap-4">
-                    {state.assignments.map(a => (
-                      <div key={a.id} className="card" style={{ padding: '1.5rem', background: 'var(--bg-input)', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                        <div className="flex justify-between items-start">
-                          <h4 className="font-black uppercase text-sm italic" style={{ margin: 0 }}>{state.modules.find(m => m.id === a.moduleId)?.name}</h4>
-                          <Trash2 size={16} color="var(--danger)" style={{ cursor: 'pointer' }} onClick={() => updateGlobal({ assignments: state.assignments.filter(x => x.id !== a.id) })} />
-                        </div>
-                        <p className="text-brand font-black uppercase italic" style={{ fontSize: '0.65rem' }}>{state.clients.find(c => c.id === a.clientId)?.name}</p>
-                        <button className="btn btn-brand" style={{ width: '100%', fontSize: '0.65rem', padding: '0.75rem' }} onClick={async () => {
-                          const url = `${window.location.origin}${window.location.pathname}?cid=${a.clientId}&mid=${a.moduleId}&wsid=${wsid}&mk=${masterKey}`;
-                          const qrData = await QRCode.toDataURL(url, { width: 500, margin: 2 });
-                          const win = window.open();
-                          win?.document.write(`
-                            <body style="background:#060912;color:white;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
-                              <div style="text-align:center;background:#111827;padding:50px;border-radius:40px;border:1px solid rgba(255,255,255,0.1);max-width:400px;box-shadow:0 20px 50px rgba(0,0,0,0.5);">
-                                <h2 style="text-transform:uppercase;margin-bottom:10px;font-size:18px;font-weight:900;">REGISTRO DIGITAL</h2>
-                                <p style="color:#38a9f8;font-weight:bold;text-transform:uppercase;font-size:10px;margin-bottom:40px;letter-spacing:2px;">${state.modules.find(m => m.id === a.moduleId)?.name}</p>
-                                <div style="background:white;padding:20px;border-radius:20px;display:inline-block;"><img src="${qrData}" style="width:250px;display:block;"></div>
-                                <p style="margin-top:30px;font-size:9px;text-transform:uppercase;color:#64748b;letter-spacing:1px;">Escanee para iniciar sesión de firma</p>
-                              </div>
-                            </body>
-                          `);
-                        }}>Abrir QR</button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {activeTab === 'modulos' && (
-                <div className="grid gap-6">
-                  <div className="flex gap-4">
-                    <input id="mod-name" placeholder="TÍTULO DE CAPACITACIÓN" className="input-field" />
-                    <button className="btn btn-brand" onClick={() => {
-                      const n = (document.getElementById('mod-name') as HTMLInputElement).value;
-                      if(n) { updateGlobal({ modules: [...(state.modules || []), { id: Date.now().toString(), name: n.toUpperCase(), documents: [] }] }); (document.getElementById('mod-name') as HTMLInputElement).value = ""; }
-                    }}>Crear</button>
-                  </div>
-                  <div className="grid gap-2">
-                    {state.modules.map(m => (
-                      <div key={m.id} className="flex justify-between items-center" style={{ padding: '1rem', background: 'var(--bg-input)', borderRadius: '1rem' }}>
-                        <span className="font-black italic text-sm">{m.name}</span>
-                        <Trash2 size={16} color="var(--danger)" style={{ cursor: 'pointer' }} onClick={() => confirm("¿Borrar?") && updateGlobal({ modules: state.modules.filter(x => x.id !== m.id) })} />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {activeTab === 'clientes' && (
-                <div className="grid gap-6">
-                  <div className="grid grid-cols-md-2 gap-4">
-                    <input id="cli-name" placeholder="NOMBRE DE EMPRESA" className="input-field" />
-                    <input id="cli-cuit" placeholder="CUIT / IDENTIFICADOR" className="input-field" />
-                  </div>
-                  <button className="btn btn-brand" onClick={() => {
-                    const n = (document.getElementById('cli-name') as HTMLInputElement).value;
-                    const c = (document.getElementById('cli-cuit') as HTMLInputElement).value;
-                    if(n) { updateGlobal({ clients: [...(state.clients || []), { id: Date.now().toString(), name: n.toUpperCase(), cuit: c }] }); (document.getElementById('cli-name') as HTMLInputElement).value = ""; (document.getElementById('cli-cuit') as HTMLInputElement).value = ""; }
-                  }}>Registrar Cliente</button>
-                  <div className="grid gap-2">
-                    {state.clients.map(cl => (
-                      <div key={cl.id} className="flex justify-between items-center" style={{ padding: '1rem', background: 'var(--bg-input)', borderRadius: '1rem' }}>
-                        <div><strong className="text-sm font-black italic">{cl.name}</strong><br/><small style={{ color: 'var(--text-muted)', fontSize: '0.65rem', fontWeight: 700 }}>{cl.cuit}</small></div>
-                        <Trash2 size={16} color="var(--danger)" style={{ cursor: 'pointer' }} onClick={() => confirm("¿Borrar?") && updateGlobal({ clients: state.clients.filter(x => x.id !== cl.id) })} />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+              <button type="button" className="btn btn-primary w-full" onClick={handleAdminLogin}>Entrar</button>
+              <button type="button" className="btn btn-secondary w-full" onClick={handleGlobalBack}>Volver</button>
             </div>
           </div>
-        )}
+        </div>
+      )}
 
-        {view === 'userPortal' && (
-          <UserPortal 
-            state={state} 
-            onSubmit={async (rec) => {
-              const cloud = await api.load(wsid);
-              const base = cloud || state;
-              const updated = { ...base, records: [rec, ...(base.records || [])].slice(0, 15) };
-              const ok = await api.save(wsid, masterKey, updated);
-              if (!ok) throw new Error("Cloud Error");
-              setState(updated);
-              lastStateHashRef.current = JSON.stringify(updated);
-            }} 
-          />
-        )}
-      </main>
+      {view === 'admin' && (
+        <AdminPanel 
+          data={data} 
+          setData={setData} 
+          onLogout={handleGlobalBack} 
+          syncStatus={syncStatus}
+        />
+      )}
       
-      <footer style={{ marginTop: 'auto', padding: '2rem 0', textAlign: 'center', opacity: 0.3 }}>
-        <p className="font-black uppercase tracking-widest italic" style={{ fontSize: '0.6rem' }}>TrainerPro v4.2 Cloud Infrastructure</p>
-      </footer>
+      {view === 'trainer' && (
+        <TrainerPanel 
+          data={data} 
+          setData={setData} 
+          onBack={handleGlobalBack} 
+        />
+      )}
     </div>
   );
 };
 
-// --- Portal de Usuario Móvil ---
-const UserPortal = ({ state, onSubmit }: { state: AppState, onSubmit: (r: AttendanceRecord) => Promise<void> }) => {
-  const [step, setStep] = useState(1);
-  const [name, setName] = useState("");
-  const [dni, setDni] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [done, setDone] = useState(false);
-  const sigRef = useRef<SignatureCanvas>(null);
-  
-  const p = new URLSearchParams(window.location.search);
-  const cid = p.get('cid'), mid = p.get('mid');
-  const cl = state.clients?.find(c => c.id === cid);
-  const mo = state.modules?.find(m => m.id === mid);
+const AdminPanel = ({ data, setData, onLogout, syncStatus }: any) => {
+  const [activeTab, setActiveTab] = useState<'asistencias' | 'asignaciones' | 'config'>('asistencias');
+  const instructorSigCanvas = useRef<SignatureCanvas>(null);
 
-  if (done) return (
-    <div className="animate-fade text-center flex flex-col items-center justify-center" style={{ padding: '4rem 0', gap: '2rem' }}>
-      <div style={{ background: 'rgba(34, 197, 94, 0.1)', padding: '2rem', borderRadius: '50%' }}><CheckCircle2 size={64} color="var(--success)" /></div>
-      <div>
-        <h2 className="font-black uppercase italic text-xl">¡Registro Exitoso!</h2>
-        <p className="text-dim text-sm" style={{ marginTop: '0.5rem' }}>Su asistencia y firma han sido enviadas correctamente.</p>
-      </div>
-      <button className="btn" style={{ background: 'var(--bg-card)', color: 'white' }} onClick={() => window.location.href='/'}>Volver al Inicio</button>
-    </div>
-  );
+  const [newClientName, setNewClientName] = useState('');
+  const [newClientCuit, setNewClientCuit] = useState('');
+  const [newModuleName, setNewModuleName] = useState('');
+  const [newModuleDriveUrl, setNewModuleDriveUrl] = useState('');
+
+  const [selClientId, setSelClientId] = useState('');
+  const [selModuleId, setSelModuleId] = useState('');
+
+  const saveInstructorSignature = () => {
+    if (instructorSigCanvas.current?.isEmpty()) return alert("Firme primero en el panel.");
+    const signature = instructorSigCanvas.current!.getTrimmedCanvas().toDataURL('image/png');
+    setData({ ...data, instructorSignature: signature });
+    alert("Firma guardada correctamente.");
+  };
+
+  const generatePDF = (assignmentId: string) => {
+    const assignment = data.assignments.find((a: any) => a.id === assignmentId);
+    if (!assignment) return;
+    const client = data.clients.find((c: any) => c.id === assignment.clientId);
+    const module = data.modules.find((m: any) => m.id === assignment.moduleId);
+    const records = data.records.filter((r: any) => r.assignmentId === assignmentId);
+
+    const doc = new jsPDF();
+    const width = doc.internal.pageSize.getWidth();
+    
+    // Header Bar Dark
+    doc.setFillColor(15, 23, 42); 
+    doc.rect(0, 0, width, 40, 'F');
+    
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(22);
+    doc.setFont('helvetica', 'bold');
+    doc.text('CONSTANCIA DE CAPACITACION', 14, 25);
+    
+    // Info Section
+    doc.setTextColor(30, 41, 59);
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Información de la Formación:', 14, 55);
+    
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Empresa: ${client?.name || 'N/A'} ${client?.cuit ? `(CUIT: ${client.cuit})` : ''}`, 14, 65);
+    doc.text(`Capacitación: ${module?.name || 'N/A'}`, 14, 72);
+
+    const tableData = records.map((r: any) => [
+      new Date(r.timestamp).toLocaleDateString(),
+      r.name,
+      r.dni,
+      '' // Signature placeholder
+    ]);
+
+    autoTable(doc, {
+      startY: 85,
+      head: [['Fecha', 'Apellido y Nombre', 'DNI', 'Firma']],
+      body: tableData,
+      didDrawCell: (cellData: any) => {
+        if (cellData.section === 'body' && cellData.column.index === 3) {
+          const record = records[cellData.row.index];
+          if (record && record.signature) {
+            try {
+              doc.addImage(record.signature, 'PNG', cellData.cell.x + 2, cellData.cell.y + 2, 26, 11);
+            } catch (e) {
+              console.error("Error adding signature to PDF", e);
+            }
+          }
+        }
+      },
+      styles: { 
+        minCellHeight: 16, 
+        valign: 'middle', 
+        fontSize: 9,
+        cellPadding: 3,
+        lineColor: [200, 200, 200],
+        lineWidth: 0.1,
+      },
+      headStyles: {
+        fillColor: [15, 23, 42],
+        textColor: 255,
+        fontStyle: 'bold',
+        halign: 'center'
+      },
+      columnStyles: {
+        0: { halign: 'center', cellWidth: 30 },
+        1: { halign: 'left' },
+        2: { halign: 'center', cellWidth: 30 },
+        3: { halign: 'center', cellWidth: 40 }
+      }
+    });
+
+    // Instructor Signature Block - Bottom Right
+    // @ts-ignore
+    const finalY = doc.lastAutoTable?.finalY || 200;
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const footerY = Math.max(finalY + 40, pageHeight - 60);
+    const rightX = width - 14;
+
+    if (data.instructorSignature) {
+      try {
+        doc.addImage(data.instructorSignature, 'PNG', rightX - 50, footerY - 25, 45, 20);
+      } catch (e) {
+        console.error("Error adding instructor signature", e);
+      }
+    }
+    
+    doc.setDrawColor(30, 41, 59);
+    doc.line(rightX - 65, footerY + 2, rightX, footerY + 2);
+    
+    doc.setTextColor(30, 41, 59);
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Firma del Instructor', rightX, footerY + 8, { align: 'right' });
+    doc.text(data.instructorName || 'N/A', rightX, footerY + 14, { align: 'right' });
+    
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(100);
+    doc.text(data.instructorRole || 'N/A', rightX, footerY + 20, { align: 'right' });
+
+    doc.save(`Planilla_${client?.name.replace(/\s+/g, '_')}.pdf`);
+  };
+
+  const generateAccessFlyer = async (assignmentId: string) => {
+    const assignment = data.assignments.find((a: any) => a.id === assignmentId);
+    if (!assignment) return;
+    const client = data.clients.find((c: any) => c.id === assignment.clientId);
+    const module = data.modules.find((m: any) => m.id === assignment.moduleId);
+    
+    const doc = new jsPDF();
+    const width = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    
+    // Header Bar Dark
+    doc.setFillColor(15, 23, 42); 
+    doc.rect(0, 0, width, 55, 'F');
+    
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(24);
+    doc.setFont('helvetica', 'bold');
+    doc.text('ACCESO A CAPACITACIÓN DIGITAL', width / 2, 32, { align: 'center' });
+    
+    // Solicitante Section
+    doc.setTextColor(30, 41, 59);
+    doc.setFontSize(13);
+    doc.setFont('helvetica', 'bold');
+    doc.text('SOLICITANTE:', 14, 75);
+    doc.setFont('helvetica', 'normal');
+    doc.text(client?.name.toUpperCase() || 'N/A', 14, 83);
+    
+    // Módulo Section
+    doc.setFont('helvetica', 'bold');
+    doc.text('MÓDULO:', 14, 100);
+    doc.setFontSize(30);
+    doc.text(`${module?.name.toUpperCase() || 'N/A'}`, 14, 118);
+    
+    const baseUrl = window.location.origin + window.location.pathname;
+    const fullUrl = `${baseUrl}?a=${assignment.id}`;
+    
+    // QR Code Large Centered
+    const qrDataUrl = await QRCode.toDataURL(fullUrl, { errorCorrectionLevel: 'H', margin: 1, width: 600 });
+    doc.addImage(qrDataUrl, 'PNG', (width - 120) / 2, 135, 120, 120);
+    
+    // URL and Footer Text
+    doc.setTextColor(37, 99, 235);
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.text(fullUrl, width / 2, 265, { align: 'center', maxWidth: 180 });
+    
+    doc.setTextColor(100);
+    doc.setFontSize(12);
+    doc.text('Escanee el código QR para registrar su asistencia.', width / 2, 275, { align: 'center' });
+    
+    // Instructor Signature Block - Bottom Right
+    const rightX = width - 14;
+    const footerY = pageHeight - 45;
+
+    if (data.instructorSignature) {
+      try {
+        doc.addImage(data.instructorSignature, 'PNG', rightX - 55, footerY - 25, 45, 20);
+      } catch (e) {
+        console.error("Error adding instructor signature", e);
+      }
+    }
+    
+    doc.setDrawColor(30, 41, 59);
+    doc.line(rightX - 65, footerY + 2, rightX, footerY + 2);
+    
+    doc.setTextColor(30, 41, 59);
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.text(data.instructorName?.toUpperCase() || 'N/A', rightX, footerY + 10, { align: 'right' });
+    
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(100);
+    doc.text(data.instructorRole?.toUpperCase() || 'N/A', rightX, footerY + 16, { align: 'right' });
+    
+    doc.save(`QR_Acceso_${client?.name.replace(/\s+/g, '_')}.pdf`);
+  };
 
   return (
-    <div className="animate-fade" style={{ maxWidth: '450px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '2rem' }}>
-      <div className="text-center">
-        <h1 className="font-black uppercase italic text-lg leading-tight" style={{ margin: 0 }}>{mo?.name || "CARGA DE ASISTENCIA"}</h1>
-        <div style={{ display: 'inline-block', background: 'rgba(14, 140, 233, 0.1)', padding: '0.2rem 0.8rem', borderRadius: '1rem', marginTop: '0.5rem' }}>
-          <span className="text-brand font-black uppercase italic text-xs tracking-widest">{cl?.name || "CLIENTE"}</span>
+    <div className="animate-in">
+      <header className="flex justify-between items-center mb-10 py-4">
+        <div className="flex flex-col">
+          <h1 style={{ margin: 0, fontWeight: 900 }}>Admin Dashboard</h1>
+          <div className="flex items-center gap-2 text-xs font-bold mt-1">
+            <span className={syncStatus === 'success' ? 'text-success' : (syncStatus === 'error' ? 'text-danger' : 'text-muted')}>
+              {syncStatus === 'syncing' ? '↻ GUARDANDO...' : syncStatus === 'success' ? '● GUARDADO EN LA NUBE' : '○ MODO LOCAL'}
+            </span>
+          </div>
         </div>
+        <button type="button" className="btn btn-secondary" onClick={onLogout}><LogOut size={18} /> Salir</button>
+      </header>
+
+      <div className="flex gap-4 mb-8 overflow-x-auto pb-2">
+        <button type="button" className={`btn ${activeTab === 'asistencias' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setActiveTab('asistencias')}><ClipboardList size={18} /> Asistencias</button>
+        <button type="button" className={`btn ${activeTab === 'asignaciones' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setActiveTab('asignaciones')}><QrCode size={18} /> Generar QR</button>
+        <button type="button" className={`btn ${activeTab === 'config' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setActiveTab('config')}><Users size={18} /> Configurar</button>
       </div>
 
-      <div className="card">
-        {step === 1 ? (
-          <div className="grid gap-6">
-            <div className="flex flex-col gap-1">
-              <label className="text-xs uppercase font-black text-muted px-2">Nombre Completo</label>
-              <input value={name} onChange={e => setName(e.target.value.toUpperCase())} placeholder="EJ: PEDRO SÁNCHEZ" className="input-field" />
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-xs uppercase font-black text-muted px-2">Documento / DNI</label>
-              <input value={dni} onChange={e => setDni(e.target.value)} placeholder="SOLO NÚMEROS" className="input-field" />
-            </div>
-            <button className="btn btn-brand" onClick={() => { if(name && dni) setStep(2); else alert("Complete sus datos"); }}>Siguiente Paso <ChevronRight size={16} /></button>
-          </div>
-        ) : (
-          <div className="grid gap-6">
-            <div className="flex justify-between items-center px-2">
-              <span className="text-xs font-black uppercase text-dim italic">Firma Digital Requerida</span>
-              <button onClick={() => sigRef.current?.clear()} style={{ background: 'transparent', border: 'none', color: 'var(--danger)', fontSize: '0.65rem', fontWeight: 900, textTransform: 'uppercase', cursor: 'pointer' }}>Borrar</button>
-            </div>
-            <div style={{ background: 'white', borderRadius: '1.5rem', height: '260px', overflow: 'hidden', border: '4px solid var(--bg-input)' }}>
-              <SignatureCanvas ref={sigRef} penColor="blue" canvasProps={{ style: { width: '100%', height: '100%', cursor: 'crosshair' } }} />
-            </div>
-            <div className="flex gap-3">
-              <button className="btn" style={{ background: 'var(--bg-input)', color: 'white', flex: 1 }} onClick={() => setStep(1)}>Atrás</button>
-              <button disabled={isSubmitting} className="btn btn-brand" style={{ flex: 2 }} onClick={async () => {
-                if(sigRef.current?.isEmpty()) return alert("Debe firmar para continuar");
-                setIsSubmitting(true);
-                try {
-                  const canvas = sigRef.current!.getTrimmedCanvas();
-                  const sig = compressSignature(canvas);
-                  await onSubmit({ id: Date.now().toString(), name, dni, companyId: cid!, moduleId: mid!, timestamp: new Date().toISOString(), signature: sig });
-                  setDone(true);
-                } catch { alert("Error de servidor. Intente nuevamente."); }
-                finally { setIsSubmitting(false); }
-              }}>
-                {isSubmitting ? <Loader2 className="animate-spin" size={16} /> : "Finalizar y Enviar"}
-              </button>
+      {activeTab === 'config' && (
+        <div className="flex flex-col gap-8 animate-in">
+          <div className="card">
+            <h3 className="flex items-center gap-2 mb-4"><Info size={20} color="var(--accent)" /> Datos del Instructor</h3>
+            <div className="grid md:grid-cols-2 gap-8">
+              <div className="flex flex-col gap-4">
+                <div>
+                  <label>Nombre del Instructor</label>
+                  <input value={data.instructorName} onChange={e => setData({...data, instructorName: e.target.value})} />
+                </div>
+                <div>
+                  <label>Cargo / Rol</label>
+                  <input value={data.instructorRole} onChange={e => setData({...data, instructorRole: e.target.value})} />
+                </div>
+              </div>
+              <div>
+                <label>Firma del Instructor (Táctil o Mouse)</label>
+                <div className="signature-wrapper" style={{ height: '180px', marginBottom: '1rem' }}>
+                  {React.createElement(SignatureCanvas as any, {
+                    ref: instructorSigCanvas,
+                    penColor: "black",
+                    canvasProps: { style: { width: '100%', height: '100%' } }
+                  })}
+                </div>
+                <div className="flex gap-2">
+                  <button type="button" className="btn btn-primary flex-1" onClick={saveInstructorSignature}>Guardar Firma</button>
+                  <button type="button" className="btn btn-secondary" onClick={() => instructorSigCanvas.current?.clear()}>Limpiar</button>
+                </div>
+                {data.instructorSignature && (
+                  <div className="mt-4 p-2 bg-white/5 rounded border border-border flex items-center justify-between">
+                    <span className="text-xs">Firma Actual Registrada</span>
+                    <img src={data.instructorSignature} alt="Firma" style={{ height: '30px', background: 'white', borderRadius: '4px' }} />
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-        )}
-      </div>
+
+          <div className="grid gap-6 md:grid-cols-2">
+            <div className="card">
+              <h3 className="mb-4">Empresas</h3>
+              <div className="flex flex-col gap-3 mb-4">
+                <input value={newClientName} onChange={e => setNewClientName(e.target.value)} placeholder="Nombre Empresa" />
+                <input value={newClientCuit} onChange={e => setNewClientCuit(e.target.value)} placeholder="CUIT" />
+                <button type="button" className="btn btn-primary" onClick={() => {
+                  if(!newClientName) return;
+                  setData({...data, clients: [...data.clients, {id: Date.now().toString(), name: newClientName, cuit: newClientCuit}]});
+                  setNewClientName(''); setNewClientCuit('');
+                }}><Plus /> Añadir</button>
+              </div>
+              {data.clients.map((c:any) => <div key={c.id} className="flex justify-between items-center p-2 mb-2 rounded bg-white/5">{c.name} <button onClick={() => setData({...data, clients: data.clients.filter((x:any)=>x.id!==c.id)})} className="btn btn-danger" style={{padding:'5px'}}><Trash2 size={14}/></button></div>)}
+            </div>
+            <div className="card">
+              <h3 className="mb-4">Capacitaciones</h3>
+              <div className="flex flex-col gap-3 mb-4">
+                <input value={newModuleName} onChange={e => setNewModuleName(e.target.value)} placeholder="Nombre del Módulo" />
+                <input value={newModuleDriveUrl} onChange={e => setNewModuleDriveUrl(e.target.value)} placeholder="Link del Material (Drive)" />
+                <button type="button" className="btn btn-primary" onClick={() => {
+                  if(!newModuleName) return;
+                  setData({...data, modules: [...data.modules, {id: Date.now().toString(), name: newModuleName, driveUrl: newModuleDriveUrl}]});
+                  setNewModuleName(''); setNewModuleDriveUrl('');
+                }}><Plus /> Añadir</button>
+              </div>
+              {data.modules.map((m:any) => <div key={m.id} className="flex justify-between items-center p-2 mb-2 rounded bg-white/5">{m.name} <button onClick={() => setData({...data, modules: data.modules.filter((x:any)=>x.id!==m.id)})} className="btn btn-danger" style={{padding:'5px'}}><Trash2 size={14}/></button></div>)}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'asignaciones' && (
+        <div className="grid gap-6 animate-in">
+          <div className="card">
+            <h3 className="mb-6">Nueva Asignación QR</h3>
+            <div className="grid md:grid-cols-3 gap-4">
+              <select value={selClientId} onChange={e => setSelClientId(e.target.value)}>
+                <option value="">Empresa...</option>
+                {data.clients.map((c:any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              <select value={selModuleId} onChange={e => setSelModuleId(e.target.value)}>
+                <option value="">Módulo...</option>
+                {data.modules.map((m:any) => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
+              <button type="button" className="btn btn-primary" onClick={() => {
+                if(!selClientId || !selModuleId) return alert("Seleccione ambos.");
+                setData({...data, assignments: [...data.assignments, {id: Math.random().toString(36).substr(2,9), clientId: selClientId, moduleId: selModuleId, createdAt: new Date().toISOString()}]});
+                setSelClientId(''); setSelModuleId('');
+              }}>Crear Enlace QR</button>
+            </div>
+          </div>
+          {data.assignments.map((as: any) => (
+            <div key={as.id} className="card flex items-center justify-between">
+              <div>
+                <strong>{data.clients.find((c:any)=>c.id===as.clientId)?.name}</strong>
+                <p className="text-muted text-xs">Módulo: {data.modules.find((m:any)=>m.id===as.moduleId)?.name}</p>
+              </div>
+              <div className="flex gap-2">
+                <button type="button" className="btn btn-success" onClick={() => generateAccessFlyer(as.id)} title="Descargar Flyer QR"><FileDown size={14} /></button>
+                <button type="button" className="btn btn-secondary" onClick={() => generatePDF(as.id)} title="Planilla de Asistencia"><ClipboardList size={14} /></button>
+                <button type="button" className="btn btn-danger" onClick={() => setData({...data, assignments: data.assignments.filter((x:any)=>x.id!==as.id)})}><Trash2 size={14}/></button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {activeTab === 'asistencias' && (
+        <div className="card animate-in">
+          {data.records.length === 0 ? <p className="text-center text-muted py-12">Sin registros de asistencia aún.</p> : (
+            <div style={{ overflowX: 'auto' }}>
+              <table className="w-full">
+                <thead><tr className="text-left border-b border-border"><th>Alumno</th><th>DNI</th><th>Capacitación</th><th>Fecha</th><th>Firma</th></tr></thead>
+                <tbody>
+                  {data.records.map((r:any) => (
+                    <tr key={r.id} className="border-b border-border">
+                      <td className="py-2">{r.name}</td>
+                      <td className="py-2">{r.dni}</td>
+                      <td className="py-2 text-xs text-muted">{data.modules.find((m:any)=>m.id === (data.assignments.find((a:any)=>a.id === r.assignmentId)?.moduleId))?.name || 'General'}</td>
+                      <td className="py-2 text-xs">{new Date(r.timestamp).toLocaleString()}</td>
+                      <td className="py-2"><img src={r.signature} height="20" style={{background:'white', borderRadius:'2px'}} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };
 
-const container = document.getElementById('root');
-if (container) {
-  const root = createRoot(container);
-  root.render(<App />);
-}
+const TrainerPanel = ({ data, setData, onBack }: any) => {
+  const [step, setStep] = useState(0); 
+  const [assignment, setAssignment] = useState<Assignment | null>(null);
+  const [form, setForm] = useState({ name: '', dni: '' });
+  const [lastRecord, setLastRecord] = useState<Record | null>(null);
+  const sigCanvas = useRef<SignatureCanvas>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const aid = params.get('a');
+    if (aid) {
+      const found = data.assignments.find((a: any) => a.id === aid);
+      if (found) setAssignment(found);
+    }
+  }, [data.assignments]);
+
+  const module = assignment ? data.modules.find((m:any) => m.id === assignment.moduleId) : null;
+  const client = assignment ? data.clients.find((c:any) => c.id === assignment.clientId) : null;
+
+  const save = () => {
+    if (!form.name || form.dni.length < 7 || sigCanvas.current?.isEmpty()) return alert("Complete los datos y firme.");
+    const record: Record = {
+      id: Date.now().toString(),
+      name: form.name.toUpperCase(),
+      dni: form.dni,
+      clientId: assignment ? assignment.clientId : '',
+      assignmentId: assignment ? assignment.id : '',
+      signature: sigCanvas.current!.getTrimmedCanvas().toDataURL('image/png'),
+      timestamp: new Date().toISOString()
+    };
+    setData({ ...data, records: [record, ...data.records] });
+    setLastRecord(record);
+    setStep(3); // Success step
+  };
+
+  const generateCert = () => {
+    if (!lastRecord) return;
+    const client = data.clients.find((c:any) => c.id === lastRecord.clientId);
+    const module = assignment ? data.modules.find((m:any) => m.id === assignment.moduleId) : (data.modules.find((m:any) => m.id === (data.assignments.find((a:any) => a.id === lastRecord.assignmentId)?.moduleId)));
+    
+    const doc = new jsPDF();
+    const width = doc.internal.pageSize.getWidth();
+    const height = doc.internal.pageSize.getHeight();
+    
+    // Background Frame
+    doc.setDrawColor(15, 23, 42);
+    doc.setLineWidth(1);
+    doc.rect(5, 5, width - 10, height - 10);
+    doc.rect(7, 7, width - 14, height - 14);
+
+    // Header Bar Dark
+    doc.setFillColor(15, 23, 42); 
+    doc.rect(12, 12, width - 24, 40, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(26);
+    doc.setFont('helvetica', 'bold');
+    doc.text('CERTIFICADO DE CAPACITACIÓN', width / 2, 38, { align: 'center' });
+    
+    // Content
+    doc.setTextColor(30, 41, 59);
+    doc.setFontSize(16);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Se otorga el presente certificado a:', width / 2, 85, { align: 'center' });
+    
+    doc.setFontSize(32);
+    doc.setFont('helvetica', 'bold');
+    doc.text(lastRecord.name, width / 2, 105, { align: 'center' });
+    
+    doc.setFontSize(18);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`DNI: ${lastRecord.dni}`, width / 2, 120, { align: 'center' });
+    
+    doc.setFontSize(14);
+    doc.text('Por su participación y aprobación en la capacitación:', width / 2, 145, { align: 'center' });
+    
+    doc.setFontSize(22);
+    doc.setFont('helvetica', 'bold');
+    doc.text(module?.name || 'Formación General', width / 2, 160, { align: 'center', maxWidth: 160 });
+    
+    doc.setFontSize(14);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Dictado para la empresa: ${client?.name || 'N/A'}`, width / 2, 185, { align: 'center' });
+    doc.text(`Fecha: ${new Date(lastRecord.timestamp).toLocaleDateString()}`, width / 2, 195, { align: 'center' });
+    
+    // Signatures
+    const footerY = 245;
+    const rightX = width - 14;
+    
+    // Instructor Signature Block - Bottom Left-ish
+    if (data.instructorSignature) {
+      try {
+        doc.addImage(data.instructorSignature, 'PNG', 30, footerY - 25, 45, 20);
+      } catch (e) {
+        console.error("Error adding instructor signature", e);
+      }
+    }
+    doc.setDrawColor(200);
+    doc.line(20, footerY, 85, footerY);
+    doc.setFontSize(10);
+    doc.text(data.instructorName || '', 52, footerY + 8, { align: 'center' });
+    doc.setFontSize(8);
+    doc.setTextColor(100);
+    doc.text(data.instructorRole || '', 52, footerY + 14, { align: 'center' });
+
+    // Student Signature Block - Bottom Right
+    try {
+      doc.addImage(lastRecord.signature, 'PNG', rightX - 55, footerY - 25, 45, 20);
+    } catch (e) {
+      console.error("Error adding student signature", e);
+    }
+    doc.line(rightX - 65, footerY, rightX, footerY);
+    doc.setFontSize(10);
+    doc.setTextColor(0);
+    doc.text(lastRecord.name, rightX - 32, footerY + 8, { align: 'center' });
+    doc.setFontSize(8);
+    doc.setTextColor(100);
+    doc.text('Firma del Alumno', rightX - 32, footerY + 14, { align: 'center' });
+
+    doc.save(`Certificado_${lastRecord.dni}.pdf`);
+  };
+
+  if (!assignment && step === 0) {
+    return (
+      <div className="animate-in flex flex-col items-center gap-6 py-16 text-center">
+        <Info size={80} color="var(--accent)" />
+        <h2 style={{ fontSize: '2rem' }}>Escanea un código QR</h2>
+        <p className="text-muted">Para acceder al portal de alumnos, debes escanear un código QR de capacitación válido.</p>
+        <button type="button" className="btn btn-primary" onClick={onBack}><ArrowLeft /> Volver al inicio</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="animate-in py-8 flex flex-col gap-6 max-w-lg mx-auto">
+      {/* Botón Cerrar flotante para el portal de alumnos */}
+      <div style={{ position: 'fixed', top: '20px', right: '20px', zIndex: 1000 }}>
+        <button 
+          type="button" 
+          className="btn btn-secondary" 
+          onClick={onBack}
+          style={{ padding: '10px', borderRadius: '50%', width: '45px', height: '45px' }}
+          title="Cerrar y volver al inicio"
+        >
+          <X size={24} />
+        </button>
+      </div>
+
+      {step === 0 && (
+        <div className="card text-center flex flex-col gap-6">
+          <BookOpen size={64} color="var(--accent)" className="mx-auto" />
+          <div>
+            <h2 className="mb-2">¡Bienvenido!</h2>
+            <p className="text-muted">Estás por firmar la asistencia para:</p>
+          </div>
+          <div className="p-6 bg-white/5 rounded-2xl border border-white/10">
+            <h3 style={{ color: 'var(--accent)', fontSize: '1.5rem', marginBottom: '0.5rem' }}>{module?.name}</h3>
+            <p className="text-sm font-bold opacity-80">{client?.name}</p>
+          </div>
+          <button type="button" className="btn btn-primary w-full" onClick={() => setStep(1)}>Comenzar <ChevronRight /></button>
+          <button type="button" className="btn btn-secondary w-full" onClick={onBack}>Cancelar</button>
+        </div>
+      )}
+
+      {step === 1 && (
+        <div className="card flex flex-col gap-6 animate-in">
+          <h2 className="flex items-center gap-3"><FileText size={24} color="var(--accent)" /> Tus Datos</h2>
+          <div className="flex flex-col gap-4">
+            <div>
+              <label>Nombre Completo</label>
+              <input 
+                placeholder="Ej. Juan Pérez" 
+                value={form.name} 
+                onChange={e => setForm({...form, name: e.target.value})}
+              />
+            </div>
+            <div>
+              <label>DNI / NIE</label>
+              <input 
+                placeholder="Sin puntos ni espacios" 
+                type="number"
+                value={form.dni} 
+                onChange={e => setForm({...form, dni: e.target.value})}
+              />
+            </div>
+          </div>
+          <button type="button" className="btn btn-primary w-full" onClick={() => {
+            if (form.name.length < 3 || form.dni.length < 7) return alert("Por favor complete sus datos correctamente.");
+            setStep(2);
+          }}>Siguiente <ChevronRight /></button>
+          <button type="button" className="btn btn-secondary w-full" onClick={() => setStep(0)}>Volver</button>
+        </div>
+      )}
+
+      {step === 2 && (
+        <div className="card flex flex-col gap-6 animate-in">
+          <h2 className="flex items-center gap-3"><Award size={24} color="var(--accent)" /> Firmar Asistencia</h2>
+          <p className="text-sm text-muted">Utilice su dedo o mouse para firmar en el recuadro blanco.</p>
+          <div className="signature-wrapper" style={{ height: '250px' }}>
+            {React.createElement(SignatureCanvas as any, {
+              ref: sigCanvas,
+              penColor: "black",
+              canvasProps: { style: { width: '100%', height: '100%' } }
+            })}
+          </div>
+          <div className="flex gap-3">
+            <button type="button" className="btn btn-secondary flex-1" onClick={() => sigCanvas.current?.clear()}>Limpiar</button>
+            <button type="button" className="btn btn-primary flex-1" onClick={save}>Confirmar Firma</button>
+          </div>
+          <button type="button" className="btn btn-secondary w-full" onClick={() => setStep(1)}>Atrás</button>
+        </div>
+      )}
+
+      {step === 3 && (
+        <div className="card text-center flex flex-col gap-8 animate-in">
+          <div className="mx-auto w-20 h-20 bg-success/20 rounded-full flex items-center justify-center">
+            <CheckCircle size={48} color="var(--success)" />
+          </div>
+          <div>
+            <h2 className="mb-2">¡Asistencia Registrada!</h2>
+            <p className="text-muted">Gracias {form.name.split(' ')[0]}, tu asistencia ha sido confirmada correctamente.</p>
+          </div>
+          <div className="flex flex-col gap-4">
+            <button type="button" className="btn btn-success w-full" onClick={generateCert}>
+              <FileDown /> Descargar Certificado (PDF)
+            </button>
+            {module?.driveUrl && (
+              <a href={module.driveUrl} target="_blank" className="btn btn-primary w-full" rel="noreferrer">
+                <ExternalLink /> Ver Material de Estudio
+              </a>
+            )}
+            <button type="button" className="btn btn-secondary w-full" onClick={onBack}>Finalizar</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const root = createRoot(document.getElementById('root')!);
+root.render(<App />);
