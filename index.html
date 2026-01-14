@@ -34,11 +34,11 @@
       .btn-secondary { background: var(--input); color: var(--text); border: 1px solid var(--border); }
       .btn-danger { background: rgba(239, 68, 68, 0.1); color: var(--danger); }
       .btn-success { background: var(--success); color: white; }
-      .card { background: var(--card); backdrop-filter: blur(16px); border: 1px solid var(--border); border-radius: 1.5rem; padding: 2.25rem; }
+      .card { background: var(--card); backdrop-filter: blur(16px); border: 1px solid var(--border); border-radius: 1.5rem; padding: 2.25rem; margin-bottom: 1rem; }
       input, select { width: 100%; background: var(--input); border: 1px solid var(--border); color: white; padding: 0.9rem 1.1rem; border-radius: 0.85rem; outline: none; transition: border-color 0.2s; }
       input:focus, select:focus { border-color: var(--accent); }
       label { display: block; font-size: 0.75rem; font-weight: 700; color: var(--text-muted); margin-bottom: 0.6rem; text-transform: uppercase; }
-      .signature-wrapper { background: white; border-radius: 0.85rem; border: 2px solid var(--border); overflow: hidden; }
+      .signature-wrapper { background: white; border-radius: 0.85rem; border: 2px solid var(--border); overflow: hidden; position: relative; }
       .animate-in { animation: slideUp 0.4s ease-out forwards; }
       @keyframes slideUp { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
       
@@ -81,18 +81,17 @@
     <div id="error-display" class="error-overlay">
       <h1>⚠️ Error de Ejecución</h1>
       <p id="error-message">Hubo un problema al cargar los módulos de la aplicación.</p>
-      <button onclick="location.reload()" class="btn btn-secondary">Recargar Aplicación</button>
+      <button onclick="location.reload()" class="btn btn-secondary">Reintentar Carga</button>
     </div>
     <div id="root"></div>
     <script>
-      // Global error handler to help debug white screens
       window.onerror = function(msg, url, lineNo, columnNo, error) {
-        console.error("Critical error:", msg, "at", url, ":", lineNo);
+        console.error("Critical error:", msg);
         const display = document.getElementById('error-display');
         const message = document.getElementById('error-message');
         if (display && message) {
           display.style.display = 'flex';
-          message.innerText = msg + " (Línea: " + lineNo + ")";
+          message.innerText = msg;
         }
         return false;
       };
