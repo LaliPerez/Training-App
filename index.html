@@ -7,7 +7,6 @@
     <title>TrainerPro - Gestión de Capacitaciones</title>
     <style>
       @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;900&display=swap');
-      
       :root {
         --bg: #0b0f1a;
         --card: rgba(22, 27, 44, 0.7);
@@ -20,160 +19,84 @@
         --success: #22c55e;
         --border: rgba(255, 255, 255, 0.08);
       }
-
-      * { 
-        box-sizing: border-box; 
-        -webkit-tap-highlight-color: transparent; 
-      }
-      
+      * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
       body {
         font-family: 'Inter', sans-serif;
         background-color: var(--bg);
-        background-image: 
-          radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.12) 0px, transparent 50%),
-          radial-gradient(at 100% 100%, rgba(34, 197, 94, 0.08) 0px, transparent 50%);
+        background-image: radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.12) 0px, transparent 50%), radial-gradient(at 100% 100%, rgba(34, 197, 94, 0.08) 0px, transparent 50%);
         color: var(--text);
-        margin: 0;
-        padding: 0;
-        line-height: 1.5;
-        min-height: 100vh;
+        margin: 0; padding: 0; min-height: 100vh;
         overflow-x: hidden;
       }
-
-      #root {
-        min-height: 100vh;
-        display: flex;
-        flex-direction: column;
-      }
-
-      .container { width: 100%; max-width: 1000px; margin: 0 auto; padding: 1.5rem; flex: 1; }
-      .flex { display: flex; }
-      .flex-col { flex-direction: column; }
-      .items-center { align-items: center; }
-      .justify-center { justify-content: center; }
-      .justify-between { justify-content: space-between; }
-      .gap-4 { gap: 1rem; }
-      .gap-6 { gap: 1.5rem; }
-      .w-full { width: 100%; }
-      .max-w-lg { max-width: 32rem; }
-      .mx-auto { margin-left: auto; margin-right: auto; }
-      .text-center { text-center: center; }
-      .text-muted { color: var(--text-muted); }
-      .text-success { color: var(--success); }
-      .text-danger { color: var(--danger); }
-      .text-xs { font-size: 0.75rem; }
-      .font-bold { font-weight: 700; }
-      
-      .btn {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 0.6rem;
-        padding: 0.85rem 1.5rem;
-        border-radius: 0.85rem;
-        font-weight: 600;
-        border: none;
-        cursor: pointer;
-        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-        font-family: inherit;
-        font-size: 0.95rem;
-        text-decoration: none;
-      }
+      .container { width: 100%; max-width: 1000px; margin: 0 auto; padding: 1.5rem; }
+      .btn { display: flex; align-items: center; justify-content: center; gap: 0.6rem; padding: 0.85rem 1.5rem; border-radius: 0.85rem; font-weight: 600; border: none; cursor: pointer; transition: all 0.2s; font-family: inherit; font-size: 0.95rem; text-decoration: none; }
       .btn-primary { background: var(--accent); color: white; }
-      .btn-primary:hover { background: var(--accent-hover); transform: translateY(-2px); box-shadow: 0 8px 20px rgba(59, 130, 246, 0.35); }
-      .btn-primary:active { transform: translateY(0); }
-      
       .btn-secondary { background: var(--input); color: var(--text); border: 1px solid var(--border); }
-      .btn-secondary:hover { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.2); }
-      
       .btn-danger { background: rgba(239, 68, 68, 0.1); color: var(--danger); }
-      .btn-danger:hover { background: rgba(239, 68, 68, 0.2); }
-      
       .btn-success { background: var(--success); color: white; }
-      .btn-success:hover { background: #16a34a; transform: translateY(-2px); box-shadow: 0 8px 20px rgba(34, 197, 94, 0.3); }
-
-      .card {
-        background: var(--card);
-        backdrop-filter: blur(16px);
-        -webkit-backdrop-filter: blur(16px);
-        border: 1px solid var(--border);
-        border-radius: 1.5rem;
-        padding: 2.25rem;
-        box-shadow: 0 20px 40px rgba(0,0,0,0.45);
-      }
-
-      input, select {
-        width: 100%;
-        background: var(--input);
-        border: 1px solid var(--border);
-        color: white;
-        padding: 0.9rem 1.1rem;
-        border-radius: 0.85rem;
-        font-size: 1rem;
-        outline: none;
-        transition: all 0.2s;
-      }
-      input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15); }
-
-      label {
-        display: block;
-        font-size: 0.75rem;
-        font-weight: 700;
-        color: var(--text-muted);
-        margin-bottom: 0.6rem;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-      }
-
-      @keyframes slideUp { 
-        from { opacity: 0; transform: translateY(30px); } 
-        to { opacity: 1; transform: translateY(0); } 
-      }
-      .animate-in { animation: slideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
-
-      .signature-wrapper {
-        background: white;
-        border-radius: 0.85rem;
-        border: 2px solid var(--border);
-        overflow: hidden;
-        cursor: crosshair;
-        box-shadow: inset 0 2px 4px rgba(0,0,0,0.05);
-      }
-
-      .grid { display: grid; }
-      @media (min-width: 768px) {
-        .md\:grid-cols-2 { grid-template-columns: repeat(2, 1fr); }
-        .md\:grid-cols-3 { grid-template-columns: repeat(3, 1fr); }
-      }
-
-      table { border-collapse: collapse; }
-      th { font-weight: 700; padding: 1rem 0.5rem; text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.7rem; color: var(--text-muted); }
-      td { padding: 0.75rem 0.5rem; font-size: 0.9rem; }
+      .card { background: var(--card); backdrop-filter: blur(16px); border: 1px solid var(--border); border-radius: 1.5rem; padding: 2.25rem; }
+      input, select { width: 100%; background: var(--input); border: 1px solid var(--border); color: white; padding: 0.9rem 1.1rem; border-radius: 0.85rem; outline: none; transition: border-color 0.2s; }
+      input:focus, select:focus { border-color: var(--accent); }
+      label { display: block; font-size: 0.75rem; font-weight: 700; color: var(--text-muted); margin-bottom: 0.6rem; text-transform: uppercase; }
+      .signature-wrapper { background: white; border-radius: 0.85rem; border: 2px solid var(--border); overflow: hidden; }
+      .animate-in { animation: slideUp 0.4s ease-out forwards; }
+      @keyframes slideUp { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
       
-      /* Hide scrollbars */
-      .overflow-x-auto::-webkit-scrollbar { height: 4px; }
-      .overflow-x-auto::-webkit-scrollbar-track { background: transparent; }
-      .overflow-x-auto::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
+      #root:empty::before {
+        content: "Cargando TrainerPro...";
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        color: var(--text-muted);
+        font-weight: 500;
+        font-size: 1.2rem;
+      }
+
+      .error-overlay {
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+        background: #000; color: #ff4444; padding: 20px; z-index: 9999;
+        display: none; flex-direction: column; align-items: center; justify-content: center;
+        text-align: center;
+      }
     </style>
     <script type="importmap">
-    {
-      "imports": {
-        "react": "https://esm.sh/react@18.2.0",
-        "react/": "https://esm.sh/react@18.2.0/",
-        "react-dom": "https://esm.sh/react-dom@18.2.0",
-        "react-dom/": "https://esm.sh/react-dom@18.2.0/",
-        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
-        "lucide-react": "https://esm.sh/lucide-react@0.378.0",
-        "react-signature-canvas": "https://esm.sh/react-signature-canvas@1.0.6?external=react,react-dom",
-        "qrcode": "https://esm.sh/qrcode@1.5.3",
-        "jspdf": "https://esm.sh/jspdf@2.5.1",
-        "jspdf-autotable": "https://esm.sh/jspdf-autotable@3.8.2"
-      }
-    }
-    </script>
+{
+  "imports": {
+    "react": "https://esm.sh/react@18.2.0",
+    "react-dom": "https://esm.sh/react-dom@18.2.0",
+    "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+    "lucide-react": "https://esm.sh/lucide-react@0.378.0?external=react",
+    "react-signature-canvas": "https://esm.sh/react-signature-canvas@1.0.6?external=react,react-dom",
+    "qrcode": "https://esm.sh/qrcode@1.5.3",
+    "jspdf": "https://esm.sh/jspdf@2.5.1",
+    "jspdf-autotable": "https://esm.sh/jspdf-autotable@3.8.2?external=jspdf",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react/": "https://esm.sh/react@^19.2.3/"
+  }
+}
+</script>
 </head>
 <body>
+    <div id="error-display" class="error-overlay">
+      <h1>⚠️ Error de Ejecución</h1>
+      <p id="error-message">Hubo un problema al cargar los módulos de la aplicación.</p>
+      <button onclick="location.reload()" class="btn btn-secondary">Recargar Aplicación</button>
+    </div>
     <div id="root"></div>
-    <script type="module" src="./index.tsx"></script>
+    <script>
+      // Global error handler to help debug white screens
+      window.onerror = function(msg, url, lineNo, columnNo, error) {
+        console.error("Critical error:", msg, "at", url, ":", lineNo);
+        const display = document.getElementById('error-display');
+        const message = document.getElementById('error-message');
+        if (display && message) {
+          display.style.display = 'flex';
+          message.innerText = msg + " (Línea: " + lineNo + ")";
+        }
+        return false;
+      };
+    </script>
+    <script type="module" src="index.tsx"></script>
 </body>
 </html>
