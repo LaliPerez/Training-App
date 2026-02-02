@@ -13,7 +13,7 @@ import QRCode from 'qrcode';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-// Manejo robusto para SignatureCanvas ESM
+// Robust handling for SignatureCanvas ESM
 const SignatureComp = (SignatureCanvas as any).default || SignatureCanvas;
 
 // --- Interfaces ---
