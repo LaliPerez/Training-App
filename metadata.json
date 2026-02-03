@@ -1,7 +1,6 @@
+
 {
-  "requestFramePermissions": [
-    "camera"
-  ],
+  "requestFramePermissions": [],
   "name": "Trainer App",
-  "description": ""
+  "description": "Sistema de gestión de capacitaciones y firmas digitales"
 }
